@@ -21,7 +21,7 @@ dependencies = [
     "pandas",
     "matplotlib",
     "tqdm",
-    "moe-results",
+    "moe-reliability-results",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +57,8 @@ override-dependencies = [
     "torch==2.10.0",
     "torchvision==0.25.0",
     "torchaudio==2.10.0",
+    "numpy==1.26.4",
+    "opencv-python-headless>=4.11.0.86,<4.12",
     "flashinfer-python; sys_platform == 'never'",
     "flashinfer-cubin; sys_platform == 'never'",
     "apache-tvm-ffi; sys_platform == 'never'",
@@ -81,7 +83,7 @@ format = "flat"
 explicit = true
 
 [tool.uv.sources]
-moe-results = { workspace = true }
+moe-reliability-results = { workspace = true }
 torch = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
 torchvision = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
 torchaudio = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
