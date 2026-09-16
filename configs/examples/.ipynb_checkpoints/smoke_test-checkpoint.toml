@@ -1,0 +1,29 @@
+# Minimal end-to-end check of an Ascend deployment: two imbalance levels, few prompts.
+# Only non-default values are listed; see `moe-reliability reference` for all keys.
+#
+#   uv run moe-reliability doctor configs/examples/smoke_test.toml
+#   uv run moe-reliability run configs/examples/smoke_test.toml
+
+[experiment]
+type = "forced_imbalance"
+name = "smoke"
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 2
+
+[server]
+batch_size = 32
+
+[client]
+concurrency_limit = 64
+n_warmup_samples = 5
+
+[imbalance]
+imbalance_levels = [0, 1]
+
+[benchmark]
+n_samples = 200

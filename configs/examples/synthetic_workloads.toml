@@ -1,0 +1,111 @@
+# Synthetic workload sweep over alpha: expert activation capture ->
+# workload construction -> benchmarking of each workload -> trace analysis.
+#
+# Run with:  uv run moe-reliability run <this file>
+
+# Experiment identity and reproducibility.
+[experiment]
+# Experiment type: sweep over synthetic workload imbalance (alpha) or over forced router imbalance levels. Choices: synthetic_workloads, forced_imbalance.
+type = "synthetic_workloads"
+# Optional label appended to the run id.
+name = "alpha-sweep"
+# Free-text description stored with the run.
+description = ""
+# Seed for PyTorch, dataset shuffling and vLLM sampling.
+seed = 43
+
+# Model under test.
+[model]
+# Hugging Face model id or local checkpoint path served by vLLM.
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+# Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing).
+model_name = "deepseek-v2"
+# Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: auto, deepseek, qwen, mistral.
+probe = "auto"
+# bitsandbytes quantization. Not supported by vLLM Ascend; must stay false (use a ModelSlim, LLM-Compressor or block-wise FP8 checkpoint as model_id instead).
+enable_bnb = false
+
+# Ascend NPUs used by the deployment.
+[hardware]
+# Number of Ascend NPUs (tensor-parallel size).
+n_npus = 8
+# Comma-separated NPU ids exposed to the run (ASCEND_RT_VISIBLE_DEVICES); empty keeps the current environment.
+visible_devices = ""
+
+# vLLM server deployment.
+[server]
+# Port of the local vLLM OpenAI-compatible server.
+port = 8000
+# Maximum model context length.
+max_model_len = 2048
+# Fraction of NPU memory vLLM may use (vLLM's --gpu-memory-utilization).
+gpu_memory_utilization = 0.6
+# Maximum number of concurrently batched sequences (--max-num-seqs).
+batch_size = 512
+# Enable expert parallelism.
+enable_expert_parallel = true
+# Enable prefix caching.
+enable_prefix_caching = false
+# Enable expert-parallel load balancing (EPLB).
+enable_eplb = false
+
+# Load generation against the server.
+[client]
+# Maximum number of generated tokens per request.
+max_new_tokens = 100
+# Maximum number of in-flight requests (should exceed batch_size to saturate the server).
+concurrency_limit = 700
+# Number of warm-up requests before measurement.
+n_warmup_samples = 10
+
+# Stage 1 (synthetic workloads): expert activation capture on MMLU prompts.
+[activations]
+# Number of MMLU prompts to capture routed experts for.
+n_samples = 15000
+# Run id or run directory whose activation records are reused instead of capturing new ones.
+reuse_activations_from = ""
+
+# Stage 2 (synthetic workloads): workload construction.
+[workloads]
+# Scaling factors of the natural per-layer coefficient of variation of expert load.
+target_alphas = [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0]
+# Workload sizes in prompts (converted to token budgets using the average tokens per prompt).
+target_prompt_lengths = [1000, 5000]
+# Workload sets to build, one per maximum number of times a prompt may be repeated.
+max_repeats = [0, 10]
+# Run id or run directory whose workloads are reused (skips activation capture and workload construction).
+reuse_workloads_from = ""
+
+# Stage 3: benchmarking of each sweep point.
+[benchmark]
+# Which workload set (max_repeats) to benchmark.
+workload_max_repeats = 0
+# Which workload size (target prompt length) to benchmark.
+workload_prompt_length = 1000
+# Record PyTorch profiler traces on all workers.
+enable_profiling = true
+# Number of profiled scheduler iterations.
+trace_active_iterations = 2
+# Store per-request TTFT/TPOT measurements (default: true unless profiling, which perturbs timings).
+save_request_metrics = false
+
+# Post-processing of profiler traces.
+[analysis]
+# Convert raw NPU profiler data into timeline files (ASCEND_PROFILER_OUTPUT/trace_view.json) with torch_npu's offline parser.
+parse_npu_traces = true
+# Extract fused-MoE kernel metrics per rank from traces.
+trace_summary = true
+
+# Result storage.
+[output]
+# Directory containing all runs.
+results_dir = "results"
+# Gzip-compress large JSON artefacts.
+compress = true
+# Render standard figures at the end of the run.
+save_figures = true
+
+# Environment variables set before any work starts (inherited by the vLLM server), e.g. HCCL_CONNECT_TIMEOUT or TASK_QUEUE_ENABLE.
+[environment]
+# HCCL_CONNECT_TIMEOUT = "1200"
+# TASK_QUEUE_ENABLE = "1"

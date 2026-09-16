@@ -1,0 +1,100 @@
+# Forced router imbalance sweep: imbalanced checkpoint generation ->
+# (optional) load validation -> benchmarking of each level -> trace analysis.
+#
+# Run with:  uv run moe-reliability run <this file>
+
+# Experiment identity and reproducibility.
+[experiment]
+# Experiment type: sweep over synthetic workload imbalance (alpha) or over forced router imbalance levels. Choices: synthetic_workloads, forced_imbalance.
+type = "forced_imbalance"
+# Optional label appended to the run id.
+name = "imbalance-sweep"
+# Free-text description stored with the run.
+description = ""
+# Seed for PyTorch, dataset shuffling and vLLM sampling.
+seed = 43
+
+# Model under test.
+[model]
+# Hugging Face model id or local checkpoint path served by vLLM.
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+# Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing).
+model_name = "mistral"
+# Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: auto, deepseek, qwen, mistral.
+probe = "auto"
+# bitsandbytes quantization. Not supported by vLLM Ascend; must stay false (use a ModelSlim, LLM-Compressor or block-wise FP8 checkpoint as model_id instead).
+enable_bnb = false
+
+# Ascend NPUs used by the deployment.
+[hardware]
+# Number of Ascend NPUs (tensor-parallel size).
+n_npus = 8
+# Comma-separated NPU ids exposed to the run (ASCEND_RT_VISIBLE_DEVICES); empty keeps the current environment.
+visible_devices = ""
+
+# vLLM server deployment.
+[server]
+# Port of the local vLLM OpenAI-compatible server.
+port = 8000
+# Maximum model context length.
+max_model_len = 2048
+# Fraction of NPU memory vLLM may use (vLLM's --gpu-memory-utilization).
+gpu_memory_utilization = 0.6
+# Maximum number of concurrently batched sequences (--max-num-seqs).
+batch_size = 512
+# Enable expert parallelism.
+enable_expert_parallel = true
+# Enable prefix caching.
+enable_prefix_caching = false
+# Enable expert-parallel load balancing (EPLB).
+enable_eplb = false
+
+# Load generation against the server.
+[client]
+# Maximum number of generated tokens per request.
+max_new_tokens = 100
+# Maximum number of in-flight requests (should exceed batch_size to saturate the server).
+concurrency_limit = 700
+# Number of warm-up requests before measurement.
+n_warmup_samples = 10
+
+# Forced router imbalance.
+[imbalance]
+# Router bias added to expert 0 in every layer; 0 serves the unmodified model.
+imbalance_levels = [0, 100]
+# Directory for generated imbalanced checkpoints (reused across runs when present).
+model_dir = "models"
+# Measure expert load with Hugging Face inference before benchmarking each checkpoint.
+validate_imbalance = false
+
+# Benchmarking of each imbalance level.
+[benchmark]
+# Number of MMLU prompts sent to each checkpoint.
+n_samples = 15000
+# Record PyTorch profiler traces on all workers.
+enable_profiling = false
+# Number of profiled scheduler iterations.
+trace_active_iterations = 2
+# Store per-request TTFT/TPOT measurements (default: true unless profiling, which perturbs timings).
+save_request_metrics = true
+
+# Post-processing of profiler traces.
+[analysis]
+# Convert raw NPU profiler data into timeline files (ASCEND_PROFILER_OUTPUT/trace_view.json) with torch_npu's offline parser.
+parse_npu_traces = true
+# Extract fused-MoE kernel metrics per rank from traces.
+trace_summary = true
+
+# Result storage.
+[output]
+# Directory containing all runs.
+results_dir = "results"
+# Gzip-compress large JSON artefacts.
+compress = true
+# Render standard figures at the end of the run.
+save_figures = true
+
+# Environment variables set before any work starts (inherited by the vLLM server), e.g. HCCL_CONNECT_TIMEOUT or TASK_QUEUE_ENABLE.
+[environment]
+# HCCL_CONNECT_TIMEOUT = "1200"
+# TASK_QUEUE_ENABLE = "1"

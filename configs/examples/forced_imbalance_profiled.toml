@@ -1,0 +1,28 @@
+# Forced imbalance sweep with NPU profiler traces on every worker. Traces are parsed
+# offline with torch_npu into ASCEND_PROFILER_OUTPUT/trace_view.json timelines.
+#
+#   uv run moe-reliability run configs/examples/forced_imbalance_profiled.toml
+
+[experiment]
+type = "forced_imbalance"
+name = "profiled"
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 8
+
+[server]
+batch_size = 256
+
+[imbalance]
+imbalance_levels = [0, 100]
+
+[benchmark]
+enable_profiling = true   # request metrics are not stored (profiling perturbs timings)
+
+[analysis]
+parse_npu_traces = true
+trace_summary = true

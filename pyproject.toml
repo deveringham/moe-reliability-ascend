@@ -1,0 +1,95 @@
+[project]
+name = "moe-reliability-ascend"
+version = "1.0.0"
+description = "Observability and benchmarking framework for MoE models on Ascend NPU deployments"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+authors = [{ name = "Dylan Everingham" }]
+dependencies = [
+    "vllm==0.23.0",
+    "vllm-ascend==0.23.0",
+    "torch==2.10.0",
+    "torch-npu==2.10.0.post4",
+    "torchvision==0.25.0",
+    "torchaudio==2.10.0",
+    "triton-ascend==3.2.2",
+    "transformers==5.5.4",
+    "accelerate",
+    "datasets",
+    "openai",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+    "moe-results",
+]
+
+[project.optional-dependencies]
+notebooks = ["notebook", "ipykernel"]
+
+[project.scripts]
+moe-reliability = "moe_reliability.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moe_reliabililty"]
+
+[tool.uv.workspace]
+members = ["packages/moe-reliability-results"]
+
+[tool.uv]
+# Ascend NPU hosts only: resolve and lock for Linux on aarch64 and x86_64.
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+override-dependencies = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "torchaudio==2.10.0",
+    "flashinfer-python; sys_platform == 'never'",
+    "flashinfer-cubin; sys_platform == 'never'",
+    "apache-tvm-ffi; sys_platform == 'never'",
+    "tilelang; sys_platform == 'never'",
+    "nvidia-cudnn-frontend; sys_platform == 'never'",
+    "nvidia-cutlass-dsl; sys_platform == 'never'",
+    "quack-kernels; sys_platform == 'never'",
+    "tokenspeed-mla; sys_platform == 'never'",
+    "humming-kernels; sys_platform == 'never'",
+    "fastsafetensors; sys_platform == 'never'",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "ascend-triton"
+url = "https://mirrors.huaweicloud.com/ascend/repos/pypi/triton-ascend/"
+format = "flat"
+explicit = true
+
+[tool.uv.sources]
+moe-results = { workspace = true }
+torch = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+triton-ascend = { index = "ascend-triton" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore:To copy construct from a tensor:UserWarning",
+]

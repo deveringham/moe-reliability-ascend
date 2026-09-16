@@ -1,0 +1,22 @@
+# Synthetic workload dataset over 126 infrastructure configurations on Ascend NPUs:
+#   3 NPU counts x 3 batch sizes                                         = 9 runs
+#   x 14 workload imbalance levels (alpha)                               = 126 sweep points
+#
+# With share_workloads = true, routed-expert capture and workload construction run
+# once (in the first run); all other runs reuse those workloads.
+#
+#   uv run moe-reliability grid configs/grids/synthetic_workloads_infrastructure.toml --dry-run
+#   uv run moe-reliability grid configs/grids/synthetic_workloads_infrastructure.toml --continue-on-error
+
+[grid]
+name = "sw-infra"
+base = "../examples/synthetic_workloads.toml"
+share_workloads = true
+
+[set]
+"benchmark.enable_profiling" = false
+"benchmark.save_request_metrics" = true
+
+[matrix]
+"hardware.n_npus" = [2, 4, 8]
+"server.batch_size" = [128, 256, 512]
