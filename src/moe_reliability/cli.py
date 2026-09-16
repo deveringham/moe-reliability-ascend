@@ -24,8 +24,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from moe_results import schema
-from moe_results.store import default_results_dir
+from moe_reliability_results import schema
+from moe_reliability_results.store import default_results_dir
 
 from . import __version__
 from .config import TEMPLATES, ConfigError, ExperimentConfig, reference_markdown, render_template
@@ -243,7 +243,7 @@ def cmd_reference(args: argparse.Namespace) -> int:
 
 
 def _delegate_results_cli(command: str, args: argparse.Namespace) -> int:
-    from moe_results.cli import main as results_main
+    from moe_reliability_results.cli import main as results_main
 
     argv = ["--results-dir", str(args.results_dir or default_results_dir()), command]
     if command == "show":

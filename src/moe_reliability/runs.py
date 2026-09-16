@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from moe_results import io, schema
+from moe_reliability_results import io, schema
 
 from .config import ExperimentConfig
 

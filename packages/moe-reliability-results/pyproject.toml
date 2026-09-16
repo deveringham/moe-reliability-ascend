@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-moe-results = "moe_reliability_results.cli:main"
+moe-reliability-results = "moe_reliability_results.cli:main"
 
 [build-system]
 requires = ["hatchling"]

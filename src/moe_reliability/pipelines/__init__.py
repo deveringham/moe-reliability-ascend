@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from moe_results import schema
+from moe_reliability_results import schema
 
 from ..config import ExperimentConfig
 from ..runs import RunContext

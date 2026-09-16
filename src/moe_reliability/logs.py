@@ -21,7 +21,7 @@ __all__ = ["tee_output", "log"]
 
 
 def log(message: str) -> None:
-    print(f"[moe-experiments] {message}", flush=True)
+    print(f"[moe-reliability] {message}", flush=True)
 
 
 @contextmanager

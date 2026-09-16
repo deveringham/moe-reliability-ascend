@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from moe_experiments import environment as env
-from moe_experiments.environment import AscendEnvironmentError
+from moe_reliability import environment as env
+from moe_reliability.environment import AscendEnvironmentError
 
 
 @pytest.fixture
@@ -142,7 +142,7 @@ def test_diagnose_reports_without_raising(clean_env):
 
 def test_parse_npu_profiler_data(tmp_path, monkeypatch):
     from conftest import fake_npu_analyse, install_fake_npu_profiler, write_npu_profiler_data
-    from moe_experiments.pipelines.common import parse_npu_profiler_data
+    from moe_reliability.pipelines.common import parse_npu_profiler_data
 
     calls = []
 
@@ -171,7 +171,7 @@ def test_parse_npu_profiler_data(tmp_path, monkeypatch):
 
 def test_parse_npu_profiler_data_per_worker_fallback(tmp_path, monkeypatch):
     from conftest import fake_npu_analyse, install_fake_npu_profiler, write_npu_profiler_data
-    from moe_experiments.pipelines.common import parse_npu_profiler_data
+    from moe_reliability.pipelines.common import parse_npu_profiler_data
 
     calls = []
 

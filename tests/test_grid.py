@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from moe_experiments.config import ConfigError
-from moe_experiments.grid import load_grid, workload_share_key
+from moe_reliability.config import ConfigError
+from moe_reliability.grid import load_grid, workload_share_key
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,7 +64,7 @@ def test_shipped_grids_exceed_100_configurations(name, runs, points):
 
 
 def test_workload_share_key(synthetic_config_data, forced_config_data):
-    from moe_experiments.config import ExperimentConfig
+    from moe_reliability.config import ExperimentConfig
 
     a = ExperimentConfig.from_dict(synthetic_config_data)
     b = ExperimentConfig.from_dict(synthetic_config_data, ["hardware.n_npus=8", "server.batch_size=512"])

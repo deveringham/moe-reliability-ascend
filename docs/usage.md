@@ -98,7 +98,7 @@ touching its measurements. It does not need free NPUs. Useful if when the analys
 ### 7. Inspect
 
 ```bash
-uv run moe-reliability list                       # all runs (same as: moe-results list)
+uv run moe-reliability list                       # all runs (same as: moe-reliability-results list)
 uv run moe-reliability show <run>                 # stages, configuration, per-point summary
 uv run moe-reliability-results summary -f experiment=synthetic_workloads -f n_npus=8
 uv run moe-reliability-results plot <run> --format pdf
@@ -116,7 +116,7 @@ uv run moe-reliability-results plot <run> --format pdf
 
 Stages are `pending`, `running`, `completed`, `skipped` (with a `note`), `failed` (with an `error`) or
 `interrupted`. Figure rendering never fails a run: a rendering error marks the `figures` stage as
-skipped with the error as note, and `moe-results plot <run>` can render the figures later.
+skipped with the error as note, and `moe-reliability-results plot <run>` can render the figures later.
 
 ## Reusing activations and workloads
 

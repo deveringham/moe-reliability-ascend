@@ -2,7 +2,7 @@
 # For Atlas A3 use quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12 as base image.
 #
 # Build from the repository root:
-#   docker build -t moe-experiments .
+#   docker build -t moe-reliability .
 #
 # Run (expose the NPUs and driver of the host; add one --device per NPU):
 #   docker run --rm -it --shm-size=16g \
@@ -14,10 +14,10 @@
 #     -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
 #     -v /etc/ascend_install.info:/etc/ascend_install.info \
 #     -v "$HOME/.cache/huggingface:/root/.cache/huggingface" \
-#     -v "$PWD/results:/workspace/moe-experiments/results" \
-#     -v "$PWD/models:/workspace/moe-experiments/models" \
+#     -v "$PWD/results:/workspace/moe-reliability/results" \
+#     -v "$PWD/models:/workspace/moe-reliability/models" \
 #     -e HF_TOKEN \
-#     moe-experiments moe-experiments run configs/examples/smoke_test.toml
+#     moe-reliability moe-reliability run configs/examples/smoke_test.toml
 FROM quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
 
 SHELL ["/bin/bash", "-c"]
@@ -33,18 +33,18 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
-WORKDIR /workspace/moe-experiments
+WORKDIR /workspace/moe-reliability
 COPY . .
 
 # Install the locked environment (or resolve it if no lock file has been committed yet).
 RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh \
     && if [ -f uv.lock ]; then uv sync --locked; else uv sync; fi
 
-ENV VIRTUAL_ENV=/workspace/moe-experiments/.venv \
-    PATH="/workspace/moe-experiments/.venv/bin:$PATH"
+ENV VIRTUAL_ENV=/workspace/moe-reliability/.venv \
+    PATH="/workspace/moe-reliability/.venv/bin:$PATH"
 
 # Activate CANN and NNAL for every command.
 RUN printf '#!/bin/bash\nsource /usr/local/Ascend/ascend-toolkit/set_env.sh\n[ -f /usr/local/Ascend/nnal/atb/set_env.sh ] && source /usr/local/Ascend/nnal/atb/set_env.sh\nexec "$@"\n' \
         > /usr/local/bin/ascend-entrypoint && chmod +x /usr/local/bin/ascend-entrypoint
 ENTRYPOINT ["/usr/local/bin/ascend-entrypoint"]
-CMD ["moe-experiments", "doctor"]
+CMD ["moe-reliability", "doctor"]

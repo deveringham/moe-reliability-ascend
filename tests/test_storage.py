@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 import torch
 
-from moe_experiments.config import ExperimentConfig
-from moe_experiments.runs import RunContext, RunError, make_run_id, resolve_run_dir
-from moe_results import io, schema
+from moe_reliability.config import ExperimentConfig
+from moe_reliability.runs import RunContext, RunError, make_run_id, resolve_run_dir
+from moe_reliability_results import io, schema
 
 
 def test_to_jsonable_handles_arrays_tensors_and_keys():
@@ -101,7 +101,7 @@ def test_tee_output_captures_subprocess_output(tmp_path):
     script = textwrap.dedent(f"""
         import subprocess, sys
         sys.path[:0] = {sys.path!r}
-        from moe_experiments.logs import tee_output, log
+        from moe_reliability.logs import tee_output, log
         with tee_output({str(log_file)!r}):
             log("parent line")
             subprocess.run([sys.executable, "-c", "import sys; print('child out'); print('child err', file=sys.stderr)"])

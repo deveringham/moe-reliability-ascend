@@ -18,8 +18,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from moe_results import schema
-from moe_results.metrics import summarize_requests, trace_scalars
+from moe_reliability_results import schema
+from moe_reliability_results.metrics import summarize_requests, trace_scalars
 
 from ..config import ExperimentConfig
 from ..logs import log
@@ -285,7 +285,7 @@ def figures_stage(ctx: RunContext) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
-    from moe_results import Run, plots
+    from moe_reliability_results import Run, plots
 
     error: Exception | None = None
     written = []
@@ -297,7 +297,7 @@ def figures_stage(ctx: RunContext) -> None:
             error = exc
     if error is not None:
         ctx.skip_stage(STAGE_FIGURES, f"figure rendering failed: {error!r} "
-                                      f"(re-render with: moe-results plot {ctx.run_id})")
+                                      f"(re-render with: moe-reliability-results plot {ctx.run_id})")
         log(f"figure rendering failed: {error!r}")
         return
     ctx.manifest["figures"] = [ctx.relpath(p) for p in written]

@@ -11,7 +11,7 @@ accept both variants. The format is versioned by `manifest.schema_version` (curr
 ```
 <results_dir>/<run_id>/
   manifest.json                          run metadata, resolved configuration, stage and point status
-  config.toml                            resolved configuration (can be passed to `moe-experiments run`)
+  config.toml                            resolved configuration (can be passed to `moe-reliability run`)
   logs/run.log                           console output including the vLLM server
   activations/records.jsonl[.gz]         synthetic workloads: routed-expert capture records
   workloads/workloads_repeats<R>.json[.gz]  synthetic workloads: one workload set per max_repeats value

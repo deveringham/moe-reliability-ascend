@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from moe_experiments.config import ExperimentConfig
-from moe_experiments.pipelines import run_pipeline
-from moe_experiments.runs import RunContext
-from moe_results import ResultsStore, io, schema
+from moe_reliability.config import ExperimentConfig
+from moe_reliability.pipelines import run_pipeline
+from moe_reliability.runs import RunContext
+from moe_reliability_results import ResultsStore, io, schema
 
 from conftest import N_LAYERS
 

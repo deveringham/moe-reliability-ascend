@@ -15,7 +15,7 @@
 # run = store.latest(model_name="deepseek-v2")
 # requests = run.requests() # per-request measurements
 #
-# from moe_results import plots
+# from moe_reliability_results import plots
 # figures = plots.plot_run(run)
 #
 # Dylan Everingham

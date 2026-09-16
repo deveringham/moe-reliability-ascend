@@ -4,7 +4,7 @@ import tomllib
 
 import pytest
 
-from moe_experiments.config import (DERIVED, SCHEMA, TEMPLATES, ConfigError, ExperimentConfig, apply_overrides,
+from moe_reliability.config import (DERIVED, SCHEMA, TEMPLATES, ConfigError, ExperimentConfig, apply_overrides,
                                     reference_markdown, render_template)
 from conftest import write_toml
 

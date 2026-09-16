@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 
-from moe_results import schema
+from moe_reliability_results import schema
 
 from ..config import ExperimentConfig
 from ..logs import log

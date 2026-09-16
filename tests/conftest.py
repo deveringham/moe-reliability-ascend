@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-for path in (ROOT / "src", ROOT / "packages" / "moe-results" / "src"):
+for path in (ROOT / "src", ROOT / "packages" / "moe-reliability-results" / "src"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
@@ -112,8 +112,8 @@ class FakeDeployment:
 
 @pytest.fixture
 def deployment(monkeypatch):
-    from moe_experiments import models
-    from moe_experiments.pipelines import common
+    from moe_reliability import models
+    from moe_reliability.pipelines import common
 
     fake = FakeDeployment()
     monkeypatch.setattr(common, "serve_and_measure", fake)
@@ -122,7 +122,7 @@ def deployment(monkeypatch):
     monkeypatch.setattr(models, "moe_dimensions", lambda model_id, family: (N_EXPERTS, N_LAYERS, TOP_K))
 
     # Checkpoint generation: write a marker directory instead of a model.
-    module = types.ModuleType("moe_experiments.core.forced_imbalance")
+    module = types.ModuleType("moe_reliability.core.forced_imbalance")
     module.created = []
 
     def imbalance_pretrained_moe(model_id, imbalance_level, save_path):
@@ -131,7 +131,7 @@ def deployment(monkeypatch):
         module.created.append(save_path)
 
     module.imbalance_pretrained_moe = imbalance_pretrained_moe
-    monkeypatch.setitem(sys.modules, "moe_experiments.core.forced_imbalance", module)
+    monkeypatch.setitem(sys.modules, "moe_reliability.core.forced_imbalance", module)
     fake.checkpoints = module
     install_fake_npu_profiler(monkeypatch)
     return fake
@@ -182,7 +182,7 @@ def synthetic_config_data(results_dir):
 
 
 def write_toml(path: Path, data: dict) -> Path:
-    from moe_experiments.config import to_toml
+    from moe_reliability.config import to_toml
 
     path.write_text(to_toml(data), encoding="utf-8")
     return path

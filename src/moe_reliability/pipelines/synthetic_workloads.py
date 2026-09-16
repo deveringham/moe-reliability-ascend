@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from moe_results import Run, io, schema
-from moe_results.metrics import workload_point_stats
+from moe_reliability_results import Run, io, schema
+from moe_reliability_results.metrics import workload_point_stats
 
 from ..config import ExperimentConfig
 from ..logs import log

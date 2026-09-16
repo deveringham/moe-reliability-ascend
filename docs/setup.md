@@ -84,7 +84,7 @@ uv run moe-reliability doctor --n-npus 8
 `doctor` checks the CANN activation, the CANN and driver versions, `npu-smi`, the torch_npu import,
 NPU visibility, the vLLM Ascend plugin, every package of the validated stack and Triton Ascend.
 Pass a configuration file to check the NPUs that configuration needs: 
-`uv run moe-experiments doctor configs/examples/smoke_test.toml`.
+`uv run moe-reliability doctor configs/examples/smoke_test.toml`.
 
 Then run the test suite and a short real run on 2 NPUs:
 
@@ -115,7 +115,7 @@ The vLLM Ascend wheel on PyPI is built for Atlas A2. For Atlas A3, Atlas 300I DU
 [vLLM Ascend installation guide](https://docs.vllm.ai/projects/ascend/en/v0.23.0/). Alternatively,
 start from the official `quay.io/ascend/vllm-ascend:v0.23.0-<hardware>` image. Atlas 300I DUO and
 200I Pro do not support Triton Ascend; remove `triton-ascend` from `pyproject.toml` on those systems.
-`moe-experiments doctor` reports the resulting versions.
+`moe-reliability doctor` reports the resulting versions.
 
 ## Docker
 
@@ -161,5 +161,5 @@ moe-reliability-results --results-dir /path/to/results list
 | `ASCEND_TOOLKIT_HOME`, `ATB_HOME_PATH`, ... | runs | set by the CANN and NNAL `set_env.sh` scripts; required |
 | `HF_TOKEN` | model and dataset downloads | Hugging Face authentication |
 | `ASCEND_RT_VISIBLE_DEVICES` | runs | NPUs visible to the process; set per run with `hardware.visible_devices` |
-| `MOE_RESULTS_DIR` | `moe-results`, `ResultsStore()`, `resume`/`analyze`/`list`/`show` | default results directory (otherwise `./results`) |
+| `MOE_RESULTS_DIR` | `moe-reliability-results`, `ResultsStore()`, `resume`/`analyze`/`list`/`show` | default results directory (otherwise `./results`) |
 | `[environment]` table | runs | set before the run starts and inherited by the vLLM server, e.g. `HCCL_CONNECT_TIMEOUT`, `HCCL_BUFFSIZE`, `TASK_QUEUE_ENABLE` |

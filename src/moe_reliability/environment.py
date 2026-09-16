@@ -66,7 +66,7 @@ CANN_ACTIVATE_HINT = ("source /usr/local/Ascend/ascend-toolkit/set_env.sh && "
 TRITON_REPAIR_HINT = "uv sync --reinstall-package triton-ascend"
 
 _PROVENANCE_PACKAGES = (
-    "moe-experiments", "moe-results", "vllm", "vllm-ascend", "torch", "torch-npu", "torchvision", "torchaudio",
+    "moe-reliability", "moe-reliability-results", "vllm", "vllm-ascend", "torch", "torch-npu", "torchvision", "torchaudio",
     "triton-ascend", "triton", "transformers", "accelerate", "datasets", "openai", "HolisticTraceAnalysis",
 )
 

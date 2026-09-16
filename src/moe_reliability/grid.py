@@ -32,8 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from moe_results import Run, schema
-from moe_results.store import ResultsStore
+from moe_reliability_results import Run, schema
+from moe_reliability_results.store import ResultsStore
 
 from .config import ConfigError, ExperimentConfig, apply_overrides
 

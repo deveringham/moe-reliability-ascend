@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 import torch
 
-from moe_experiments.config import ExperimentConfig
-from moe_experiments.pipelines import forced_imbalance, run_pipeline
-from moe_experiments.runs import RunContext
-from moe_results import ResultsStore, io, schema
+from moe_reliability.config import ExperimentConfig
+from moe_reliability.pipelines import forced_imbalance, run_pipeline
+from moe_reliability.runs import RunContext
+from moe_reliability_results import ResultsStore, io, schema
 
 
 def test_run_stores_metrics_and_figures(deployment, forced_config_data, results_dir, tmp_path):

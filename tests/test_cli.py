@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from moe_experiments import cli
-from moe_results import ResultsStore
-from moe_results import cli as results_cli
+from moe_reliability import cli
+from moe_reliability_results import ResultsStore
+from moe_reliability_results import cli as results_cli
 from conftest import write_toml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +112,7 @@ share_workloads = true
 
 
 def test_environment_errors_exit_with_code_3(monkeypatch, tmp_path, forced_config_data, capsys):
-    from moe_experiments.environment import AscendEnvironmentError
+    from moe_reliability.environment import AscendEnvironmentError
 
     def unavailable(cfg, require_devices=True):
         raise AscendEnvironmentError("the CANN environment is not activated")
@@ -121,12 +121,12 @@ def test_environment_errors_exit_with_code_3(monkeypatch, tmp_path, forced_confi
     config = write_toml(tmp_path / "run.toml", forced_config_data)
     assert cli.main(["run", str(config), "--no-log-file"]) == 3
     err = capsys.readouterr().err
-    assert "CANN environment is not activated" in err and "moe-experiments doctor" in err
+    assert "CANN environment is not activated" in err and "moe-reliability doctor" in err
     assert not (tmp_path / "results").exists()  # nothing is created before the environment is usable
 
 
 def test_doctor(monkeypatch, tmp_path, forced_config_data, capsys):
-    from moe_experiments import environment
+    from moe_reliability import environment
 
     seen = {}
 

@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from moe_experiments.config import ExperimentConfig
-from moe_experiments.pipelines import run_pipeline
-from moe_experiments.runs import RunContext
-from moe_results import ResultsStore, Run, plots, schema
-from moe_results import hta_plots
+from moe_reliability.config import ExperimentConfig
+from moe_reliability.pipelines import run_pipeline
+from moe_reliability.runs import RunContext
+from moe_reliability_results import ResultsStore, Run, plots, schema
+from moe_reliability_results import hta_plots
 
 
 @pytest.fixture
@@ -108,7 +108,7 @@ class FakeTraceAnalysis:
 
 
 def test_hta_stage_and_plots(deployment, forced_config_data, results_dir, monkeypatch):
-    from moe_experiments.core import hta_analysis
+    from moe_reliability.core import hta_analysis
 
     monkeypatch.setattr(hta_analysis, "load_trace_analysis", FakeTraceAnalysis)
     deployment.trace_format = "pytorch"  # input format of the kernel analysis and HTA

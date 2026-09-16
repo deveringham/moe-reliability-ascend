@@ -147,7 +147,7 @@ def cmd_plot(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="moe-results", description="Browse, query and plot stored MoE experiment results.")
+    parser = argparse.ArgumentParser(prog="moe-reliability-results", description="Browse, query and plot stored MoE experiment results.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--results-dir", default=str(default_results_dir()),
                         help="results directory (default: $MOE_RESULTS_DIR or ./results)")

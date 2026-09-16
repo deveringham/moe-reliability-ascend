@@ -18,7 +18,7 @@ It consists of two Python packages:
 | package | purpose | dependencies |
 |---|---|---|
 | `moe-reliability` (`src/moe_reliability`) | runs experiments on Ascend NPUs from TOML configurations via the `moe-reliability` CLI | vLLM Ascend, torch_npu, Transformers |
-| `moe-reliability-results` (`packages/moe-reliability-results`) | queries, aggregates and visualizes stored results via Python or the `moe-results` CLI | NumPy, pandas, Matplotlib |
+| `moe-reliability-results` (`packages/moe-reliability-results`) | queries, aggregates and visualizes stored results via Python or the `moe-reliability-results` CLI | NumPy, pandas, Matplotlib |
 
 ## Experiments
 
@@ -121,10 +121,10 @@ configs/
   examples/             ready-to-run configurations (full templates, smoke test, profiled run)
   grids/                parameter grids for multi-configuration datasets
 docs/                   setup, usage, experiments, configuration, data format, results API
-notebooks/              analysis examples using moe_results
+notebooks/              analysis examples using moe_reliability_results
 packages/moe-reliability-results/   results library (query, aggregation, visualization)
 src/moe_reliability/
-  cli.py                moe-experiments command line interface
+  cli.py                moe-reliability command line interface
   config.py             TOML schema, validation, templates
   grid.py               grid expansion
   runs.py               run directories, manifest, stage and point bookkeeping

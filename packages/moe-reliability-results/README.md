@@ -1,21 +1,21 @@
-# moe-results
+# moe-reliability-results
 
-Query and visualization library for results of the `moe-experiments` MoE inference reliability
+Query and visualization library for results of the `moe-reliability` MoE inference reliability
 experiments. It reads results directories (JSON run directories), exposes them as pandas tables, and
 renders the experiment figures. It depends only on NumPy, pandas and Matplotlib.
 
 ## Installation
 
-Inside the `moe-experiments` repository it is installed automatically (`uv sync`). Standalone:
+Inside the `moe-reliability` repository it is installed automatically (`uv sync`). Standalone:
 
 ```bash
-pip install ./packages/moe-results        # or: uv pip install ./packages/moe-results
+pip install ./packages/moe-reliability-results        # or: uv pip install ./packages/moe-reliability-results
 ```
 
 ## Usage
 
 ```python
-from moe_results import ResultsStore, plots
+from moe_reliability_results import ResultsStore, plots
 
 store = ResultsStore("results")
 store.summary(experiment="forced_imbalance", n_npus=8)         # one row per sweep point
@@ -28,9 +28,9 @@ plots.save_figures(plots.plot_run(run), "figures/")
 ```
 
 ```bash
-moe-results --results-dir results list
-moe-results summary -f n_npus=8 -q "tpot_ms_p99 > 60" -o dataset.csv
-moe-results plot <run-id>
+moe-reliability-results --results-dir results list
+moe-reliability-results summary -f n_npus=8 -q "tpot_ms_p99 > 60" -o dataset.csv
+moe-reliability-results plot <run-id>
 ```
 
 Full reference: [docs/results-api.md](../../docs/results-api.md). File format:
