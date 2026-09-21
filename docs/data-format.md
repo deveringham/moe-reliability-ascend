@@ -145,17 +145,6 @@ Output of the fused-MoE kernel analysis (field definitions in [experiments.md](e
 `calls_per_rank`, `steps`, `dominant_grid`, `dom_per_rank_mean_us`, `dom_mean_over_ranks_us`,
 `dom_max_over_mean`.
 
-## `hta/hta_metrics.json`
-
-```json
-{"run_id": "...", "sweep_parameter": "imbalance_level",
- "key_columns": {"model": "model.model_name", "batch": "server.batch_size", "imbalance": "imbalance_level"},
- "tables": {"rank": [...], "idle_categories": [...], "kernel_types": [...], "runs": [...]}}
-```
-
-Each table is a list of row objects (columns in [experiments.md](experiments.md#trace-analysis)).
-`Run.hta_frames()` returns them as pandas DataFrames.
-
 ## `validation/imbalance_<level>.json`
 
 | field | description |

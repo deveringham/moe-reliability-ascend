@@ -53,6 +53,7 @@ required-environments = [
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
+
 override-dependencies = [
     "torch==2.10.0",
     "torchvision==0.25.0",
@@ -61,7 +62,6 @@ override-dependencies = [
     "opencv-python-headless>=4.11.0.86,<4.12",
     "flashinfer-python; sys_platform == 'never'",
     "flashinfer-cubin; sys_platform == 'never'",
-    "apache-tvm-ffi; sys_platform == 'never'",
     "tilelang; sys_platform == 'never'",
     "nvidia-cudnn-frontend; sys_platform == 'never'",
     "nvidia-cutlass-dsl; sys_platform == 'never'",
