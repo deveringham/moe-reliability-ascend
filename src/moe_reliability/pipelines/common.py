@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import random
 import shutil
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -105,12 +106,27 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
     ))
 
 # Runs and records metrics for all pending sweep points
+def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, Any]]:
+    """The order the sweep points are served in.
+
+    Points are stored and plotted in parameter order, but serving them in that
+    order aliases anything that drifts during a run - a neighbouring job, thermal
+    state, a cache filling - onto the swept parameter itself. Shuffling breaks
+    that correlation; the experiment seed keeps it reproducible.
+    """
+    points = list(ctx.points)
+    if not getattr(cfg.benchmark, "shuffle_points", False) or len(points) < 3:
+        return points
+    random.Random(cfg.experiment.seed).shuffle(points)
+    return points
+
+
 def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      point_inputs: Callable[[dict[str, Any]], tuple[str, Sequence[Any]]],
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
-    for p in ctx.points:
+    for order, p in enumerate(_execution_order(ctx, cfg)):
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
         if status == schema.STATUS_COMPLETED:
@@ -138,7 +154,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         ctx.update_point(label, status=schema.STATUS_RUNNING, started_at=utcnow(), finished_at=None, error=None,
                          model_path=model_path, n_prompts=len(prompts), trace_dir=trace_rel,
                          metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None,
-                         host_before=host_before, host_after=None)
+                         host_before=host_before, host_after=None, exec_order=order)
         log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts"
             f"{' (measurement pass, unprofiled)' if separate else ''}")
         warning = contention_warning(host_before)
@@ -249,7 +265,7 @@ def parse_npu_profiler_data(trace_dir: str | Path) -> list[Path]:
 
 
 def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = False) -> None:
-    from ..core.trace_analysis import summarize
+    from ..core.trace_analysis import summarize, summarize_ascend
 
     for p in ctx.points:
         label = p["label"]
@@ -268,15 +284,26 @@ def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = F
                 ctx.update_point(label, npu_trace_views=[ctx.relpath(v) for v in views], trace_parse_error=None)
 
         if cfg.analysis.trace_summary and (force or not p.get("trace_metrics_file")):
-            log(f"{label}: extracting fused-MoE kernel metrics from {trace_abs}")
+            log(f"{label}: extracting kernel metrics from {trace_abs}")
             try:
                 summary = summarize(str(trace_abs))
-            except SystemExit as exc:  # raised when no rank traces exist
-                message = (f"{exc} (the fused-MoE kernel analysis reads PyTorch profiler traces named "
-                           f"*rank*.pt.trace.json.gz)")
-                ctx.update_point(label, trace_error=message)
-                log(f"{label}: {message}")
-                continue
+            except SystemExit:
+                # No PyTorch-format rank traces. The Ascend profiler is what this
+                # stack actually writes, so analyse its output instead.
+                try:
+                    summary = summarize_ascend(str(trace_abs))
+                except Exception as exc:  # noqa: BLE001
+                    message = (f"{exc} (neither PyTorch rank traces named *rank*.pt.trace.json.gz nor parsed "
+                               f"Ascend profiler output were found)")
+                    ctx.update_point(label, trace_error=message)
+                    log(f"{label}: {message}")
+                    continue
+                d = summary.get("decomposition") or {}
+                moe = (d.get("by_category_pct") or {}).get("moe")
+                strag = (summary.get("stragglers") or {}).get("GroupedMatmul") or {}
+                log(f"{label}: {len(summary['ranks'])} ranks, MoE {moe:.1f}% of kernel time, "
+                    f"straggler {strag.get('straggler', float('nan')):.3f}x"
+                    if moe is not None else f"{label}: analysed {len(summary['ranks'])} ranks")
             summary["trace_dir"] = p["trace_dir"]
             rel = ctx.write_json(schema.trace_metrics_file(label), summary)
             ctx.update_point(label, trace_metrics_file=rel, trace_summary=trace_scalars(summary), trace_error=None)

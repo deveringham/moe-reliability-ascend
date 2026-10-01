@@ -15,7 +15,7 @@ import numpy as np
 from openai import AsyncOpenAI
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -60,22 +60,30 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     # can be signalled as one group on teardown.
     server_process = subprocess.Popen(cmd, start_new_session=True)
     
-    # Poll the endpoint for 200 OK
+    # Poll the endpoint for 200 OK. Bounded: a server that comes up but never
+    # answers leaves this loop spinning forever while holding every NPU of the
+    # run, which is far worse than failing the point.
     print("Waiting for server to initialize ...")
     url = f"http://localhost:{port}/v1/models"
-    
+    deadline = time.monotonic() + startup_timeout
+
     while True:
         try:
-            response = urllib.request.urlopen(url)
+            response = urllib.request.urlopen(url, timeout=10)
             if response.getcode() == 200:
                 print("Server is ready!")
                 break
-        except urllib.error.URLError:
+        except (urllib.error.URLError, TimeoutError):
             time.sleep(5)
-            
+
         if server_process.poll() is not None:
             raise RuntimeError("vLLM server process terminated unexpectedly.")
-            
+
+        if time.monotonic() > deadline:
+            stop_vllm_server(server_process)
+            raise RuntimeError(f"vLLM server did not become ready within {startup_timeout:.0f}s "
+                               f"(it was still running; see the log for where it stopped)")
+
     return server_process
 
 # Terminates the vLLM server subprocess tree and waits for the NPUs to be released.

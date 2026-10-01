@@ -267,3 +267,33 @@ def test_validation_reads_experts_from_the_serving_stack(deployment, forced_conf
         doc = io.read_json(ctx.path / p["validation_file"])
         assert doc["n_experts"] == N_EXPERTS and len(doc["per_router_frequencies"]) == N_LAYERS
         np.testing.assert_allclose(sum(doc["frequencies"]), 1.0, atol=1e-6)
+
+
+def test_points_are_served_in_a_shuffled_but_reproducible_order(deployment, forced_config_data):
+    """Serving in parameter order aliases drift during a run onto the parameter."""
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 25, 50, 100]
+    forced_config_data["experiment"]["seed"] = 7
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    assert cfg.benchmark.shuffle_points is True
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    # stored in parameter order, whatever the serving order was
+    assert [p["value"] for p in ctx.points] == [0, 25, 50, 100]
+    served = [p["value"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])]
+    assert sorted(served) == [0, 25, 50, 100]
+    assert served != [0, 25, 50, 100], "a 4-point sweep served in parameter order is not shuffled"
+
+    # the same seed gives the same order again
+    again = RunContext.create(ExperimentConfig.from_dict(forced_config_data))
+    assert run_pipeline(again, cfg) == schema.STATUS_COMPLETED
+    assert [p["value"] for p in sorted(again.points, key=lambda p: p["exec_order"])] == served
+
+
+def test_shuffle_can_be_turned_off(deployment, forced_config_data):
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 25, 50, 100]
+    forced_config_data["benchmark"]["shuffle_points"] = False
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert [p["value"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])] == [0, 25, 50, 100]

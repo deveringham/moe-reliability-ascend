@@ -94,6 +94,7 @@ Stage 3: benchmarking of each sweep point.
 | `workload_max_repeats` | int | `0` | Which workload set (max_repeats) to benchmark. |
 | `workload_prompt_length` | int | `1000` | Which workload size (target prompt length) to benchmark. |
 | `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `true` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
@@ -202,6 +203,7 @@ Benchmarking of each imbalance level.
 |---|---|---|---|
 | `n_samples` | int | `15000` | Number of MMLU prompts sent to each checkpoint. |
 | `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `false` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |

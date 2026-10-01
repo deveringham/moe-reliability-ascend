@@ -34,6 +34,17 @@ TRACE_SCALAR_KEYS = (
     "steps",
     "dom_mean_over_ranks_us",
     "dom_max_over_mean",
+    # Ascend profiler summaries (summarize_ascend)
+    "straggler",
+    "totals_max_over_mean",
+    "straggler_op",
+    "kernel_total_us",
+    "moe_pct",
+    "attention_pct",
+    "communication_pct",
+    "norm_pct",
+    "matmul_pct",
+    "other_pct",
 )
 
 

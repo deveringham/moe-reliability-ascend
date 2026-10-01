@@ -126,6 +126,23 @@ The same `benchmark.n_samples` MMLU prompts are replayed against every level.
 
 ## Trace analysis
 
+`analysis.trace_summary` reads PyTorch profiler traces (`*rank*.pt.trace.json.gz`) when they exist, and
+otherwise the Ascend profiler output that `parse_npu_traces` leaves under each rank's
+`ASCEND_PROFILER_OUTPUT/`. The Ascend path reports, per sweep point:
+
+- **Where the step's time goes.** `busy_us` and `span_us` come from merging each rank's kernel intervals,
+  so they are wall time; `occupancy` is their ratio. `compute_pct` splits the compute categories (moe,
+  attention, matmul, norm, other). Communication is reported separately as a share of *summed* kernel
+  duration, because an HCCL kernel's duration is mostly the time it sat blocked waiting for the other
+  ranks - counting it beside compute would make it look like the bottleneck.
+- **The straggler.** `straggler` pairs each kernel launch across ranks and divides the sum of per-call
+  maxima by the mean rank total: what the layers actually waited for. `totals_max_over_mean` is the same
+  data summed per rank first. They differ whenever the busiest rank changes from layer to layer, and the
+  second then reports a balance that was never there (1.004x against 1.088x on the same traces).
+- **The largest operators**, summed over ranks, in `top_ops`.
+
+Those scalars appear in `moe-reliability-results summary` alongside the request statistics.
+
 With `benchmark.enable_profiling = true`, every vLLM Ascend worker records NPU profiler data into
 `traces/<label>/`.
 

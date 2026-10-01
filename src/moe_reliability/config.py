@@ -147,6 +147,7 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
     Option("workload_max_repeats", "int", 0, "Which workload set (max_repeats) to benchmark."),
     Option("workload_prompt_length", "int", 1000, "Which workload size (target prompt length) to benchmark."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", True, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
@@ -168,6 +169,7 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
     Option("n_samples", "int", 15000, "Number of MMLU prompts sent to each checkpoint."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
