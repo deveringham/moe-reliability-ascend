@@ -1,0 +1,43 @@
+# Fine sweep of small forced router imbalance levels on 8 NPUs.
+#
+# imbalance_levels is a bias added to expert 0's router weights, so this range
+# (0 - 0.1) is a much weaker perturbation than the 0-100 used by the
+# infrastructure grid: the question is whether an effect is measurable at all.
+# Expert parallelism is on and the batch is large, which is the regime where a
+# single hot expert should show up as a straggler.
+#
+#   uv run moe-reliability validate configs/examples/imbalance_fine_sweep.toml
+#   ./nrun -t sweep 'uv run moe-reliability run configs/examples/imbalance_fine_sweep.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "fine-sweep"
+description = "Six router-bias levels from 0 to 0.1, 1000 MMLU prompts each, 8 NPUs."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 8
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 700
+
+[imbalance]
+imbalance_levels = [0, 0.02, 0.04, 0.06, 0.08, 0.1]
+# Router-load validation loads each checkpoint again under Hugging Face; left
+# off here to keep the run bounded. It is the follow-up if the latency metrics
+# show nothing, to separate "routing did not move" from "routing moved but
+# latency did not".
+validate_imbalance = false
+
+[benchmark]
+n_samples = 1000
+enable_profiling = false
+save_request_metrics = true
