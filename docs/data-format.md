@@ -150,7 +150,7 @@ Output of the fused-MoE kernel analysis (field definitions in [experiments.md](e
 | field | description |
 |---|---|
 | `imbalance_level`, `model_path` | checkpoint |
-| `router_id`, `n_experts`, `n_routers`, `k` | probe dimensions (`router_id` = 0) |
+| `router_id`, `n_experts`, `n_routers`, `k` | MoE dimensions from the model configuration (`router_id` = 0, the first MoE layer) |
 | `counts`, `frequencies`, `n_assignments` | expert selections of router 0: counts, relative frequencies, total |
 | `per_router_frequencies` | `[n_routers][n_experts]` relative frequencies |
 | `prompts`, `responses` | validation prompts and generated responses |

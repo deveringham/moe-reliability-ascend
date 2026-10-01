@@ -109,10 +109,16 @@ and reused by later runs. Level 0 serves the original `model.model_id`.
 
 ### 2. Validation (optional)
 
-With `imbalance.validate_imbalance = true`, six fixed prompts are generated with Hugging Face
-Transformers while a router probe records the selected experts. The expert activation frequencies of
-router 0 (plus the frequencies of all routers) are stored and plotted against the uniform expectation
-`1 / n_experts`. The Hugging Face models run on NPUs through `torch_npu.contrib.transfer_to_npu`.
+With `imbalance.validate_imbalance = true`, six fixed prompts are served by vLLM with
+`--enable-return-routed-experts`, and the experts it selected are counted. The frequencies of the
+first MoE layer (plus the frequencies of every layer) are stored and plotted against the uniform
+expectation `1 / n_experts`.
+
+The experts are read from the serving stack that the benchmark itself uses, so validation describes
+the deployment under test rather than a second implementation of it. An earlier version ran a
+separate Hugging Face forward pass with a forward hook on the router module; that stopped working
+when transformers began computing the router logits functionally from `gate.weight`
+(`modeling_deepseek_v2.py`), leaving the hook unreachable.
 
 ### 3. Benchmarking
 

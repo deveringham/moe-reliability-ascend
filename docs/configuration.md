@@ -28,7 +28,7 @@ Model under test.
 |---|---|---|---|
 | `model_id` | str | *required* | Hugging Face model id or local checkpoint path served by vLLM. |
 | `model_name` | str | *required* | Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing). |
-| `probe` | str | `"auto"` | Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
+| `probe` | str | `"auto"` | Model family, used to read the MoE dimensions from the model configuration (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
 
 ### `[hardware]`
 
@@ -149,7 +149,7 @@ Model under test.
 |---|---|---|---|
 | `model_id` | str | *required* | Hugging Face model id or local checkpoint path served by vLLM. |
 | `model_name` | str | *required* | Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing). |
-| `probe` | str | `"auto"` | Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
+| `probe` | str | `"auto"` | Model family, used to read the MoE dimensions from the model configuration (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
 
 ### `[hardware]`
 

@@ -1,0 +1,44 @@
+# Does a router bias of 100 actually change which experts are selected?
+#
+# The positive control found no latency effect at bias 100 (-0.5%, p=0.74), which
+# leaves two possibilities: the checkpoint edit does not move routing, or routing
+# moves and the serving stack is insensitive to it. validate_imbalance answers
+# the first directly - it generates with Hugging Face while a router probe records
+# the selected experts, and stores the expert activation frequencies per level.
+#
+# The benchmark is kept tiny: its latency is already known and is not the point.
+# Checkpoints for level 100 already exist and are reused.
+#
+#   ./nrun -t routing 'uv run moe-reliability run configs/examples/imbalance_routing_check.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "routing-check"
+description = "Expert load under bias 0 vs 100, measured directly with a router probe."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[imbalance]
+imbalance_levels = [0, 100]
+validate_imbalance = true
+
+[benchmark]
+n_samples = 50
+repeats = 1
+enable_profiling = false
+save_request_metrics = true

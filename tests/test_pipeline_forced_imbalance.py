@@ -8,6 +8,7 @@ from moe_reliability.config import ExperimentConfig
 from moe_reliability.pipelines import forced_imbalance, run_pipeline
 from moe_reliability.runs import RunContext
 from moe_reliability_results import ResultsStore, io, schema
+from conftest import N_EXPERTS, N_LAYERS
 
 
 def test_run_stores_metrics_and_figures(deployment, forced_config_data, results_dir, tmp_path):
@@ -181,21 +182,23 @@ def test_figures_stage_stays_open_when_nothing_is_rendered(deployment, forced_co
     assert common.should_run(ctx, common.STAGE_FIGURES)
 
 
-def test_expert_load_matches_probe_collation():
-    class Probe:
-        n_experts = 4
+def test_expert_load_counts_a_routed_expert_capture():
+    # [tokens, layers, k]: layer 0 always picks experts 0 and 1, layer 1 only 3
+    prompt = np.zeros((3, 2, 2), dtype=np.int16)
+    prompt[:, 0, 1] = 1
+    prompt[:, 1, :] = 3
+    generated = np.zeros((2, 2, 2), dtype=np.int16)
+    generated[:, 0, 1] = 1
+    generated[:, 1, :] = 3
+    records = [{"prompt_routed_experts": prompt, "routed_experts": generated}]
 
-        def get_active_experts(self):
-            # [batch, seq, k, n_routers]: router 0 always picks experts 0 and 1
-            t = torch.zeros((1, 5, 2, 3), dtype=torch.int64)
-            t[:, :, 1, 0] = 1
-            t[:, :, :, 1] = 3
-            return t
-
-    load = forced_imbalance._expert_load(Probe(), router_id=0)
-    assert load["n_assignments"] == 10
+    load = forced_imbalance._expert_load(records, n_experts=4, layer=0)
+    assert load["n_assignments"] == 10          # 5 tokens x k=2, prompt and generated
     np.testing.assert_allclose(load["frequencies"], [0.5, 0.5, 0.0, 0.0])
-    np.testing.assert_allclose(forced_imbalance._expert_load(Probe(), router_id=1)["frequencies"], [0, 0, 0, 1])
+    np.testing.assert_allclose(
+        forced_imbalance._expert_load(records, n_experts=4, layer=1)["frequencies"], [0, 0, 0, 1])
+    assert forced_imbalance._has_capture(records)
+    assert not forced_imbalance._has_capture([{"prompt_routed_experts": np.zeros((0, 2, 2))}])
 
 
 def test_checkpoint_path_naming(forced_config_data):
@@ -241,3 +244,26 @@ def test_points_record_competing_work_on_other_npus(deployment, forced_config_da
         p = ctx.point(label)
         assert p["host_before"]["foreign_npus"] == [4]
         assert p["host_after"]["foreign_npus"] == [4]
+
+
+def test_validation_reads_experts_from_the_serving_stack(deployment, forced_config_data):
+    """Router load comes from vLLM's routed-expert capture, not a Hugging Face pass."""
+    forced_config_data["imbalance"]["validate_imbalance"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert ctx.stage_status("validation") == schema.STATUS_COMPLETED
+
+    # one capture per level, served with expert capture enabled
+    captures = [c for c in deployment.calls if c["capture"]]
+    assert len(captures) == 2 and all(c["trace_dir"] is None for c in captures)
+
+    for label in ("imbalance_0", "imbalance_100"):
+        p = ctx.point(label)
+        s = p["validation_summary"]
+        assert s["n_assignments"] > 0
+        assert 0.0 <= s["max_expert_frequency"] <= 1.0
+        assert s["expected_frequency"] == 1 / N_EXPERTS
+        doc = io.read_json(ctx.path / p["validation_file"])
+        assert doc["n_experts"] == N_EXPERTS and len(doc["per_router_frequencies"]) == N_LAYERS
+        np.testing.assert_allclose(sum(doc["frequencies"]), 1.0, atol=1e-6)

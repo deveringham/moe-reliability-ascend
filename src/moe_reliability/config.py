@@ -89,7 +89,7 @@ _MODEL = Section("model", "Model under test.", (
     Option("model_id", "str", REQUIRED, "Hugging Face model id or local checkpoint path served by vLLM."),
     Option("model_name", "str", REQUIRED, "Short model name used in run ids and file names "
            "(names containing 'deepseek' enable DeepSeek-specific activation preprocessing)."),
-    Option("probe", "str", "auto", "Router probe family used to read MoE dimensions "
+    Option("probe", "str", "auto", "Model family, used to read the MoE dimensions from the model configuration "
            "(auto infers it from model_id).", PROBE_CHOICES),
     Option("enable_bnb", "bool", False, "bitsandbytes quantization. Not supported by vLLM Ascend; must stay false "
            "(use a ModelSlim, LLM-Compressor or block-wise FP8 checkpoint as model_id instead)."),

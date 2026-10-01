@@ -16,6 +16,7 @@ from collections import Counter
 
 from moe_reliability_results import schema
 
+from .. import models
 from ..config import ExperimentConfig
 from ..logs import log
 from ..runs import RunContext
@@ -61,32 +62,33 @@ def create_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
             log(f"{p['label']}: reusing existing checkpoint {model_path}")
         ctx.update_point(p["label"], model_path=model_path, checkpoint_created=created)
 
-def _expert_load(probe, router_id: int) -> dict:
+def _expert_load(records, n_experts: int, layer: int) -> dict:
+    """Expert selection frequencies in one layer, over every captured token."""
     import numpy as np
 
-    active_experts = probe.get_active_experts()  # [batch, padded_seq_len, k, n_routers]
-    active_experts = active_experts[:, :, :, router_id].flatten().cpu().tolist()
-
-    counts = Counter(active_experts)
-    expert_ids = np.array(range(probe.n_experts))
-    count_per_expert = np.array([counts[i] for i in expert_ids])
-    tokens = sum(counts.values())
-    freqs = count_per_expert / tokens
-    return {"counts": count_per_expert, "n_assignments": tokens, "frequencies": freqs}
+    counts = Counter()
+    for r in records:
+        for key in ("prompt_routed_experts", "routed_experts"):
+            experts = r.get(key)
+            if experts is None:
+                continue
+            counts.update(np.asarray(experts)[:, layer, :].flatten().tolist())
+    count_per_expert = np.array([counts[i] for i in range(n_experts)])
+    tokens = int(count_per_expert.sum())
+    return {"counts": count_per_expert, "n_assignments": tokens,
+            "frequencies": count_per_expert / tokens if tokens else count_per_expert.astype(float)}
 
 
 def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    """Measure which experts each checkpoint actually routes to.
 
-    from ..core.hf_models import chat_generate, load_model
-    from ..models import probe_class, resolve_probe_family
-
-    family = resolve_probe_family(cfg.model.model_id, cfg.model.probe)
-    enable_bnb = cfg.model.enable_bnb
-    max_new_tokens = cfg.client.max_new_tokens
-    prompts = VALIDATION_PROMPTS
-
+    The experts are read from the serving stack itself, with vLLM's routed-expert
+    capture, rather than from a separate Hugging Face forward pass. That measures
+    the deployment under test instead of a second implementation of it, and it
+    does not depend on the router being reachable as a module: recent
+    transformers compute the router logits functionally from ``gate.weight``, so
+    a forward hook on the gate never fires.
+    """
     for p in ctx.points:
         label, level = p["label"], p["value"]
         if p.get("validation_file"):
@@ -94,55 +96,50 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
         model_path = p.get("model_path") or checkpoint_path(cfg, level)
         log(f"{label}: validating router load of {model_path}")
 
-        if level == 0:
-            model, tokenizer = load_model(model_path, enable_bnb=enable_bnb)
-        else:
-            if enable_bnb:
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-                model = AutoModelForCausalLM.from_pretrained(model_path,
-                                                             device_map="auto",
-                                                             quantization_config=quantization_config)
-            else:
-                model = AutoModelForCausalLM.from_pretrained(model_path, device_map="auto")
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
+        records = common.serve_and_measure(cfg, model_path, VALIDATION_PROMPTS, trace_dir=None,
+                                           enable_expert_capture=True)
+        if not records:
+            raise RuntimeError(f"routed-expert capture failed for {model_path} (see {schema.LOG_FILE})")
 
-        probe = probe_class(family)(model)
-        responses = []
-        for prompt in prompts:
-            response, probs, active_experts = chat_generate(model, tokenizer, probe,
-                                                            prompt=prompt, max_new_tokens=max_new_tokens,
-                                                            clear_probe=False,
-                                                            prompt_formatted=False)
-            responses.append(response)
+        # From the configuration, not from the capture: a strongly biased
+        # checkpoint may never select the highest-numbered expert.
+        family = models.resolve_probe_family(cfg.model.model_id, cfg.model.probe)
+        n_experts, n_layers, k = models.moe_dimensions(model_path, family)
+        if not _has_capture(records):
+            raise RuntimeError(f"no routed experts captured for {model_path}; the server must run with "
+                               f"--enable-return-routed-experts")
 
-        # Clean up memory
-        del model
-        common.free_accelerator_memory()
-
-        router0 = _expert_load(probe, router_id=0)
-        per_router = [_expert_load(probe, router_id=r)["frequencies"] for r in range(probe.n_routers)]
+        layer0 = _expert_load(records, n_experts, layer=0)
+        per_layer = [_expert_load(records, n_experts, layer=i)["frequencies"] for i in range(n_layers)]
         rel = ctx.write_json(schema.validation_file(label), {
             "run_id": ctx.run_id,
             "label": label,
             "imbalance_level": level,
             "model_path": model_path,
             "router_id": 0,
-            "n_experts": probe.n_experts,
-            "n_routers": probe.n_routers,
-            "k": probe.k,
-            **router0,
-            "per_router_frequencies": per_router,
-            "prompts": prompts,
-            "responses": responses,
+            "n_experts": n_experts,
+            "n_routers": n_layers,
+            "k": k,
+            **layer0,
+            "per_router_frequencies": per_layer,
+            "prompts": VALIDATION_PROMPTS,
+            "responses": [r.get("response") for r in records],
         })
-        max_share = float(max(router0["frequencies"])) if router0["n_assignments"] else None
+        max_share = float(max(layer0["frequencies"])) if layer0["n_assignments"] else None
         ctx.update_point(label, validation_file=rel, validation_summary={
-            "n_assignments": router0["n_assignments"],
+            "n_assignments": layer0["n_assignments"],
             "max_expert_frequency": max_share,
-            "expected_frequency": 1 / probe.n_experts,
+            "expected_frequency": 1 / n_experts,
         })
-        del probe
-        torch.npu.empty_cache()
+
+
+def _has_capture(records) -> bool:
+    import numpy as np
+
+    return any(np.asarray(r[key]).size
+               for r in records
+               for key in ("routed_experts", "prompt_routed_experts")
+               if r.get(key) is not None)
 
 def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> None:
     ctx.init_stages(STAGES)
