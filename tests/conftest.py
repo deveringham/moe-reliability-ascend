@@ -141,7 +141,15 @@ def install_fake_npu_profiler(monkeypatch, analyse=fake_npu_analyse):
     """Register ``torch_npu.profiler.profiler.analyse`` without an Ascend runtime."""
     for name in ("torch_npu", "torch_npu.profiler"):
         if name not in sys.modules:
-            monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+            module = types.ModuleType(name)
+            if name == "torch_npu":
+                # torch loads out-of-tree device backends through the
+                # "torch.backends" entry point, which resolves torch_npu._autoload.
+                # Without it, the first `import torch` after this stub is installed
+                # raises AttributeError, so a test file that has not already pulled
+                # in the real torch_npu cannot be run on its own.
+                module._autoload = lambda: None
+            monkeypatch.setitem(sys.modules, name, module)
     profiler = types.ModuleType("torch_npu.profiler.profiler")
     profiler.analyse = analyse
     monkeypatch.setitem(sys.modules, "torch_npu.profiler.profiler", profiler)
