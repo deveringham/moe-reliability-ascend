@@ -12,7 +12,7 @@
 [experiment]
 type = "forced_imbalance"
 name = "fine-sweep"
-description = "Six router-bias levels from 0 to 0.1, 1000 MMLU prompts each, 8 NPUs."
+description = "Six router-bias levels from 0 to 0.1, 1000 MMLU prompts each, NPUs 0-3."
 seed = 43
 
 [model]
@@ -20,7 +20,9 @@ model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
 model_name = "deepseek-v2"
 
 [hardware]
-n_npus = 8
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
 
 [server]
 batch_size = 512
