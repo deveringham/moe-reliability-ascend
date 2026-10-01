@@ -23,7 +23,9 @@ def test_full_pipeline(deployment, synthetic_config_data, results_dir):
 
     capture, *bench = deployment.calls
     assert capture["capture"] and capture["n_prompts"] == 60 and capture["trace_dir"] is None
-    assert len(bench) == 3 and all(not c["capture"] and c["trace_dir"] for c in bench)
+    # Profiling is on, so every point is served twice: unprofiled then profiled.
+    assert len(bench) == 6 and not any(c["capture"] for c in bench)
+    assert [c["trace_dir"] is None for c in bench] == [True, False] * 3
 
     run = ResultsStore(results_dir).get(ctx.run_id)
     records = list(run.activations())
@@ -43,7 +45,10 @@ def test_full_pipeline(deployment, synthetic_config_data, results_dir):
 
     # one sweep point per alpha, with the selected workload's prompts
     assert [p["label"] for p in run.points] == ["alpha_0.5", "alpha_1.0", "alpha_1.5"]
-    assert [c["n_prompts"] for c in bench] == [len(wl["workloads"][length][a]["indices"]) for a in (0.5, 1.0, 1.5)]
+    expected = [len(wl["workloads"][length][a]["indices"]) for a in (0.5, 1.0, 1.5)]
+    measured = [c["n_prompts"] for c in bench if c["trace_dir"] is None]
+    profiled = [c["n_prompts"] for c in bench if c["trace_dir"] is not None]
+    assert measured == expected and profiled == expected  # both passes replay the same workload
     summary = run.summary()
     assert {"workload_mae", "workload_effective_alpha_median"} <= set(summary.columns)
     assert all(len(p["npu_trace_views"]) == 2 for p in run.points)
@@ -94,3 +99,45 @@ def test_resume_skips_completed_stages(deployment, synthetic_config_data):
     reopened = RunContext.open(ctx.path)
     assert run_pipeline(reopened, reopened.config()) == schema.STATUS_COMPLETED
     assert len(deployment.calls) == n_calls
+
+
+def test_length_in_requests_fixes_the_request_count(deployment, synthetic_config_data, results_dir):
+    """Every alpha must serve the same number of requests.
+
+    With a token budget the request count grows with alpha, because a higher CV is
+    reached most cheaply from more, shorter prompts - so the served batch size
+    tracks the imbalance it is meant to isolate.
+    """
+    synthetic_config_data["workloads"]["length_in_requests"] = True
+    synthetic_config_data["workloads"]["target_prompt_lengths"] = [12]
+    synthetic_config_data["benchmark"]["workload_prompt_length"] = 12
+    ctx, status = _run(synthetic_config_data)
+    assert status == schema.STATUS_COMPLETED
+
+    run = ResultsStore(results_dir).get(ctx.run_id)
+    wl = run.workloads(0)
+    assert wl["limit_unit"] == "requests" and wl["target_ls"] == [12]
+    for a in (0.5, 1.0, 1.5):
+        assert len(wl["workloads"][12][a]["indices"]) == 12
+    assert {p["n_prompts"] for p in run.points} == {12}
+
+
+def test_prompt_length_tolerance_restricts_the_pool(deployment, synthetic_config_data, results_dir):
+    synthetic_config_data["workloads"]["prompt_length_tolerance"] = 0.1
+    ctx, status = _run(synthetic_config_data)
+    assert status == schema.STATUS_COMPLETED
+
+    run = ResultsStore(results_dir).get(ctx.run_id)
+    wl = run.workloads(0)
+    assert wl["prompt_length_tolerance"] == 0.1
+
+    counts = np.array([r["routed_experts"].shape[0] + r["prompt_routed_experts"].shape[0]
+                       for r in run.activations()])
+    median = np.median(counts)
+    # The band has to exclude part of the pool, or the test proves nothing.
+    in_band = (counts >= median * 0.9) & (counts <= median * 1.1)
+    assert 0 < in_band.sum() < len(counts)
+    length = wl["target_ls"][0]
+    for a in (0.5, 1.0, 1.5):
+        chosen = counts[list(wl["workloads"][length][a]["indices"])]
+        assert chosen.min() >= median * 0.9 and chosen.max() <= median * 1.1

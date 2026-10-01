@@ -63,6 +63,13 @@ for each prompt token and each generated token in every MoE layer are stored
    workload's per-layer CV and the target `alpha x cv_nat`. A prompt may be selected at most
    `max_repeats + 1` times. Selection stops once the workload reaches the token budget
    `L = avg_tokens_per_prompt x target_prompt_length`.
+
+   With `workloads.length_in_requests`, selection instead stops at `target_prompt_length`
+   *requests*. A token budget lets the request count grow with alpha, because a higher CV is
+   reached most cheaply from more, shorter prompts; the served batch then grows with the
+   imbalance it is supposed to isolate. `workloads.prompt_length_tolerance` additionally
+   restricts the pool to prompts within a relative distance of the median token count, so that
+   workloads do not differ mainly in prompt size.
 5. **Quality.** The mean absolute error between the obtained and target CVs (`mae`), the share of
    unique prompts, and the *effective alpha* (obtained CV / `cv_nat`; median and 10-90 % range over
    layers) are stored per workload.
@@ -74,6 +81,12 @@ target prompt lengths.
 
 The workload set selected by `benchmark.workload_max_repeats` and `benchmark.workload_prompt_length`
 is replayed. Each alpha is one sweep point.
+
+With `benchmark.enable_profiling` and `benchmark.separate_profiling_run` (the default), each point
+is served twice: an unprofiled pass whose timings become the request metrics, then a profiled pass
+whose traces feed the trace analysis. The profiler perturbs latency, so one pass cannot provide
+both. If only the profiled pass fails the point keeps its measurements and records
+`profiling_error`.
 
 Activation capture and workload construction do not depend on the deployment. Later runs can reuse
 them with `activations.reuse_activations_from` or `workloads.reuse_workloads_from`, and grids can

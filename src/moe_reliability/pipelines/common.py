@@ -128,13 +128,19 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                 shutil.rmtree(trace_abs)  # traces of an interrupted attempt
             trace_abs.mkdir(parents=True)
 
+        # The profiler perturbs latency, so timings and traces cannot come from
+        # the same pass. With separate_profiling_run the point is served twice:
+        # unprofiled for the measurements, then profiled for the traces.
+        separate = bool(bench.enable_profiling and getattr(bench, "separate_profiling_run", False))
+
         ctx.update_point(label, status=schema.STATUS_RUNNING, started_at=utcnow(), finished_at=None, error=None,
                          model_path=model_path, n_prompts=len(prompts), trace_dir=trace_rel,
                          metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None)
-        log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts")
+        log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts"
+            f"{' (measurement pass, unprofiled)' if separate else ''}")
 
-        results = serve_and_measure(cfg, model_path, prompts,
-                                     trace_dir=str(ctx.abspath(trace_rel)) if trace_rel else None)
+        measure_trace_dir = None if separate else (str(ctx.abspath(trace_rel)) if trace_rel else None)
+        results = serve_and_measure(cfg, model_path, prompts, trace_dir=measure_trace_dir)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -142,7 +148,17 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             log(f"{label}: FAILED")
             continue
 
+        profiling_error = None
+        if separate:
+            log(f"{label}: profiling pass")
+            if serve_and_measure(cfg, model_path, prompts, trace_dir=str(ctx.abspath(trace_rel))) is None:
+                # The measurements stand on their own; only the traces are lost.
+                profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
+                log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
+
         fields: dict[str, Any] = {"request_summary": summarize_requests(results)}
+        if profiling_error:
+            fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:
             fields["metrics_file"] = ctx.write_json(schema.metrics_file(label), {
                 "run_id": ctx.run_id,
@@ -150,7 +166,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                 "sweep_parameter": ctx.manifest["sweep_parameter"],
                 "sweep_value": p["value"],
                 "model_path": model_path,
-                "profiled": bool(bench.enable_profiling),
+                "profiled": bool(bench.enable_profiling) and not separate,
                 "requests": results,
             })
         ctx.update_point(label, status=schema.STATUS_COMPLETED, finished_at=utcnow(), **fields)
@@ -161,6 +177,15 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2f}"
+
+
+def profiling_note(bench) -> str:
+    """How each point is served, for the plan printed by `validate`."""
+    if not bench.enable_profiling:
+        return ""
+    if getattr(bench, "separate_profiling_run", False):
+        return " (served twice per point: unprofiled for timings, profiled for traces)"
+    return " (profiled)"
 
 
 def post_processing_stages(ctx: RunContext, cfg: ExperimentConfig, force: bool = False) -> None:

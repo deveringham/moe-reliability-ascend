@@ -181,7 +181,7 @@ def plan(cfg: ExperimentConfig) -> list[str]:
     if cfg.imbalance.validate_imbalance:
         lines.append("validate router load of every checkpoint")
     lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} MMLU prompts"
-                 f"{' (profiled)' if cfg.benchmark.enable_profiling else ''}")
+                 f"{common.profiling_note(cfg.benchmark)}")
     return lines
 
 

@@ -74,13 +74,16 @@ def test_failed_point_gives_partial_run_and_retry(deployment, forced_config_data
 def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
     forced_config_data["benchmark"]["enable_profiling"] = True
     cfg = ExperimentConfig.from_dict(forced_config_data)
-    assert cfg.benchmark.save_request_metrics is False
+    # The separate unprofiled pass measures latency without the profiler, so the
+    # request metrics are kept even though profiling is on.
+    assert cfg.benchmark.separate_profiling_run is True
+    assert cfg.benchmark.save_request_metrics is True
     ctx = RunContext.create(cfg)
     assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
 
     for label in ("imbalance_0", "imbalance_100"):
         p = ctx.point(label)
-        assert p["metrics_file"] is None and p["request_summary"]["n_requests"] == 24
+        assert p["metrics_file"] is not None and p["request_summary"]["n_requests"] == 24
         assert p["npu_trace_views"] == [f"traces/{label}/worker_{r}/ASCEND_PROFILER_OUTPUT/trace_view.json"
                                         for r in (0, 1)]
         assert p["trace_parse_error"] is None
@@ -88,6 +91,31 @@ def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
         assert "*rank*.pt.trace.json.gz" in p["trace_error"] and p["trace_metrics_file"] is None
     assert ctx.stage_status("trace_analysis") == schema.STATUS_COMPLETED
     assert ctx.stage_status("hta") == schema.STATUS_SKIPPED
+
+
+def test_separate_profiling_run_serves_each_point_twice(deployment, forced_config_data):
+    """Timings must come from an unprofiled pass, traces from a profiled one."""
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    calls = [c for c in deployment.calls if not c["capture"]]
+    assert len(calls) == 4                                   # 2 points x 2 passes
+    assert [c["trace_dir"] is None for c in calls] == [True, False, True, False]
+
+
+def test_single_pass_when_separate_profiling_run_disabled(deployment, forced_config_data):
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    forced_config_data["benchmark"]["separate_profiling_run"] = False
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    # Without a clean pass the only timings available are the perturbed ones.
+    assert cfg.benchmark.save_request_metrics is False
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    calls = [c for c in deployment.calls if not c["capture"]]
+    assert len(calls) == 2 and all(c["trace_dir"] for c in calls)
 
 
 def test_kernel_metrics_from_rank_traces(deployment, forced_config_data):

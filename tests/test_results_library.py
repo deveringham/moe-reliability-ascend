@@ -142,7 +142,8 @@ def test_hta_stage_and_plots(deployment, forced_config_data, results_dir, monkey
     assert len(table) == 2 and "idle_pctg_mean__delta" in table.columns
 
     K, T = plots.moe_imbalance_overview_inputs(store)
-    assert len(K) == 4 and T == {}
-    plots.plot_moe_imbalance_overview(K, {k: {"tpot": pd.Series([10.0, 12.0]).to_numpy(),
-                                              "ttft": pd.Series([30.0, 31.0]).to_numpy()} for k in K})
+    # Profiled runs now also carry request metrics, from their unprofiled pass.
+    assert len(K) == 4 and set(T) == set(K)
+    assert all({"tpot", "ttft"} <= set(v) for v in T.values())
+    plots.plot_moe_imbalance_overview(K, T)
     plt.close("all")

@@ -120,7 +120,13 @@ def build_workloads(ctx: RunContext, cfg: ExperimentConfig) -> None:
     # We sweep a parameter alpha which scales cv_nat
     target_alphas = cfg.workloads.target_alphas
     target_prompt_ls = cfg.workloads.target_prompt_lengths
-    target_ls = [int(avg_tokens_per_prompt * p) for p in target_prompt_ls]
+    limit_unit = "requests" if cfg.workloads.length_in_requests else "tokens"
+    length_tolerance = cfg.workloads.prompt_length_tolerance
+    # A fixed request count keeps the served batch the same size at every alpha;
+    # a token budget lets it grow, because a more imbalanced workload is reached
+    # with more, shorter prompts.
+    target_ls = (list(target_prompt_ls) if limit_unit == "requests"
+                 else [int(avg_tokens_per_prompt * p) for p in target_prompt_ls])
 
     # Get full MMLU formatted prompts for each workload
     formatted_prompts_mmlu, subjects, questions = common.mmlu_prompts(entry["n_samples"], entry["seed"])
@@ -133,7 +139,8 @@ def build_workloads(ctx: RunContext, cfg: ExperimentConfig) -> None:
             continue
         log(f"constructing workloads with max_repeats={max_repeats}")
         workloads = workload_sweep_cvs(results, qs, n_experts, n_layers, k, target_alphas, target_ls, cv_nat,
-                                       max_repeats=max_repeats, verbose=True)
+                                       max_repeats=max_repeats, verbose=True,
+                                       limit_unit=limit_unit, length_tolerance=length_tolerance)
 
         # Put formatted prompts into the workload data structures
         for l in target_ls:
@@ -160,6 +167,8 @@ def build_workloads(ctx: RunContext, cfg: ExperimentConfig) -> None:
             "target_alphas": target_alphas,
             "target_prompt_lengths": target_prompt_ls,
             "target_ls": target_ls,
+            "limit_unit": limit_unit,
+            "prompt_length_tolerance": length_tolerance,
             "workloads": workloads,
         }
         rel = ctx.write_json(schema.workloads_file(max_repeats), doc)
@@ -259,7 +268,7 @@ def plan(cfg: ExperimentConfig) -> list[str]:
     lines.append(f"benchmark workload set max_repeats={bench.workload_max_repeats}, "
                  f"{bench.workload_prompt_length} prompts: "
                  f"{len(wl.target_alphas) if not wl.reuse_workloads_from else 'all'} sweep points"
-                 f"{' (profiled)' if bench.enable_profiling else ''}")
+                 f"{common.profiling_note(bench)}")
     return lines
 
 
