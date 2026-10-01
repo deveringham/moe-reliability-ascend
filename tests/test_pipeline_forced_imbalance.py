@@ -136,6 +136,23 @@ def test_exception_marks_run_failed(deployment, forced_config_data, monkeypatch)
     assert "disk full" in manifest["stages"]["checkpoints"]["error"]
 
 
+def test_figures_stage_stays_open_when_nothing_is_rendered(deployment, forced_config_data, monkeypatch):
+    """A run with no usable points must not record figures as completed.
+
+    The stage would otherwise be skipped for the life of the run, so retrying the
+    failed points with `resume --retry-failed` could never produce figures.
+    """
+    from moe_reliability.pipelines import common
+
+    monkeypatch.setattr(common, "serve_and_measure", lambda *args, **kwargs: None)
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    run_pipeline(ctx, cfg)
+
+    assert ctx.stage_status(common.STAGE_FIGURES) == schema.STATUS_SKIPPED
+    assert common.should_run(ctx, common.STAGE_FIGURES)
+
+
 def test_expert_load_matches_probe_collation():
     class Probe:
         n_experts = 4

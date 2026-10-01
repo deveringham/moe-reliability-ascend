@@ -300,6 +300,15 @@ def figures_stage(ctx: RunContext) -> None:
                                       f"(re-render with: moe-reliability-results plot {ctx.run_id})")
         log(f"figure rendering failed: {error!r}")
         return
+    if not written:
+        # Nothing to plot, normally because the benchmark produced no usable
+        # points. Leaving the stage completed would make resume skip it for the
+        # life of the run, so there would be no figures even once the failed
+        # points have been retried successfully.
+        ctx.skip_stage(STAGE_FIGURES, "no figures rendered (no benchmark results to plot); "
+                                      "retried on the next resume")
+        log("rendered 0 figures - leaving the stage open for a later resume")
+        return
     ctx.manifest["figures"] = [ctx.relpath(p) for p in written]
     ctx.save()
     log(f"rendered {len(written)} figures")
