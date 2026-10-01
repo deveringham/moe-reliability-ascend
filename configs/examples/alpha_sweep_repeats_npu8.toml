@@ -1,0 +1,60 @@
+# The same workloads as the 4-NPU repeats sweep, served across 8 NPUs.
+#
+# Expert-parallel width is itself a lever on the straggler: with 64 experts, 4
+# ranks carry 16 experts each and 8 ranks carry 8, so there is half as much
+# averaging to wash the imbalance out. For these workloads the busiest rank goes
+# from 1.130x of the mean at 4 ranks to a predicted 1.311x at 8.
+#
+#   alpha   2 ranks   4 ranks   8 ranks  16 ranks
+#     1.0    1.031x    1.101x    1.224x    1.432x
+#     1.6    1.042x    1.130x    1.311x    1.630x
+#
+# The workloads are reused from the 4-NPU run, so expert-parallel width is the
+# only thing that differs between the two.
+#
+#   ./nrun -t repeats8 'uv run moe-reliability run configs/examples/alpha_sweep_repeats_npu8.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "alpha-repeats-npu8"
+description = "The 4-NPU repeats workloads, re-served across 8 NPUs, profiled."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 8
+visible_devices = "0,1,2,3,4,5,6,7"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[activations]
+n_samples = 3000
+
+[workloads]
+target_alphas = [0.5, 0.8, 1.0, 1.3, 1.6, 2.0]
+target_prompt_lengths = [300]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [10]
+reuse_workloads_from = "20261001-172617_synthetic_deepseek-v2_npu4_bs512_alpha-repeats"
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 300
+repeats = 1
+enable_profiling = true
+separate_profiling_run = true
+trace_active_iterations = 2
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = true
+trace_summary = false

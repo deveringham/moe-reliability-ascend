@@ -116,22 +116,24 @@ def stop_vllm_server(server_process, timeout=120.0):
 
     print("Server successfully shut down.")
 
-def start_profiling(port=8000):
+def start_profiling(port=8000, timeout=600):
+    # Needs a timeout like stop_profiling: urlopen without one waits forever, and
+    # a profiler that never answers then holds every NPU of the run indefinitely.
     print("Starting vLLM PyTorch Profiler...")
     req = urllib.request.Request(f"http://localhost:{port}/start_profile", method="POST")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             print("Profiler started successfully.")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to start profiler: {e}")
 
-def stop_profiling(port=8000):
+def stop_profiling(port=8000, timeout=600):
     print("Stopping vLLM PyTorch Profiler (Note: flushing traces to disk may take a few minutes)...")
     req = urllib.request.Request(f"http://localhost:{port}/stop_profile", method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=600) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             print("Profiler stopped and traces flushed successfully.")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to stop profiler: {e}")
 
 def vllm_bench(model_name, port=8000, num_prompts=512, max_concurrency=16,
