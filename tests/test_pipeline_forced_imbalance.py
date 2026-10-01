@@ -203,3 +203,41 @@ def test_checkpoint_path_naming(forced_config_data):
     cfg = ExperimentConfig.from_dict(forced_config_data)
     assert forced_imbalance.checkpoint_path(cfg, 0) == "org/Mixtral-test"
     assert forced_imbalance.checkpoint_path(cfg, 12.5).endswith("mixtral-imbalance12.5")
+
+
+def test_repeats_measure_each_level_more_than_once(deployment, forced_config_data):
+    """Points sharing a value give the run its own noise floor."""
+    forced_config_data["benchmark"]["repeats"] = 3
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    labels = [p["label"] for p in ctx.points]
+    assert labels == ["imbalance_0", "imbalance_0_r2", "imbalance_0_r3",
+                      "imbalance_100", "imbalance_100_r2", "imbalance_100_r3"]
+    assert [p["value"] for p in ctx.points] == [0, 0, 0, 100, 100, 100]
+    assert [p["repeat"] for p in ctx.points] == [1, 2, 3, 1, 2, 3]
+    # every repeat is served and measured separately
+    assert all(p["status"] == schema.STATUS_COMPLETED for p in ctx.points)
+    assert len({p["metrics_file"] for p in ctx.points}) == 6
+    assert len([c for c in deployment.calls if not c["capture"]]) == 6
+
+
+def test_points_record_competing_work_on_other_npus(deployment, forced_config_data, monkeypatch):
+    """A job on NPUs this run does not own is recorded with every point."""
+    from moe_reliability.pipelines import common
+
+    busy = {"npu_processes": [{"npu": 4, "pid": 99, "name": "python3"}],
+            "foreign_npu_processes": [{"npu": 4, "pid": 99, "name": "python3"}],
+            "foreign_npus": [4], "loadavg": [40.0, 30.0, 20.0]}
+    monkeypatch.setattr(common, "host_snapshot", lambda visible_devices: busy)
+
+    forced_config_data["hardware"] = {"n_npus": 2, "visible_devices": "0,1"}
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    for label in ("imbalance_0", "imbalance_100"):
+        p = ctx.point(label)
+        assert p["host_before"]["foreign_npus"] == [4]
+        assert p["host_after"]["foreign_npus"] == [4]

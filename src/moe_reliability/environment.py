@@ -44,9 +44,12 @@ __all__ = [
     "check_custom_ops",
     "check_devices",
     "configure_environment",
+    "contention_warning",
     "collect_provenance",
     "custom_op_vendors",
     "diagnose",
+    "host_snapshot",
+    "npu_processes",
     "package_versions",
     "stack_mismatches",
     "triton_ascend_conflicts",
@@ -348,6 +351,57 @@ def ascend_versions(toolkit_home: str | None = None,
                 break
     info["driver_version"] = _read_version(Path(driver_info))
     return info
+
+
+#: ``| 0       0                 | 1267978       | VLLMWorker_TP      | 38153   | NA |``
+_NPU_PROCESS_RE = re.compile(r"^\|\s*(\d+)\s+\d+\s*\|\s*(\d+)\s*\|\s*(\S+)")
+
+
+def npu_processes(npu_smi: str | None = None) -> list[dict[str, Any]]:
+    """Processes currently holding an NPU, as ``npu-smi info`` reports them."""
+    text = npu_smi if npu_smi is not None else _run(["npu-smi", "info"])
+    if not text:
+        return []
+    out = []
+    for line in text.splitlines():
+        m = _NPU_PROCESS_RE.match(line)
+        if m:
+            out.append({"npu": int(m.group(1)), "pid": int(m.group(2)), "name": m.group(3)})
+    return out
+
+
+def host_snapshot(visible_devices: str = "") -> dict[str, Any]:
+    """Host load and NPU occupancy, including work that is not this run's.
+
+    Timings are only comparable across sweep points if the machine is in the same
+    state for each of them. A job that starts on the NPUs this run does not own
+    still competes for host CPU, memory bandwidth and PCIe, and shows up as a
+    latency step that is easily mistaken for an effect of the swept parameter.
+    """
+    ours = {int(d) for d in visible_devices.replace(",", " ").split() if d.strip().isdigit()}
+    procs = npu_processes()
+    foreign = [p for p in procs if ours and p["npu"] not in ours]
+    info: dict[str, Any] = {
+        "npu_processes": procs,
+        "foreign_npu_processes": foreign,
+        "foreign_npus": sorted({p["npu"] for p in foreign}),
+    }
+    try:
+        info["loadavg"] = [round(v, 2) for v in os.getloadavg()]
+    except OSError:
+        info["loadavg"] = None
+    return info
+
+
+def contention_warning(snapshot: Mapping[str, Any]) -> str | None:
+    """A one-line description of competing work, or None when the host looks quiet."""
+    foreign = snapshot.get("foreign_npu_processes") or []
+    if not foreign:
+        return None
+    pids = sorted({p["pid"] for p in foreign})
+    return (f"{len(foreign)} process(es) on NPU(s) {snapshot['foreign_npus']} outside this run "
+            f"(pid {', '.join(str(p) for p in pids)}), load {snapshot.get('loadavg')}; "
+            f"timings may not be comparable across sweep points")
 
 
 def collect_provenance(runtime: Mapping[str, Any] | None = None) -> dict[str, Any]:

@@ -22,6 +22,7 @@ from moe_reliability_results import schema
 from moe_reliability_results.metrics import summarize_requests, trace_scalars
 
 from ..config import ExperimentConfig
+from ..environment import contention_warning, host_snapshot
 from ..logs import log
 from ..runs import RunContext, utcnow
 
@@ -133,11 +134,16 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         # unprofiled for the measurements, then profiled for the traces.
         separate = bool(bench.enable_profiling and getattr(bench, "separate_profiling_run", False))
 
+        host_before = host_snapshot(cfg.hardware.visible_devices)
         ctx.update_point(label, status=schema.STATUS_RUNNING, started_at=utcnow(), finished_at=None, error=None,
                          model_path=model_path, n_prompts=len(prompts), trace_dir=trace_rel,
-                         metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None)
+                         metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None,
+                         host_before=host_before, host_after=None)
         log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts"
             f"{' (measurement pass, unprofiled)' if separate else ''}")
+        warning = contention_warning(host_before)
+        if warning:
+            log(f"{label}: warning: {warning}")
 
         measure_trace_dir = None if separate else (str(ctx.abspath(trace_rel)) if trace_rel else None)
         results = serve_and_measure(cfg, model_path, prompts, trace_dir=measure_trace_dir)
@@ -156,7 +162,8 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
 
-        fields: dict[str, Any] = {"request_summary": summarize_requests(results)}
+        fields: dict[str, Any] = {"request_summary": summarize_requests(results),
+                                  "host_after": host_snapshot(cfg.hardware.visible_devices)}
         if profiling_error:
             fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:

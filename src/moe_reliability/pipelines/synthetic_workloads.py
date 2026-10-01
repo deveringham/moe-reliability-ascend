@@ -203,7 +203,7 @@ def benchmark(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False
     doc, l = _benchmark_workloads(ctx, cfg)
     by_alpha = doc["workloads"][str(l)]
     workload_alphas = [float(a) for a in by_alpha]
-    ctx.ensure_points(workload_alphas)
+    ctx.ensure_points(workload_alphas, repeats=cfg.benchmark.repeats)
 
     workload_prompts = {}
     for alpha_key, p in zip(by_alpha, ctx.points):

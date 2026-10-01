@@ -146,7 +146,7 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
 
 def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> None:
     ctx.init_stages(STAGES)
-    ctx.ensure_points(cfg.imbalance.imbalance_levels)
+    ctx.ensure_points(cfg.imbalance.imbalance_levels, repeats=cfg.benchmark.repeats)
 
     if common.should_run(ctx, STAGE_CHECKPOINTS):
         with ctx.stage(STAGE_CHECKPOINTS):

@@ -185,3 +185,34 @@ def test_parse_npu_profiler_data_per_worker_fallback(tmp_path, monkeypatch):
         write_npu_profiler_data(tmp_path / "traces", rank)
     assert len(parse_npu_profiler_data(tmp_path / "traces")) == 2
     assert [p.rsplit("/", 1)[-1] for p in calls] == ["traces", "worker_0", "worker_1"]
+
+
+NPU_SMI_SAMPLE = """\
+| NPU     Chip              | Process id    | Process name       | Process memory(MB)    |
++===========================+===============+==============================================+
+| 0       0                 | 1267978       | VLLMWorker_TP      | 38153                 | NA |
+| 1       0                 | 1267979       | VLLMWorker_TP      | 38153                 | NA |
+| No running processes found in NPU 2                                                      |
+| 4       0                 | 1574531       | python3            | 8206                  | NA |
+"""
+
+
+def test_npu_processes_parses_the_process_table():
+    from moe_reliability.environment import npu_processes
+
+    procs = npu_processes(NPU_SMI_SAMPLE)
+    assert [(p["npu"], p["pid"], p["name"]) for p in procs] == [
+        (0, 1267978, "VLLMWorker_TP"), (1, 1267979, "VLLMWorker_TP"), (4, 1574531, "python3")]
+
+
+def test_contention_warning_only_fires_for_other_peoples_npus(monkeypatch):
+    from moe_reliability import environment
+
+    monkeypatch.setattr(environment, "_run", lambda *a, **k: NPU_SMI_SAMPLE)
+
+    ours = environment.host_snapshot("0,1,2,3")
+    assert ours["foreign_npus"] == [4]
+    assert "1574531" in environment.contention_warning(ours)
+
+    whole_node = environment.host_snapshot("0,1,2,3,4,5,6,7")
+    assert whole_node["foreign_npus"] == [] and environment.contention_warning(whole_node) is None
