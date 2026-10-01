@@ -209,14 +209,18 @@ def benchmark(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False
     for alpha_key, p in zip(by_alpha, ctx.points):
         w = by_alpha[alpha_key]
         workload_prompts[p["label"]] = w["prompts_formatted"]
+        limit_unit = doc.get("limit_unit", "tokens")
         ctx.update_point(p["label"], workload={
             **workload_point_stats(w, doc["cv_nat"]),
             "max_repeats": doc["max_repeats"],
             "target_prompt_length": cfg.benchmark.workload_prompt_length,
-            "target_tokens": l,
+            "limit_unit": limit_unit,
+            "target_tokens": l if limit_unit == "tokens" else None,
+            "target_requests": l if limit_unit == "requests" else None,
         })
+    limit_unit = doc.get("limit_unit", "tokens")
     log(f"benchmarking {len(workload_alphas)} workloads (max_repeats={doc['max_repeats']}, "
-        f"{cfg.benchmark.workload_prompt_length} prompts / {l} tokens): alphas {workload_alphas}")
+        f"{l} {limit_unit} each): alphas {workload_alphas}")
 
     common.seed_everything(cfg.experiment.seed)
     common.benchmark_points(ctx, cfg, lambda p: (cfg.model.model_id, workload_prompts[p["label"]]),

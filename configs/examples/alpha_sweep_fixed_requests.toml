@@ -1,0 +1,63 @@
+# Alpha sweep with the workload size and prompt length held fixed, on NPUs 0-3.
+#
+# The previous sweep (20261001-133042) could not attribute its TPOT trend: a
+# token budget let the request count grow from 237 to 340 across the alpha
+# range, so imbalance and batch size were 98% collinear.
+#
+# Here every workload is exactly 300 requests (length_in_requests), and prompts
+# are drawn only from within 10% of the pool's median token count
+# (prompt_length_tolerance). The pool's lengths are tight - median 253 tokens,
+# min 209, with a thin tail to 1224 - so 10% still leaves 1943 of 3000 prompts
+# selectable, 6.5x the workload size, while removing the long tail that the
+# greedy selection otherwise used to hit high CV cheaply.
+#
+# Activations are reused from that run, so this differs from it only in how the
+# workloads are constructed.
+#
+#   uv run moe-reliability validate configs/examples/alpha_sweep_fixed_requests.toml
+#   ./nrun -t alpha2 'uv run moe-reliability run configs/examples/alpha_sweep_fixed_requests.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "alpha-fixedn"
+description = "14 alphas, 300 requests each, prompts within 10% of the median length, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[activations]
+n_samples = 3000
+reuse_activations_from = "20261001-133042_synthetic_deepseek-v2_npu4_bs512_alpha-sweep"
+
+[workloads]
+target_alphas = [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0]
+target_prompt_lengths = [300]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [0]
+
+[benchmark]
+workload_max_repeats = 0
+workload_prompt_length = 300
+# Profiling is off: the question here is latency, and a profiled sweep now costs
+# two passes per point. separate_profiling_run makes that safe when it is wanted.
+enable_profiling = false
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = false
+trace_summary = false
