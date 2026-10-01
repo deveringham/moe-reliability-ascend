@@ -205,14 +205,34 @@ def test_npu_processes_parses_the_process_table():
         (0, 1267978, "VLLMWorker_TP"), (1, 1267979, "VLLMWorker_TP"), (4, 1574531, "python3")]
 
 
-def test_contention_warning_only_fires_for_other_peoples_npus(monkeypatch):
+def test_contention_warning_identifies_foreign_work_by_pid(monkeypatch):
+    """A run that uses the whole node must still see someone else on its NPUs.
+
+    Deciding by device alone reports nothing when visible_devices covers
+    everything, which is when a second job on the same NPUs hurts most.
+    """
     from moe_reliability import environment
 
     monkeypatch.setattr(environment, "_run", lambda *a, **k: NPU_SMI_SAMPLE)
+    # the vLLM workers are ours, the stray python3 on NPU 4 is not
+    monkeypatch.setattr(environment, "own_pids", lambda: {1267978, 1267979})
 
     ours = environment.host_snapshot("0,1,2,3")
-    assert ours["foreign_npus"] == [4]
+    assert ours["foreign_npus"] == [4] and ours["shared_npus"] == []
     assert "1574531" in environment.contention_warning(ours)
+    assert "outside this run" in environment.contention_warning(ours)
 
     whole_node = environment.host_snapshot("0,1,2,3,4,5,6,7")
-    assert whole_node["foreign_npus"] == [] and environment.contention_warning(whole_node) is None
+    assert whole_node["foreign_npus"] == [4] and whole_node["shared_npus"] == [4]
+    assert "sharing NPU(s) [4]" in environment.contention_warning(whole_node)
+
+    monkeypatch.setattr(environment, "own_pids", lambda: {1267978, 1267979, 1574531})
+    assert environment.contention_warning(environment.host_snapshot("")) is None
+
+
+def test_own_pids_includes_this_process():
+    import os
+
+    from moe_reliability.environment import own_pids
+
+    assert os.getpid() in own_pids()

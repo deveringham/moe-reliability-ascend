@@ -370,21 +370,52 @@ def npu_processes(npu_smi: str | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def own_pids() -> set[int]:
+    """This process and everything descended from it."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = [p for p in Path("/proc").iterdir() if p.name.isdigit()]
+    except OSError:
+        return {os.getpid()}
+    for entry in entries:
+        try:  # "pid (comm) state ppid ...", and comm may itself contain spaces
+            ppid = int((entry / "stat").read_text().rsplit(") ", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        children.setdefault(ppid, []).append(int(entry.name))
+    seen: set[int] = set()
+    stack = [os.getpid()]
+    while stack:
+        pid = stack.pop()
+        if pid not in seen:
+            seen.add(pid)
+            stack.extend(children.get(pid, ()))
+    return seen
+
+
 def host_snapshot(visible_devices: str = "") -> dict[str, Any]:
     """Host load and NPU occupancy, including work that is not this run's.
 
     Timings are only comparable across sweep points if the machine is in the same
-    state for each of them. A job that starts on the NPUs this run does not own
-    still competes for host CPU, memory bandwidth and PCIe, and shows up as a
-    latency step that is easily mistaken for an effect of the swept parameter.
+    state for each of them, and another job competes whether it sits on the NPUs
+    this run uses or merely on the same host.
+
+    Work is identified as foreign by its process id rather than by which device
+    it holds. Comparing devices against ``visible_devices`` cannot report
+    anything for a run that uses the whole node, which is exactly when a second
+    job on the same NPUs does the most damage.
     """
     ours = {int(d) for d in visible_devices.replace(",", " ").split() if d.strip().isdigit()}
+    mine = own_pids()
     procs = npu_processes()
-    foreign = [p for p in procs if ours and p["npu"] not in ours]
+    foreign = [p for p in procs if p["pid"] not in mine]
+    shared = [p for p in foreign if not ours or p["npu"] in ours]
     info: dict[str, Any] = {
         "npu_processes": procs,
         "foreign_npu_processes": foreign,
         "foreign_npus": sorted({p["npu"] for p in foreign}),
+        # Foreign work on the very devices this run is using.
+        "shared_npus": sorted({p["npu"] for p in shared}),
     }
     try:
         info["loadavg"] = [round(v, 2) for v in os.getloadavg()]
@@ -399,9 +430,11 @@ def contention_warning(snapshot: Mapping[str, Any]) -> str | None:
     if not foreign:
         return None
     pids = sorted({p["pid"] for p in foreign})
-    return (f"{len(foreign)} process(es) on NPU(s) {snapshot['foreign_npus']} outside this run "
-            f"(pid {', '.join(str(p) for p in pids)}), load {snapshot.get('loadavg')}; "
-            f"timings may not be comparable across sweep points")
+    shared = snapshot.get("shared_npus") or []
+    where = (f"sharing NPU(s) {shared} with this run" if shared
+             else f"on NPU(s) {snapshot['foreign_npus']} outside this run")
+    return (f"{len(foreign)} process(es) {where} (pid {', '.join(str(p) for p in pids)}), "
+            f"load {snapshot.get('loadavg')}; timings may not be comparable across sweep points")
 
 
 def collect_provenance(runtime: Mapping[str, Any] | None = None) -> dict[str, Any]:
