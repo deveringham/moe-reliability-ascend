@@ -7,7 +7,7 @@
 # 06.08.2026
 ###
 
-import time, subprocess, os, asyncio
+import time, subprocess, os, signal, asyncio
 import io, base64
 import urllib.request
 import urllib.error
@@ -56,7 +56,9 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--enable-return-routed-experts")
 
         
-    server_process = subprocess.Popen(cmd)
+    # Own session, so the whole server tree (API server, engine core, workers)
+    # can be signalled as one group on teardown.
+    server_process = subprocess.Popen(cmd, start_new_session=True)
     
     # Poll the endpoint for 200 OK
     print("Waiting for server to initialize ...")
@@ -76,11 +78,42 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
             
     return server_process
 
-# Terminates the vLLM server subprocess
-def stop_vllm_server(server_process):
+# Terminates the vLLM server subprocess tree and waits for the NPUs to be released.
+# Signalling only the API server leaves the engine core and worker processes alive
+# briefly; they hold the HBM, so the next sweep point can fail to allocate.
+def stop_vllm_server(server_process, timeout=120.0):
     print("Shutting down vLLM server...")
-    server_process.terminate()
-    server_process.wait()
+
+    try:
+        pgid = os.getpgid(server_process.pid)
+    except ProcessLookupError:
+        server_process.wait()
+        print("Server successfully shut down.")
+        return
+
+    def group_alive():
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def wait_for_group(deadline):
+        while time.monotonic() < deadline:
+            if not group_alive():
+                return True
+            time.sleep(1)
+        return not group_alive()
+
+    os.killpg(pgid, signal.SIGTERM)
+    server_process.wait()  # reap the parent so it stops counting as a group member
+
+    if not wait_for_group(time.monotonic() + timeout):
+        print(f"Server tree still alive after {timeout:.0f}s, sending SIGKILL...")
+        os.killpg(pgid, signal.SIGKILL)
+        if not wait_for_group(time.monotonic() + 30.0):
+            raise RuntimeError("vLLM server processes did not exit; NPU memory may still be held.")
+
     print("Server successfully shut down.")
 
 def start_profiling(port=8000):
