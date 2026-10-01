@@ -75,13 +75,14 @@ Anything not in the above category.
 
 - `src/moe_reliability/` — experiment runtime, Ascend-only. `cli.py`,
   `config.py` (TOML schema), `grid.py`, `runs.py`, `pipelines/` (stages),
-  `core/` (research code: serving, router probes, workload construction,
-  forced imbalance, trace analysis).
+  `core/` (research code: serving, workload construction, forced imbalance,
+  trace analysis).
 - `packages/moe-reliability-results/` — analysis library, runs anywhere.
 - `configs/examples/`, `configs/grids/` — TOML configurations.
 - `tests/` — simulated-NPU suite.
 - `docs/` — setup, usage, experiments, configuration reference, data format,
   results API. Consult these before inferring behaviour from code alone.
+  `imbalance-findings.md` is the 2026-10-02 session's results and caveats.
 
 ## Working style
 
@@ -92,3 +93,33 @@ Anything not in the above category.
 - Experiments are expensive and occupy NPUs. Before launching a run or grid,
   validate the config and say what it will cost (`validate`, then `--dry-run`
   for grids).
+
+## Measuring imbalance
+
+Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
+
+- **The headline is a null.** Expert imbalance does not change latency on
+  DeepSeek-V2-Lite at 2–8 way expert parallelism, over router bias 0–100 and
+  workload alpha 0.75–1.44. Stragglers do form, but concentrating tokens makes
+  the fused-MoE GEMM enough cheaper per call to cancel them. Do not re-run that
+  ground without a reason.
+- **Set `benchmark.repeats` above 1.** It is the only noise floor. Three single
+  points looked like effects this session and dissolved under replication.
+- **Per-rank totals hide stragglers.** `trace_max_over_mean` sums each rank's
+  kernel time, which equalises when the busiest rank differs per layer: it read
+  1.004x where per-call pairing read 1.088x. Pair calls across ranks and sum the
+  per-call maxima.
+- **Workload size confounds alpha.** A token budget lets the request count grow
+  with imbalance (237 → 340, 98% collinear). Use
+  `workloads.length_in_requests` and `prompt_length_tolerance`.
+- **Forced imbalance is not a clean instrument.** The checkpoint recipe
+  collapses 64 experts to 6, so it varies active expert count as well as skew.
+  Synthetic workloads with `max_repeats` keep every expert live.
+- **Treat per-request p-values as meaningless.** One sweep point is one server
+  instance, so n = 1 per point, not one per request.
+- Points record a `host_before`/`host_after` snapshot and warn when another
+  process shares the NPUs. Check it before trusting a comparison: a neighbouring
+  job costs ~3% TPOT and ~31% TTFT, and inflated a whole 8-NPU sweep.
+- Sweep points run in parameter order, so anything drifting during a run aliases
+  onto the swept parameter. `start_vllm_server`'s readiness poll has no deadline
+  and can hang holding every NPU. Both still unfixed.
