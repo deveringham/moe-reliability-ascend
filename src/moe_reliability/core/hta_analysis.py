@@ -64,7 +64,7 @@ def extract_metrics(results):
         print(f"extracting: {tag}")
 
         # 1) temporal breakdown --------------------------------------------- #
-        tb = _safe(lambda: ta.get_temporal_breakdown(visualize=False),
+        tb = _safe(lambda ta=ta: ta.get_temporal_breakdown(visualize=False),
                    tag, "temporal_breakdown")
         if tb is None or tb.empty:
             print(f"  ! no temporal breakdown for {tag} -> run skipped")
@@ -72,12 +72,12 @@ def extract_metrics(results):
         ranks = sorted(int(r) for r in tb["rank"].tolist())
 
         # 2) comm / comp overlap -------------------------------------------- #
-        ov = _safe(lambda: ta.get_comm_comp_overlap(visualize=False),
+        ov = _safe(lambda ta=ta: ta.get_comm_comp_overlap(visualize=False),
                    tag, "comm_comp_overlap")
         ov_map = {}
         if ov is not None and not ov.empty:
             ov_map = dict(zip(ov["rank"].astype(int),
-                              ov["comp_comm_overlap_pctg"].astype(float)))
+                              ov["comp_comm_overlap_pctg"].astype(float), strict=True))
 
         for _, r in tb.iterrows():
             rk = int(r["rank"])
@@ -96,8 +96,8 @@ def extract_metrics(results):
             ))
 
         # 3) idle-time breakdown (host / kernel / other) over ALL ranks ----- #
-        ib = _safe(lambda: ta.get_idle_time_breakdown(ranks=ranks,
-                                                      visualize=False),
+        ib = _safe(lambda ta=ta, ranks=ranks: ta.get_idle_time_breakdown(ranks=ranks,
+                                                                     visualize=False),
                    tag, "idle_time_breakdown")
         if ib is not None:
             idf = ib[0] if isinstance(ib, tuple) else ib
@@ -113,7 +113,7 @@ def extract_metrics(results):
                     ))
 
         # 4) kernel-type breakdown ------------------------------------------ #
-        kb = _safe(lambda: ta.get_gpu_kernel_breakdown(visualize=False),
+        kb = _safe(lambda ta=ta: ta.get_gpu_kernel_breakdown(visualize=False),
                    tag, "gpu_kernel_breakdown")
         if kb is not None:
             ktdf = kb[0] if isinstance(kb, tuple) else kb
@@ -154,7 +154,7 @@ def extract_metrics(results):
     # relative throughput proxy: same #samples per run, so throughput ~ 1/bottleneck.
     # normalise within each (model, batch) so the balanced run = 100%.
     run_df["throughput_rel"] = np.nan
-    for (model, batch), g in run_df.groupby(["model", "batch"]):
+    for _, g in run_df.groupby(["model", "batch"]):
         base = g.loc[g.imbalance == 0, "bottleneck_busy_us"]
         if not base.empty and base.iloc[0] > 0:
             b = float(base.iloc[0])

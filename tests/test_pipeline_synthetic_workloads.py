@@ -141,3 +141,27 @@ def test_prompt_length_tolerance_restricts_the_pool(deployment, synthetic_config
     for a in (0.5, 1.0, 1.5):
         chosen = counts[list(wl["workloads"][length][a]["indices"])]
         assert chosen.min() >= median * 0.9 and chosen.max() <= median * 1.1
+
+
+def test_repeats_give_every_point_its_own_alphas_workload(deployment, synthetic_config_data, results_dir):
+    """Each repeat must get the workload of ITS alpha.
+
+    The workloads are keyed by alpha and the points are not: with repeats there
+    are several points per alpha, so pairing the two by position hands each
+    repeat the next alpha's workload and leaves the later points with none.
+    """
+    synthetic_config_data["benchmark"]["repeats"] = 2
+    synthetic_config_data["benchmark"]["enable_profiling"] = False
+    ctx, status = _run(synthetic_config_data)
+    assert status == schema.STATUS_COMPLETED
+
+    run = ResultsStore(results_dir).get(ctx.run_id)
+    wl = run.workloads(0)
+    length = wl["target_ls"][0]
+
+    assert [p["label"] for p in ctx.points] == [
+        "alpha_0.5", "alpha_0.5_r2", "alpha_1.0", "alpha_1.0_r2", "alpha_1.5", "alpha_1.5_r2"]
+    for p in ctx.points:
+        assert p["status"] == schema.STATUS_COMPLETED
+        expected = len(wl["workloads"][length][p["value"]]["indices"])
+        assert p["n_prompts"] == expected, f"{p['label']} was served another alpha's workload"

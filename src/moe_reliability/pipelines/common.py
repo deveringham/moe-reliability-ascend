@@ -115,7 +115,7 @@ def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, A
     that correlation; the experiment seed keeps it reproducible.
     """
     points = list(ctx.points)
-    if not getattr(cfg.benchmark, "shuffle_points", False) or len(points) < 3:
+    if not cfg.benchmark.shuffle_points or len(points) < 3:
         return points
     random.Random(cfg.experiment.seed).shuffle(points)
     return points
@@ -148,7 +148,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         # The profiler perturbs latency, so timings and traces cannot come from
         # the same pass. With separate_profiling_run the point is served twice:
         # unprofiled for the measurements, then profiled for the traces.
-        separate = bool(bench.enable_profiling and getattr(bench, "separate_profiling_run", False))
+        separate = bool(bench.enable_profiling and bench.separate_profiling_run)
 
         host_before = host_snapshot(cfg.hardware.visible_devices)
         ctx.update_point(label, status=schema.STATUS_RUNNING, started_at=utcnow(), finished_at=None, error=None,
@@ -161,8 +161,9 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         if warning:
             log(f"{label}: warning: {warning}")
 
-        measure_trace_dir = None if separate else (str(ctx.abspath(trace_rel)) if trace_rel else None)
-        results = serve_and_measure(cfg, model_path, prompts, trace_dir=measure_trace_dir)
+        trace_path = str(ctx.abspath(trace_rel)) if trace_rel else None
+        results = serve_and_measure(cfg, model_path, prompts,
+                                    trace_dir=None if separate else trace_path)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -173,7 +174,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         profiling_error = None
         if separate:
             log(f"{label}: profiling pass")
-            if serve_and_measure(cfg, model_path, prompts, trace_dir=str(ctx.abspath(trace_rel))) is None:
+            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path) is None:
                 # The measurements stand on their own; only the traces are lost.
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
@@ -206,7 +207,7 @@ def profiling_note(bench) -> str:
     """How each point is served, for the plan printed by `validate`."""
     if not bench.enable_profiling:
         return ""
-    if getattr(bench, "separate_profiling_run", False):
+    if bench.separate_profiling_run:
         return " (served twice per point: unprofiled for timings, profiled for traces)"
     return " (profiled)"
 
@@ -287,7 +288,7 @@ def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = F
             log(f"{label}: extracting kernel metrics from {trace_abs}")
             try:
                 summary = summarize(str(trace_abs))
-            except SystemExit:
+            except FileNotFoundError:
                 # No PyTorch-format rank traces. The Ascend profiler is what this
                 # stack actually writes, so analyse its output instead.
                 try:

@@ -130,7 +130,7 @@ def start_profiling(port=8000, timeout=600):
     print("Starting vLLM PyTorch Profiler...")
     req = urllib.request.Request(f"http://localhost:{port}/start_profile", method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, timeout=timeout):
             print("Profiler started successfully.")
     except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to start profiler: {e}")
@@ -139,58 +139,11 @@ def stop_profiling(port=8000, timeout=600):
     print("Stopping vLLM PyTorch Profiler (Note: flushing traces to disk may take a few minutes)...")
     req = urllib.request.Request(f"http://localhost:{port}/stop_profile", method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, timeout=timeout):
             print("Profiler stopped and traces flushed successfully.")
     except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to stop profiler: {e}")
 
-def vllm_bench(model_name, port=8000, num_prompts=512, max_concurrency=16,
-               input_len=512, output_len=100, seed=0,
-               result_dir="./bench_results", result_filename=None,
-               request_rate=float("inf"), enable_profiling=False,
-               percentile_metrics="ttft,tpot,itl,e2el",
-               metric_percentiles="50,90,99,99.9", extra_args=None):
-
-    os.makedirs(result_dir, exist_ok=True)
-    if result_filename is None:
-        safe_model = model_name.replace("/", "_")
-        result_filename = f"{safe_model}_bs{max_concurrency}_in{input_len}_out{output_len}_seed{seed}.json"
-    result_path = os.path.join(result_dir, result_filename)
-
-    cmd = [
-        "vllm", "bench", "serve",
-        "--backend", "vllm",
-        "--model", model_name,
-        "--host", "localhost",
-        "--port", str(port),
-        "--dataset-name", "random",
-        "--num-prompts", str(num_prompts),
-        "--random-input-len", str(input_len),
-        "--random-output-len", str(output_len),
-        "--random-range-ratio", "0.0",
-        "--ignore-eos",
-        "--max-concurrency", str(max_concurrency),  # match server --max-num-seqs (batch_size)
-        "--request-rate", ("inf" if request_rate == float("inf") else str(request_rate)),
-        "--seed", str(seed),
-        "--percentile-metrics", percentile_metrics,
-        "--metric-percentiles", metric_percentiles,
-        "--save-result",
-        "--save-detailed",
-        "--result-dir", result_dir,
-        "--result-filename", result_filename,
-    ]
-
-    if enable_profiling:
-        # server must have been started with trace_dir set
-        cmd.append("--profile")
-
-    print(f"Running vllm bench serve against localhost:{port} ...")
-    result = subprocess.run(cmd)  # blocks until the benchmark completes
-    if result.returncode != 0:
-        raise RuntimeError(f"vllm bench serve failed with return code {result.returncode}")
-
-    print(f"Benchmark complete. Results: {result_path}")
-    return result_path
 
 # Helper to parse response containing routed expert info
 def decode_routed_experts(payload):
@@ -385,7 +338,6 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   trace_dir=None, trace_active_iterations=2, port=8000):
     server_process = None
     results = None
-    n_samples = len(prompts)
     try:
         # Start server
         server_process = start_vllm_server(model, port=port, seed=seed,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import torch
 
 from moe_reliability.config import ExperimentConfig
 from moe_reliability.pipelines import forced_imbalance, run_pipeline

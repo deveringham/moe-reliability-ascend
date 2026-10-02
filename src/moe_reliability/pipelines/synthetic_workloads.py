@@ -138,7 +138,7 @@ def build_workloads(ctx: RunContext, cfg: ExperimentConfig) -> None:
             log(f"workloads with max_repeats={max_repeats} already built - skipping")
             continue
         log(f"constructing workloads with max_repeats={max_repeats}")
-        workloads = workload_sweep_cvs(results, qs, n_experts, n_layers, k, target_alphas, target_ls, cv_nat,
+        workloads = workload_sweep_cvs(results, qs, target_alphas, target_ls, cv_nat,
                                        max_repeats=max_repeats, verbose=True,
                                        limit_unit=limit_unit, length_tolerance=length_tolerance)
 
@@ -205,11 +205,16 @@ def benchmark(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False
     workload_alphas = [float(a) for a in by_alpha]
     ctx.ensure_points(workload_alphas, repeats=cfg.benchmark.repeats)
 
+    # Look the workload up by the point's own alpha, not by position: with
+    # benchmark.repeats above 1 there are several points per alpha, and zipping
+    # the two would hand each repeat the next alpha's workload and leave the
+    # later points with none at all.
+    by_value = {float(a): w for a, w in by_alpha.items()}
     workload_prompts = {}
-    for alpha_key, p in zip(by_alpha, ctx.points):
-        w = by_alpha[alpha_key]
+    limit_unit = doc.get("limit_unit", "tokens")
+    for p in ctx.points:
+        w = by_value[float(p["value"])]
         workload_prompts[p["label"]] = w["prompts_formatted"]
-        limit_unit = doc.get("limit_unit", "tokens")
         ctx.update_point(p["label"], workload={
             **workload_point_stats(w, doc["cv_nat"]),
             "max_repeats": doc["max_repeats"],
@@ -218,7 +223,6 @@ def benchmark(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False
             "target_tokens": l if limit_unit == "tokens" else None,
             "target_requests": l if limit_unit == "requests" else None,
         })
-    limit_unit = doc.get("limit_unit", "tokens")
     log(f"benchmarking {len(workload_alphas)} workloads (max_repeats={doc['max_repeats']}, "
         f"{l} {limit_unit} each): alphas {workload_alphas}")
 

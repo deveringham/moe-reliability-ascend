@@ -367,7 +367,7 @@ def _pair_positions(model, keys_m):
 
 
 def _style_violin(vp, colors):
-    for body, c in zip(vp["bodies"], colors):
+    for body, c in zip(vp["bodies"], colors, strict=True):
         body.set_facecolor(c); body.set_alpha(0.6); body.set_edgecolor("k")
     for k in ("cmedians", "cbars", "cmins", "cmaxes"):
         if k in vp:

@@ -1,0 +1,23 @@
+# Python build and bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments (the node's venv is aarch64 with a different dependency set)
+.venv/
+
+# Experiment output, brought back from the node with ./npull
+results/
+
+# Model checkpoints, built on the node
+models/
+
+# Jupyter checkpoint copies
+.ipynb_checkpoints/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

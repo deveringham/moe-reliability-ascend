@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import sys
 import types
 from pathlib import Path
 
-import numpy as np
-import pytest
+# torch-npu is a declared dependency, so it may be installed in the venv even on
+# a host with no NPUs - and torch's backend autoload would then import it and
+# fail, taking collection down with it. The suite supplies its own torch_npu
+# stub (see the npu_profiler fixture), so keep torch from loading the real one.
+os.environ.setdefault("TORCH_DEVICE_BACKEND_AUTOLOAD", "0")
+
+import numpy as np  # noqa: E402
+import pytest  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 for path in (ROOT / "src", ROOT / "packages" / "moe-reliability-results" / "src"):
@@ -91,7 +98,7 @@ class FakeDeployment:
                 probs[hot] = 6.0
                 probs /= probs.sum()
 
-                def draw(n_tokens):
+                def draw(n_tokens, probs=probs):
                     return np.stack([np.stack([rng.choice(N_EXPERTS, TOP_K, replace=False, p=probs)
                                                for _ in range(N_LAYERS)]) for _ in range(n_tokens)]).astype(np.int16)
 

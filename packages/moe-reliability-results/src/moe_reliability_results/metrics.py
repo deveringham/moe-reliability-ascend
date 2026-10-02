@@ -58,7 +58,7 @@ def _stats(prefix: str, values: Sequence[float]) -> dict[str, float | None]:
         out[f"{prefix}_max"] = None
         return out
     out[f"{prefix}_mean"] = float(arr.mean())
-    for p, v in zip(PERCENTILES, np.percentile(arr, PERCENTILES)):
+    for p, v in zip(PERCENTILES, np.percentile(arr, PERCENTILES), strict=True):
         out[f"{prefix}_p{p}"] = float(v)
     out[f"{prefix}_max"] = float(arr.max())
     return out

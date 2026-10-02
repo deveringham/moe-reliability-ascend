@@ -16,7 +16,6 @@ def cvs_of(sums, dim):
     return sums.std(dim=dim, unbiased=False) / sums.mean(dim=dim)
     
 def get_qs(results, n_experts, n_layers, k, weighted_by_token_count=False):
-    n_samples = len(results)
     qs = []
     total_tokens = 0
     
@@ -24,7 +23,7 @@ def get_qs(results, n_experts, n_layers, k, weighted_by_token_count=False):
         n_tokens = r['routed_experts'].shape[0] + r['prompt_routed_experts'].shape[0]
         active_experts = torch.cat([torch.tensor(r['routed_experts']), torch.tensor(r['prompt_routed_experts'])], dim=0) # (n_tokens, n_layers, k)
         active_experts = active_experts.swapdims(1,2) # (n_tokens, k, n_layers)
-        active_experts_flat = torch.tensor(active_experts, dtype=torch.int32).flatten(start_dim=0, end_dim=1) # (n_tokens * k, n_layers)
+        active_experts_flat = active_experts.to(torch.int32).flatten(start_dim=0, end_dim=1) # (n_tokens * k, n_layers)
         q = torch.zeros((n_experts, n_layers))
         ones = torch.ones_like(active_experts_flat, dtype=torch.float32)
         q.scatter_add_(dim=0, index=active_experts_flat, src=ones)
@@ -40,13 +39,6 @@ def get_qs(results, n_experts, n_layers, k, weighted_by_token_count=False):
     return qs
     
     
-# Constructs a workload for which the coefficient of variance of activation frequencies across
-# experts in each layer (for both prefill and decode) is as close as possible to some requested values
-#    results: activation recording results from get_results
-#    l: desired number of tokens in workload, < #total_tokens
-#    target_cvs: requested CVs (n_layers)
-# Returns array of prompts from results of length l
-#    and the obtained CVs (n_layers)
 def eligible_by_length(token_counts, tolerance):
     """Prompts whose token count is within ``tolerance`` (relative) of the pool median.
 
@@ -61,9 +53,19 @@ def eligible_by_length(token_counts, tolerance):
     return (counts >= median * (1 - tolerance)) & (counts <= median * (1 + tolerance))
 
 
-def construct_workload_cvs(results, qs, n_experts, n_layers, k, l, target_cvs, verbose=False, max_repeats=0,
+def construct_workload_cvs(results, qs, l, target_cvs, verbose=False, max_repeats=0,
                            limit_unit="tokens", length_tolerance=0.0):
+    """Greedily select prompts whose per-layer expert-load CV approaches ``target_cvs``.
 
+    Adds the prompt that brings the running CV closest to the target, until ``l``
+    is reached - counted in tokens, or in requests when ``limit_unit`` is
+    ``"requests"``. ``max_repeats`` is how often a prompt may be reused beyond
+    its first selection; ``length_tolerance`` restricts the pool to prompts of
+    comparable size (see :func:`eligible_by_length`).
+
+    Returns the selected prompts, the obtained per-layer CVs, and the indices
+    into ``results`` - which repeat when ``max_repeats`` is above 0.
+    """
     prompts = [r['prompt'] for r in results]
     n_samples = len(results)
     token_counts = [r['routed_experts'].shape[0] + r['prompt_routed_experts'].shape[0] for r in results]
@@ -89,9 +91,7 @@ def construct_workload_cvs(results, qs, n_experts, n_layers, k, l, target_cvs, v
             candidate_sums = current_sum.unsqueeze(0) + qs # (n_samples, n_experts, n_layers)
 
             # Compute CV per layer
-            #candidate_cvs = candidate_std_across_experts * n_experts # (n_samples, n_layers)
             candidate_cvs = cvs_of(candidate_sums, dim=1)
-            #print(candidate_cvs)
 
             # Calculate Mean Squared Error (or L2 distance) for each candidate
             distances = ((candidate_cvs - target_cvs.unsqueeze(0)) ** 2).sum(dim=1)
@@ -144,14 +144,14 @@ def evaluate_workload_quality_cvs(target_cvs, obtained_cvs):
         # Add pmr
     }
 
-def workload_sweep_cvs(results, qs, n_experts, n_layers, k, target_alphas, target_ls, cv_nat, max_repeats=0,
+def workload_sweep_cvs(results, qs, target_alphas, target_ls, cv_nat, max_repeats=0,
                        verbose=False, limit_unit="tokens", length_tolerance=0.0):
 
     workloads = {}
     token_counts = [r['routed_experts'].shape[0] + r['prompt_routed_experts'].shape[0] for r in results]
 
     if verbose:
-        print(f'Generating synthetic workloads...')
+        print('Generating synthetic workloads...')
         n_eligible = int(eligible_by_length(token_counts, length_tolerance).sum())
         print(f'{n_eligible} of {len(results)} prompts selectable '
               f'(prompt_length_tolerance={length_tolerance}).')
@@ -159,12 +159,12 @@ def workload_sweep_cvs(results, qs, n_experts, n_layers, k, target_alphas, targe
         if verbose:
             print(f'Length: {l} {limit_unit}.')
         workloads[l] = {}
-        for i, a in enumerate(target_alphas):
+        for a in target_alphas:
             if verbose:
                 print(f'alpha: {a}')
             workload = {}
             target_cvs = cv_nat * a
-            p, cvs, indices = construct_workload_cvs(results, qs, n_experts, n_layers, k, l, target_cvs,
+            p, cvs, indices = construct_workload_cvs(results, qs, l, target_cvs,
                                                      max_repeats=max_repeats, verbose=verbose,
                                                      limit_unit=limit_unit, length_tolerance=length_tolerance)
             metrics = evaluate_workload_quality_cvs(target_cvs, cvs)
@@ -173,7 +173,7 @@ def workload_sweep_cvs(results, qs, n_experts, n_layers, k, target_alphas, targe
             workload['prompts'] = p
             workload['indices'] = indices
             workload['percent_unique_prompts'] = len(set(indices))/len(indices)
-            workload['n_tokens'] = sum(token_counts[i] for i in indices)
+            workload['n_tokens'] = sum(token_counts[j] for j in indices)
             workloads[l][a] = workload
     if verbose:
         print('done!')

@@ -82,12 +82,12 @@ def _grouped_bars(ax, conds, value_fn, ylabel, title,
         vals = [value_fn(m, b, imb) for (m, b) in conds]
         err = None
         if err_fn is not None:
-            lo, hi = zip(*[err_fn(m, b, imb) for (m, b) in conds])
+            lo, hi = zip(*[err_fn(m, b, imb) for (m, b) in conds], strict=True)
             err = [list(lo), list(hi)]
-        bars = ax.bar(x + (j - 0.5) * w, vals, w, yerr=err, capsize=4,
+        ax.bar(x + (j - 0.5) * w, vals, w, yerr=err, capsize=4,
                       color=IMB_COLOR[imb], label=IMB_LABEL[imb],
                       alpha=0.92, edgecolor="white", linewidth=0.6)
-        for xi, v in zip(x + (j - 0.5) * w, vals):
+        for xi, v in zip(x + (j - 0.5) * w, vals, strict=True):
             if np.isfinite(v):
                 ax.annotate(f"{v:.0f}" if pct else f"{v:.2f}",
                             (xi, v), textcoords="offset points",

@@ -143,8 +143,8 @@ def expand(grid: Grid, overrides: Iterable[str] = ()) -> list[GridEntry]:
             _set_dotted(data, dotted, value)
         assignments: dict[str, Any] = {}
         if grid.matrix:
-            for (keys, _), value in zip(grid.matrix, combo):
-                items = zip(keys, value) if len(keys) > 1 else [(keys[0], value)]
+            for (keys, _), value in zip(grid.matrix, combo, strict=True):
+                items = zip(keys, value, strict=True) if len(keys) > 1 else [(keys[0], value)]
                 for key, v in items:
                     _set_dotted(data, key, v)
                     assignments[key] = v

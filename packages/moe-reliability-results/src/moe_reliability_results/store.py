@@ -69,7 +69,7 @@ class ResultsStore:
         for path in self.run_dirs():
             try:
                 run = Run(path)
-                run.manifest  # parse now so that unreadable manifests are skipped
+                _ = run.manifest  # parse now so that unreadable manifests are skipped
             except (OSError, ValueError, KeyError):
                 continue  # unreadable or partially written manifest
             attrs = {"run_id": run.id, "experiment": run.experiment, "status": run.status}

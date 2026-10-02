@@ -51,7 +51,7 @@ def moe_per_rank(trace_dir):
 def summarize(trace_dir):
     per = moe_per_rank(trace_dir)
     if not per:
-        raise SystemExit(f"no rank traces found in {trace_dir}")
+        raise FileNotFoundError(f"no rank traces found in {trace_dir}")
     ranks = list(per)
 
     means = [per[r]["mean_us"] for r in ranks]
@@ -213,15 +213,6 @@ def op_statistics(trace_dir):
         out[rank] = ops
     return out
 
-
-def kernel_durations(trace_dir, op_type):
-    """``{rank: [duration us, ...]}`` for one operator type, in launch order.
-
-    Ranks issue the same kernels in the same order, so the i-th duration is the
-    same layer and step on every rank.
-    """
-    return {rank: per["durations"].get(op_type, []) for rank, per in
-            scan_kernels(trace_dir, collect=(op_type,)).items()}
 
 
 def straggler(trace_dir, op_type="GroupedMatmul", scan=None):
