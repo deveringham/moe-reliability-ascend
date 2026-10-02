@@ -215,6 +215,73 @@ Two of these were found by the tooling itself within minutes of being committed:
 contention check fired on 3 of 9 points in the positive control, and repeats exposed
 the false 136.2 ms reading.
 
+## EPLB: it works, and it buys nothing here
+
+Run 2026-10-02, grid `eplb-eval`, DeepSeek-V2-Lite at 4-way expert parallelism,
+alphas 0.8/1.0/1.6, two repeats per point, EPLB off and on with shared workloads
+so the arms differ only in the rearrangement.
+
+| | EPLB off | EPLB on |
+| --- | --- | --- |
+| paired-call straggler | 1.026 +/- 0.002 | 1.027 +/- 0.002 |
+| fused-MoE time per rank | 1.349 ms +/- 0.025 | 1.351 ms +/- 0.021 |
+| MoE share of compute | 38.30% +/- 0.15 | 37.53% +/- 0.27 |
+
+EPLB ran properly: `SwiftBalanceEplb`, 84 rearrangement cycles across the 12
+server instances, a placement map recorded for every point. By its own
+accounting it does its job, over those 84 cycles:
+
+```
+current   mean 1.139 +/- 0.044   max 1.308 +/- 0.132
+predicted mean 1.007 +/- 0.002   max 1.026 +/- 0.013
+```
+
+The measured straggler did not move by one standard deviation.
+
+**Why: EPLB balances token counts, and what costs time is kernel time.** Its own
+metric sees a 1.14x to 1.31x imbalance in expert hotness where the traces measure
+1.026x in fused-MoE time. That is the cancellation of the headline result seen
+from the other side - concentrating tokens makes `GroupedMatmul` cheaper per
+token, so a ~20% imbalance in tokens is a ~2.6% imbalance in time. EPLB is
+removing a 20% skew in a quantity that was already only 2.6% skewed in the
+quantity that matters, so there is nothing left to win.
+
+The consequence for monitoring is the useful part: **expert token counts are the
+wrong signal**, and a `max/mean` of hotness overstates the time imbalance by
+roughly a factor of six. Any detector built on router counters inherits that
+error.
+
+The one real cost is overhead. MoE share of compute falls 0.77pp (3-5 sigma, and
+a within-run ratio so robust to host load) while absolute MoE time is unchanged -
+EPLB added non-MoE work rather than saving MoE work. Total kernel time is about
+9% higher, but with 10% scatter that is ~1 sigma and should not be quoted.
+
+Two caveats:
+
+- **The latency comparison from this run is unreadable.** A neighbouring job
+  occupied NPUs 4-7 during 5 of the 6 off-arm points and only 1 of 6 on-arm
+  points, so contention is confounded with the arm; TTFT scatters 1927-2915 ms.
+  The straggler and MoE-share figures above are per-rank ratios within a run and
+  survive this; the latency numbers do not. Interleaving the arms, or running
+  both on a quiet node, is the fix.
+- **The intervals were cut hard to make EPLB fire at all.** At the vllm-ascend
+  defaults one cycle is 600 + 50 + one iteration per MoE layer, about 676 forward
+  iterations, against roughly 100 decode iterations in a 100-token generation -
+  EPLB would collect load for an entire run and never act on it. These runs used
+  50 + 10 with 300 generated tokens, which means the 26-layer weight transfer
+  occupies about a third of every cycle and the placement is rarely settled.
+  Across all 84 cycles the realised imbalance (1.139) never approaches the
+  predicted (1.007), which is either genuine non-stationarity of expert load at
+  this timescale or an artefact of that cadence. One run at
+  `eplb_heat_collection_interval = 200` separates them and would also measure the
+  overhead fairly.
+
+Also established, by reading vllm-ascend rather than measuring: rearrangement is
+unconditional. `_compute_imbalance` is called every cycle and used only for a log
+line - there is no threshold, no hysteresis, no gate. EPLB pays the weight
+transfer on a fixed counter whether or not anything is wrong, and the counters
+are cleared at the end of each cycle rather than decayed.
+
 ## Open questions
 
 1. **Wider expert parallelism.** The one lever still untested, and the only one
@@ -226,9 +293,11 @@ the false 136.2 ms reading.
    one expert on each rank instead of eight and changes nothing, because alpha is
    relative to a natural CV that is three times lower. To make granularity bite you
    would have to drive absolute CV, not alpha.
-3. **Does EPLB change anything?** `server.enable_eplb` exists, so somebody expected
-   imbalance to cost something. Running high imbalance with it on and off is a
-   direct test, and a null there would be a strong result in itself.
+3. **Does EPLB change anything? Answered: no, and for an instructive reason.** It
+   rearranges as designed and removes the token imbalance it measures, but token
+   imbalance is six times larger than the time imbalance, so there is nothing left
+   to win. See the EPLB section above. What remains open is its overhead at a
+   realistic cadence, which these aggressive intervals overstate.
 4. **Where the step time actually goes.** The traces now report it: about 74%
    occupancy by wall time, with collectives dominating summed kernel duration
    because they block. Worth separating transfer from wait inside the collectives,

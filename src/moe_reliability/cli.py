@@ -28,7 +28,8 @@ from moe_reliability_results import schema
 from moe_reliability_results.store import default_results_dir
 
 from . import __version__
-from .config import TEMPLATES, ConfigError, ExperimentConfig, reference_markdown, render_template
+from .config import (TEMPLATES, ConfigError, ExperimentConfig, apply_overrides, reference_markdown,
+                     render_template)
 from .logs import log, tee_output
 from .runs import RunContext, RunError, make_run_id, utcnow
 
@@ -145,7 +146,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     ctx = RunContext.open(args.run, args.results_dir or default_results_dir())
-    cfg = ctx.config()
+    # Overrides apply to the stored config, so an analysis option that was off
+    # during the run can be turned on without re-serving anything: the traces
+    # are already on disk and post-processing does not touch the NPUs.
+    overrides = [o for o in _overrides(args) if not o.startswith("output.results_dir")]
+    if overrides:
+        cfg = ExperimentConfig.from_dict(apply_overrides(dict(ctx.manifest["config"]), overrides))
+    else:
+        cfg = ctx.config()
     _environment(cfg, require_devices=False)  # post-processing does not use the NPUs
     return _execute(ctx, cfg, retry_failed=False, log_file=not args.no_log_file, analyze_only=True)
 
@@ -309,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("analyze", help="re-run trace analysis, HTA and figures of a run")
     p.add_argument("run", help="run id, unique run id prefix, or run directory")
     add_results_dir(p, "results directory (default: $MOE_RESULTS_DIR or ./results)")
+    add_set(p)
     add_log(p)
     p.set_defaults(func=cmd_analyze)
 
