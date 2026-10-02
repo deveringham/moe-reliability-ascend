@@ -79,8 +79,42 @@ def should_run(ctx: RunContext, stage: str, force: bool = False) -> bool:
         return False
     return True
 
+def eplb_settings(cfg: ExperimentConfig, record_path: str | None = None) -> dict[str, Any] | None:
+    """The vllm-ascend ``eplb_config`` block, or None when EPLB is off.
+
+    Kept here rather than in the serving layer because the record path is a
+    property of the run directory, which only the pipeline knows.
+    """
+    if not cfg.server.enable_eplb:
+        return None
+    settings: dict[str, Any] = {
+        "dynamic_eplb": True,
+        "eplb_policy_type": cfg.server.eplb_policy_type,
+        "num_redundant_experts": cfg.server.eplb_num_redundant_experts,
+        "expert_heat_collection_interval": cfg.server.eplb_heat_collection_interval,
+        "algorithm_execution_interval": cfg.server.eplb_algorithm_execution_interval,
+    }
+    if record_path:
+        settings["expert_map_record_path"] = record_path
+    return settings
+
+
+def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
+    """Forward iterations in one full collect-plan-apply cycle.
+
+    A run that never reaches this many iterations never rearranges, and the
+    counters are cleared at the end of each cycle rather than decayed. The
+    weight transfer adds one iteration per MoE layer, so with n_moe_layers left
+    at 0 this is a lower bound.
+    """
+    return (cfg.server.eplb_heat_collection_interval
+            + cfg.server.eplb_algorithm_execution_interval
+            + n_moe_layers)
+
+
 def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[Any],
-                       trace_dir: str | None, enable_expert_capture: bool = False) -> list[dict] | None:
+                       trace_dir: str | None, enable_expert_capture: bool = False,
+                       eplb_record_path: str | None = None) -> list[dict] | None:
     from ..core.vllm_serving import measure_vllm_throughput
 
     return asyncio.run(measure_vllm_throughput(
@@ -97,7 +131,7 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         print_output=False,
         enable_expert_parallel=cfg.server.enable_expert_parallel,
         enable_prefix_caching=cfg.server.enable_prefix_caching,
-        enable_eplb=cfg.server.enable_eplb,
+        eplb=eplb_settings(cfg, eplb_record_path),
         enable_bnb=cfg.model.enable_bnb,
         enable_expert_capture=enable_expert_capture,
         trace_dir=trace_dir,
@@ -121,11 +155,35 @@ def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, A
     return points
 
 
+def _warn_if_eplb_cannot_fire(cfg: ExperimentConfig) -> None:
+    """Warn when the point is too short for EPLB to rearrange even once.
+
+    Rearrangement is on a fixed iteration counter, not a timer, and the counter
+    is cleared at the end of each cycle. A point that generates fewer forward
+    iterations than one cycle therefore collects load, never acts on it, and
+    looks exactly like an EPLB run that found nothing to fix. The decode phase
+    is about one iteration per generated token, so max_new_tokens is the bound
+    worth checking - at the default interval of 600 a 100-token generation is
+    an order of magnitude short.
+    """
+    if not cfg.server.enable_eplb:
+        return
+    cycle = eplb_cycle_iterations(cfg)
+    if cfg.client.max_new_tokens < cycle:
+        log(f"warning: EPLB needs at least {cycle} forward iterations per rearrangement "
+            f"(collect {cfg.server.eplb_heat_collection_interval} + plan "
+            f"{cfg.server.eplb_algorithm_execution_interval}, plus one per MoE layer) but each point "
+            f"generates about {cfg.client.max_new_tokens} decode iterations. EPLB will collect expert load "
+            f"and never rearrange, which is indistinguishable from finding nothing to fix. Lower "
+            f"server.eplb_heat_collection_interval or raise client.max_new_tokens.")
+
+
 def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      point_inputs: Callable[[dict[str, Any]], tuple[str, Sequence[Any]]],
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
+    _warn_if_eplb_cannot_fire(cfg)
     for order, p in enumerate(_execution_order(ctx, cfg)):
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
@@ -162,8 +220,13 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             log(f"{label}: warning: {warning}")
 
         trace_path = str(ctx.abspath(trace_rel)) if trace_rel else None
+        # Records what EPLB actually did, which is the only way to tell a
+        # rearrangement that never fired from one that fired and changed nothing.
+        eplb_rel = f"{label}_eplb_expert_map.json" if cfg.server.eplb_record_map else None
+        eplb_path = str(ctx.abspath(eplb_rel)) if eplb_rel else None
         results = serve_and_measure(cfg, model_path, prompts,
-                                    trace_dir=None if separate else trace_path)
+                                    trace_dir=None if separate else trace_path,
+                                    eplb_record_path=eplb_path)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -174,13 +237,18 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         profiling_error = None
         if separate:
             log(f"{label}: profiling pass")
-            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path) is None:
+            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
+                                 eplb_record_path=eplb_path) is None:
                 # The measurements stand on their own; only the traces are lost.
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
 
         fields: dict[str, Any] = {"request_summary": summarize_requests(results),
                                   "host_after": host_snapshot(cfg.hardware.visible_devices)}
+        if eplb_rel:
+            # Absent means EPLB never completed a cycle, which is a result in
+            # itself rather than a failure, so it is recorded either way.
+            fields["eplb_expert_map"] = eplb_rel if ctx.abspath(eplb_rel).exists() else None
         if profiling_error:
             fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:

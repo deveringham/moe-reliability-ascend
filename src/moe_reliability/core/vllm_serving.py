@@ -8,14 +8,14 @@
 ###
 
 import time, subprocess, os, signal, asyncio
-import io, base64
+import io, base64, json
 import urllib.request
 import urllib.error
 import numpy as np
 from openai import AsyncOpenAI
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -49,16 +49,24 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     if enable_bnb:
          cmd.extend(["--quantization", "bitsandbytes"])
 
-    if enable_eplb:
-        cmd.append("--enable-eplb")
+    # vLLM's own --enable-eplb does not reach the vllm-ascend implementation:
+    # the Ascend subsystem (heat collection, policy, D2D weight transfer) is
+    # gated on additional_config.eplb_config.dynamic_eplb, and refuses to start
+    # unless DYNAMIC_EPLB is also set in the environment.
+    env = dict(os.environ)
+    if eplb:
+        cmd.extend(["--additional-config", json.dumps({"eplb_config": dict(eplb)})])
+        env["DYNAMIC_EPLB"] = "true"
+        if eplb.get("expert_map_record_path"):
+            env["EXPERT_MAP_RECORD"] = "true"
 
     if enable_expert_capture:
         cmd.append("--enable-return-routed-experts")
 
-        
+
     # Own session, so the whole server tree (API server, engine core, workers)
     # can be signalled as one group on teardown.
-    server_process = subprocess.Popen(cmd, start_new_session=True)
+    server_process = subprocess.Popen(cmd, start_new_session=True, env=env)
     
     # Poll the endpoint for 200 OK. Bounded: a server that comes up but never
     # answers leaves this loop spinning forever while holding every NPU of the
@@ -334,7 +342,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
                                   n_gpus=1, n_warmup_samples=5,
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
-                                  enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False,
+                                  enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
                                   trace_dir=None, trace_active_iterations=2, port=8000):
     server_process = None
     results = None
@@ -346,7 +354,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                            gpu_memory_utilization=gpu_memory_utilization,
                                            n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
                                            enable_prefix_caching=enable_prefix_caching, enable_bnb=enable_bnb,
-                                           enable_eplb=enable_eplb,
+                                           eplb=eplb,
                                            enable_expert_capture=enable_expert_capture,
                                            trace_dir=trace_dir, trace_start_iteration=100,
                                            trace_active_iterations=trace_active_iterations)

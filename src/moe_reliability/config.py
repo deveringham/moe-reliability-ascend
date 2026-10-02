@@ -109,7 +109,22 @@ _SERVER = Section("server", "vLLM server deployment.", (
     Option("batch_size", "int", 512, "Maximum number of concurrently batched sequences (--max-num-seqs)."),
     Option("enable_expert_parallel", "bool", True, "Enable expert parallelism."),
     Option("enable_prefix_caching", "bool", False, "Enable prefix caching."),
-    Option("enable_eplb", "bool", False, "Enable expert-parallel load balancing (EPLB)."),
+    Option("enable_eplb", "bool", False, "Enable vllm-ascend dynamic expert-parallel load balancing. "
+           "Sets additional_config.eplb_config.dynamic_eplb and DYNAMIC_EPLB in the server environment; "
+           "vLLM's own --enable-eplb flag does not reach the vllm-ascend implementation."),
+    Option("eplb_policy_type", "int", 2, "Rearrangement policy: 0 random, 1 DefaultEplb, "
+           "2 SwiftBalanceEplb, 3 FlashLB."),
+    Option("eplb_num_redundant_experts", "int", 0, "Redundant expert slots EPLB may use to replicate hot "
+           "experts. At 0 it can only permute experts between ranks, which cannot change the load when "
+           "each rank holds exactly one expert."),
+    Option("eplb_heat_collection_interval", "int", 600, "Forward iterations of expert-load collection "
+           "before each rearrangement. The full cycle is this plus "
+           "eplb_algorithm_execution_interval plus one iteration per MoE layer, and the load counters "
+           "are cleared at the end of it, so a run shorter than one cycle never rearranges at all."),
+    Option("eplb_algorithm_execution_interval", "int", 50, "Iterations the planner is given before the "
+           "new placement is applied."),
+    Option("eplb_record_map", "bool", False, "Write the placement EPLB chose to eplb_expert_map.json in "
+           "the run directory."),
 ))
 
 _CLIENT = Section("client", "Load generation against the server.", (

@@ -51,7 +51,12 @@ vLLM server deployment.
 | `batch_size` | int | `512` | Maximum number of concurrently batched sequences (--max-num-seqs). |
 | `enable_expert_parallel` | bool | `true` | Enable expert parallelism. |
 | `enable_prefix_caching` | bool | `false` | Enable prefix caching. |
-| `enable_eplb` | bool | `false` | Enable expert-parallel load balancing (EPLB). |
+| `enable_eplb` | bool | `false` | Enable vllm-ascend dynamic expert-parallel load balancing. Sets `additional_config.eplb_config.dynamic_eplb` and `DYNAMIC_EPLB` in the server environment; vLLM's own `--enable-eplb` does **not** reach the vllm-ascend implementation. |
+| `eplb_policy_type` | int | `2` | Rearrangement policy: `0` random, `1` DefaultEplb, `2` SwiftBalanceEplb, `3` FlashLB. |
+| `eplb_num_redundant_experts` | int | `0` | Redundant expert slots EPLB may use to replicate hot experts. At `0` it can only permute experts between ranks, which cannot change the load when each rank holds exactly one expert. |
+| `eplb_heat_collection_interval` | int | `600` | Forward iterations of expert-load collection before each rearrangement. One cycle is this plus `eplb_algorithm_execution_interval` plus one iteration per MoE layer, and the counters are cleared at the end of it, so a run shorter than one cycle never rearranges at all. |
+| `eplb_algorithm_execution_interval` | int | `50` | Iterations the planner is given before the new placement is applied. |
+| `eplb_record_map` | bool | `false` | Write the placement EPLB chose to `eplb_expert_map.json` in the run directory. |
 
 ### `[client]`
 
@@ -173,7 +178,12 @@ vLLM server deployment.
 | `batch_size` | int | `512` | Maximum number of concurrently batched sequences (--max-num-seqs). |
 | `enable_expert_parallel` | bool | `true` | Enable expert parallelism. |
 | `enable_prefix_caching` | bool | `false` | Enable prefix caching. |
-| `enable_eplb` | bool | `false` | Enable expert-parallel load balancing (EPLB). |
+| `enable_eplb` | bool | `false` | Enable vllm-ascend dynamic expert-parallel load balancing. Sets `additional_config.eplb_config.dynamic_eplb` and `DYNAMIC_EPLB` in the server environment; vLLM's own `--enable-eplb` does **not** reach the vllm-ascend implementation. |
+| `eplb_policy_type` | int | `2` | Rearrangement policy: `0` random, `1` DefaultEplb, `2` SwiftBalanceEplb, `3` FlashLB. |
+| `eplb_num_redundant_experts` | int | `0` | Redundant expert slots EPLB may use to replicate hot experts. At `0` it can only permute experts between ranks, which cannot change the load when each rank holds exactly one expert. |
+| `eplb_heat_collection_interval` | int | `600` | Forward iterations of expert-load collection before each rearrangement. One cycle is this plus `eplb_algorithm_execution_interval` plus one iteration per MoE layer, and the counters are cleared at the end of it, so a run shorter than one cycle never rearranges at all. |
+| `eplb_algorithm_execution_interval` | int | `50` | Iterations the planner is given before the new placement is applied. |
+| `eplb_record_map` | bool | `false` | Write the placement EPLB chose to `eplb_expert_map.json` in the run directory. |
 
 ### `[client]`
 
