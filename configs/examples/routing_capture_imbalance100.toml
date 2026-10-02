@@ -1,0 +1,57 @@
+# Does a router bias of 100 actually change which experts are selected?
+#
+# The Hugging Face router probe cannot answer this on the installed stack:
+# transformers 5.5.4 computes the router logits functionally from gate.weight
+# (modeling_deepseek_v2.py:125) and never calls the gate module, so the probe's
+# forward hook never fires and validate_imbalance raises KeyError.
+#
+# vLLM's own routed-expert capture does work - it produced every activation
+# record in the synthetic sweeps - so capture against the biased checkpoint and
+# compare the expert distribution with the base model's existing capture from
+# run 20261001-133042.
+#
+# Only the activations stage matters here; the workload and benchmark settings
+# are kept minimal.
+#
+#   ./nrun -t capture100 'uv run moe-reliability run configs/examples/routing_capture_imbalance100.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "capture-imb100"
+description = "Routed-expert capture against the bias-100 checkpoint."
+seed = 43
+
+[model]
+model_id = "models/deepseek-v2-imbalance100"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[activations]
+n_samples = 200
+
+[workloads]
+target_alphas = [1.0]
+target_prompt_lengths = [50]
+length_in_requests = true
+max_repeats = [0]
+
+[benchmark]
+workload_max_repeats = 0
+workload_prompt_length = 50
+enable_profiling = false
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = false
+trace_summary = false

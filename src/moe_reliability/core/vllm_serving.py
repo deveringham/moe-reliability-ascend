@@ -7,7 +7,7 @@
 # 06.08.2026
 ###
 
-import time, subprocess, os, asyncio
+import time, subprocess, os, signal, asyncio
 import io, base64
 import urllib.request
 import urllib.error
@@ -15,7 +15,7 @@ import numpy as np
 from openai import AsyncOpenAI
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -56,98 +56,94 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--enable-return-routed-experts")
 
         
-    server_process = subprocess.Popen(cmd)
+    # Own session, so the whole server tree (API server, engine core, workers)
+    # can be signalled as one group on teardown.
+    server_process = subprocess.Popen(cmd, start_new_session=True)
     
-    # Poll the endpoint for 200 OK
+    # Poll the endpoint for 200 OK. Bounded: a server that comes up but never
+    # answers leaves this loop spinning forever while holding every NPU of the
+    # run, which is far worse than failing the point.
     print("Waiting for server to initialize ...")
     url = f"http://localhost:{port}/v1/models"
-    
+    deadline = time.monotonic() + startup_timeout
+
     while True:
         try:
-            response = urllib.request.urlopen(url)
+            response = urllib.request.urlopen(url, timeout=10)
             if response.getcode() == 200:
                 print("Server is ready!")
                 break
-        except urllib.error.URLError:
+        except (urllib.error.URLError, TimeoutError):
             time.sleep(5)
-            
+
         if server_process.poll() is not None:
             raise RuntimeError("vLLM server process terminated unexpectedly.")
-            
+
+        if time.monotonic() > deadline:
+            stop_vllm_server(server_process)
+            raise RuntimeError(f"vLLM server did not become ready within {startup_timeout:.0f}s "
+                               f"(it was still running; see the log for where it stopped)")
+
     return server_process
 
-# Terminates the vLLM server subprocess
-def stop_vllm_server(server_process):
+# Terminates the vLLM server subprocess tree and waits for the NPUs to be released.
+# Signalling only the API server leaves the engine core and worker processes alive
+# briefly; they hold the HBM, so the next sweep point can fail to allocate.
+def stop_vllm_server(server_process, timeout=120.0):
     print("Shutting down vLLM server...")
-    server_process.terminate()
-    server_process.wait()
+
+    try:
+        pgid = os.getpgid(server_process.pid)
+    except ProcessLookupError:
+        server_process.wait()
+        print("Server successfully shut down.")
+        return
+
+    def group_alive():
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def wait_for_group(deadline):
+        while time.monotonic() < deadline:
+            if not group_alive():
+                return True
+            time.sleep(1)
+        return not group_alive()
+
+    os.killpg(pgid, signal.SIGTERM)
+    server_process.wait()  # reap the parent so it stops counting as a group member
+
+    if not wait_for_group(time.monotonic() + timeout):
+        print(f"Server tree still alive after {timeout:.0f}s, sending SIGKILL...")
+        os.killpg(pgid, signal.SIGKILL)
+        if not wait_for_group(time.monotonic() + 30.0):
+            raise RuntimeError("vLLM server processes did not exit; NPU memory may still be held.")
+
     print("Server successfully shut down.")
 
-def start_profiling(port=8000):
+def start_profiling(port=8000, timeout=600):
+    # Needs a timeout like stop_profiling: urlopen without one waits forever, and
+    # a profiler that never answers then holds every NPU of the run indefinitely.
     print("Starting vLLM PyTorch Profiler...")
     req = urllib.request.Request(f"http://localhost:{port}/start_profile", method="POST")
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=timeout):
             print("Profiler started successfully.")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to start profiler: {e}")
 
-def stop_profiling(port=8000):
+def stop_profiling(port=8000, timeout=600):
     print("Stopping vLLM PyTorch Profiler (Note: flushing traces to disk may take a few minutes)...")
     req = urllib.request.Request(f"http://localhost:{port}/stop_profile", method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=600) as response:
+        with urllib.request.urlopen(req, timeout=timeout):
             print("Profiler stopped and traces flushed successfully.")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         print(f"Failed to stop profiler: {e}")
 
-def vllm_bench(model_name, port=8000, num_prompts=512, max_concurrency=16,
-               input_len=512, output_len=100, seed=0,
-               result_dir="./bench_results", result_filename=None,
-               request_rate=float("inf"), enable_profiling=False,
-               percentile_metrics="ttft,tpot,itl,e2el",
-               metric_percentiles="50,90,99,99.9", extra_args=None):
-
-    os.makedirs(result_dir, exist_ok=True)
-    if result_filename is None:
-        safe_model = model_name.replace("/", "_")
-        result_filename = f"{safe_model}_bs{max_concurrency}_in{input_len}_out{output_len}_seed{seed}.json"
-    result_path = os.path.join(result_dir, result_filename)
-
-    cmd = [
-        "vllm", "bench", "serve",
-        "--backend", "vllm",
-        "--model", model_name,
-        "--host", "localhost",
-        "--port", str(port),
-        "--dataset-name", "random",
-        "--num-prompts", str(num_prompts),
-        "--random-input-len", str(input_len),
-        "--random-output-len", str(output_len),
-        "--random-range-ratio", "0.0",
-        "--ignore-eos",
-        "--max-concurrency", str(max_concurrency),  # match server --max-num-seqs (batch_size)
-        "--request-rate", ("inf" if request_rate == float("inf") else str(request_rate)),
-        "--seed", str(seed),
-        "--percentile-metrics", percentile_metrics,
-        "--metric-percentiles", metric_percentiles,
-        "--save-result",
-        "--save-detailed",
-        "--result-dir", result_dir,
-        "--result-filename", result_filename,
-    ]
-
-    if enable_profiling:
-        # server must have been started with trace_dir set
-        cmd.append("--profile")
-
-    print(f"Running vllm bench serve against localhost:{port} ...")
-    result = subprocess.run(cmd)  # blocks until the benchmark completes
-    if result.returncode != 0:
-        raise RuntimeError(f"vllm bench serve failed with return code {result.returncode}")
-
-    print(f"Benchmark complete. Results: {result_path}")
-    return result_path
 
 # Helper to parse response containing routed expert info
 def decode_routed_experts(payload):
@@ -342,7 +338,6 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   trace_dir=None, trace_active_iterations=2, port=8000):
     server_process = None
     results = None
-    n_samples = len(prompts)
     try:
         # Start server
         server_process = start_vllm_server(model, port=port, seed=seed,

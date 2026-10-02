@@ -89,7 +89,7 @@ _MODEL = Section("model", "Model under test.", (
     Option("model_id", "str", REQUIRED, "Hugging Face model id or local checkpoint path served by vLLM."),
     Option("model_name", "str", REQUIRED, "Short model name used in run ids and file names "
            "(names containing 'deepseek' enable DeepSeek-specific activation preprocessing)."),
-    Option("probe", "str", "auto", "Router probe family used to read MoE dimensions "
+    Option("probe", "str", "auto", "Model family, used to read the MoE dimensions from the model configuration "
            "(auto infers it from model_id).", PROBE_CHOICES),
     Option("enable_bnb", "bool", False, "bitsandbytes quantization. Not supported by vLLM Ascend; must stay false "
            "(use a ModelSlim, LLM-Compressor or block-wise FP8 checkpoint as model_id instead)."),
@@ -129,7 +129,14 @@ _WORKLOADS = Section("workloads", "Stage 2 (synthetic workloads): workload const
     Option("target_alphas", "list[float]", [0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0],
            "Scaling factors of the natural per-layer coefficient of variation of expert load."),
     Option("target_prompt_lengths", "list[int]", [1000, 5000], "Workload sizes in prompts "
-           "(converted to token budgets using the average tokens per prompt)."),
+           "(converted to token budgets using the average tokens per prompt, "
+           "unless length_in_requests is set)."),
+    Option("length_in_requests", "bool", False, "Stop selection at a fixed number of requests instead of a "
+           "fixed token budget. With a token budget the request count varies with alpha - more imbalanced "
+           "workloads are built from more, shorter prompts - which confounds imbalance with batch size."),
+    Option("prompt_length_tolerance", "float", 0.0, "Restrict selection to prompts whose token count is "
+           "within this relative distance of the pool median (0.25 keeps 0.75x to 1.25x the median; "
+           "0 disables the restriction). Keeps per-workload differences from being dominated by prompt size."),
     Option("max_repeats", "list[int]", [0, 10], "Workload sets to build, one per maximum number of "
            "times a prompt may be repeated."),
     Option("reuse_workloads_from", "str", "", "Run id or run directory whose workloads are reused "
@@ -139,10 +146,15 @@ _WORKLOADS = Section("workloads", "Stage 2 (synthetic workloads): workload const
 _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep point.", (
     Option("workload_max_repeats", "int", 0, "Which workload set (max_repeats) to benchmark."),
     Option("workload_prompt_length", "int", 1000, "Which workload size (target prompt length) to benchmark."),
+    Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", True, "Record PyTorch profiler traces on all workers."),
+    Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
+           "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
+           "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
-           "(default: true unless profiling, which perturbs timings)."),
+           "(default: true, unless profiling without a separate unprofiled pass)."),
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
@@ -156,10 +168,15 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
 
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
     Option("n_samples", "int", 15000, "Number of MMLU prompts sent to each checkpoint."),
+    Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
+    Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
+           "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
+           "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
-           "(default: true unless profiling, which perturbs timings)."),
+           "(default: true, unless profiling without a separate unprofiled pass)."),
 ))
 
 _ANALYSIS = Section("analysis", "Post-processing of profiler traces.", (
@@ -401,7 +418,10 @@ def _resolve(data: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
 def _derive(cfg: dict[str, dict[str, Any]]) -> None:
     bench = cfg["benchmark"]
     if bench["save_request_metrics"] is DERIVED:
-        bench["save_request_metrics"] = not bench["enable_profiling"]
+        # A separate unprofiled pass measures latency without the profiler's
+        # overhead, so the request metrics are worth keeping even when profiling.
+        bench["save_request_metrics"] = (not bench["enable_profiling"]
+                                         or bool(bench.get("separate_profiling_run", False)))
 
 
 def _validate(cfg: dict[str, dict[str, Any]]) -> None:

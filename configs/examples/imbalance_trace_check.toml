@@ -1,0 +1,56 @@
+# Where does the time go, and is any of it skewed across ranks?
+#
+# Bias 100 changes no latency. If the router probe shows routing does move, then
+# the insensitivity is downstream, and the trace answers two questions the
+# end-to-end latency cannot:
+#
+#   1. what fraction of a decode step is fused-MoE work at all - if it is small,
+#      no amount of imbalance can matter;
+#   2. whether per-rank MoE time actually skews when every token is pushed to one
+#      expert, i.e. whether the kernel's cost depends on the routing at all.
+#
+# trace_max_over_mean (busiest rank over the mean) is the number to compare
+# between level 0 and level 100.
+#
+# separate_profiling_run means each point is served twice: the timings come from
+# the unprofiled pass, the traces from the profiled one.
+#
+#   ./nrun -t traces 'uv run moe-reliability run configs/examples/imbalance_trace_check.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "trace-check"
+description = "Profiled bias 0 vs 100, for per-rank fused-MoE kernel time."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[imbalance]
+imbalance_levels = [0, 100]
+validate_imbalance = false
+
+[benchmark]
+n_samples = 300
+repeats = 1
+enable_profiling = true
+separate_profiling_run = true
+trace_active_iterations = 2
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = true
+trace_summary = true

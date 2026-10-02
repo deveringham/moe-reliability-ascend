@@ -1,0 +1,57 @@
+# Is the high-alpha slowdown on 8 NPUs real?
+#
+# The profiled 8-NPU sweep gave 133.6, 133.8, 134.7, 135.5, 146.0 ms as alpha
+# rose - the first sign all day of the predicted straggler, and consistent with
+# 8 ranks carrying 1.31x the mean load against 1.13x at 4 ranks. But it is one
+# point, and two earlier single points that looked like effects (level 25 at
+# 136.2, alpha 1.2 at 149.6) turned out to be noise.
+#
+# So: the two endpoints only, three repeats each, unprofiled. Points sharing an
+# alpha differ only in the state of the machine, which is the comparison that
+# settles it. Profiling is off because the profiled pass of alpha 2.0 hung for
+# 55 minutes holding all 8 NPUs.
+#
+#   ./nrun -t endpoints8 'uv run moe-reliability run configs/examples/alpha_endpoints_npu8.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "alpha-endpoints-npu8"
+description = "Lowest and highest alpha on 8 NPUs, three repeats each, unprofiled."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 8
+visible_devices = "0,1,2,3,4,5,6,7"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[activations]
+n_samples = 3000
+
+[workloads]
+target_alphas = [0.8, 2.0]
+target_prompt_lengths = [300]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [10]
+reuse_workloads_from = "20261001-172617_synthetic_deepseek-v2_npu4_bs512_alpha-repeats"
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 300
+repeats = 3
+enable_profiling = false
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = false
+trace_summary = false

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import random
 import shutil
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -22,6 +23,7 @@ from moe_reliability_results import schema
 from moe_reliability_results.metrics import summarize_requests, trace_scalars
 
 from ..config import ExperimentConfig
+from ..environment import contention_warning, host_snapshot
 from ..logs import log
 from ..runs import RunContext, utcnow
 
@@ -104,12 +106,27 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
     ))
 
 # Runs and records metrics for all pending sweep points
+def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, Any]]:
+    """The order the sweep points are served in.
+
+    Points are stored and plotted in parameter order, but serving them in that
+    order aliases anything that drifts during a run - a neighbouring job, thermal
+    state, a cache filling - onto the swept parameter itself. Shuffling breaks
+    that correlation; the experiment seed keeps it reproducible.
+    """
+    points = list(ctx.points)
+    if not cfg.benchmark.shuffle_points or len(points) < 3:
+        return points
+    random.Random(cfg.experiment.seed).shuffle(points)
+    return points
+
+
 def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      point_inputs: Callable[[dict[str, Any]], tuple[str, Sequence[Any]]],
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
-    for p in ctx.points:
+    for order, p in enumerate(_execution_order(ctx, cfg)):
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
         if status == schema.STATUS_COMPLETED:
@@ -128,13 +145,25 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                 shutil.rmtree(trace_abs)  # traces of an interrupted attempt
             trace_abs.mkdir(parents=True)
 
+        # The profiler perturbs latency, so timings and traces cannot come from
+        # the same pass. With separate_profiling_run the point is served twice:
+        # unprofiled for the measurements, then profiled for the traces.
+        separate = bool(bench.enable_profiling and bench.separate_profiling_run)
+
+        host_before = host_snapshot(cfg.hardware.visible_devices)
         ctx.update_point(label, status=schema.STATUS_RUNNING, started_at=utcnow(), finished_at=None, error=None,
                          model_path=model_path, n_prompts=len(prompts), trace_dir=trace_rel,
-                         metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None)
-        log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts")
+                         metrics_file=None, request_summary=None, trace_metrics_file=None, trace_summary=None,
+                         host_before=host_before, host_after=None, exec_order=order)
+        log(f"{label}: benchmarking {model_path} with {len(prompts)} prompts"
+            f"{' (measurement pass, unprofiled)' if separate else ''}")
+        warning = contention_warning(host_before)
+        if warning:
+            log(f"{label}: warning: {warning}")
 
+        trace_path = str(ctx.abspath(trace_rel)) if trace_rel else None
         results = serve_and_measure(cfg, model_path, prompts,
-                                     trace_dir=str(ctx.abspath(trace_rel)) if trace_rel else None)
+                                    trace_dir=None if separate else trace_path)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -142,7 +171,18 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             log(f"{label}: FAILED")
             continue
 
-        fields: dict[str, Any] = {"request_summary": summarize_requests(results)}
+        profiling_error = None
+        if separate:
+            log(f"{label}: profiling pass")
+            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path) is None:
+                # The measurements stand on their own; only the traces are lost.
+                profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
+                log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
+
+        fields: dict[str, Any] = {"request_summary": summarize_requests(results),
+                                  "host_after": host_snapshot(cfg.hardware.visible_devices)}
+        if profiling_error:
+            fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:
             fields["metrics_file"] = ctx.write_json(schema.metrics_file(label), {
                 "run_id": ctx.run_id,
@@ -150,7 +190,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                 "sweep_parameter": ctx.manifest["sweep_parameter"],
                 "sweep_value": p["value"],
                 "model_path": model_path,
-                "profiled": bool(bench.enable_profiling),
+                "profiled": bool(bench.enable_profiling) and not separate,
                 "requests": results,
             })
         ctx.update_point(label, status=schema.STATUS_COMPLETED, finished_at=utcnow(), **fields)
@@ -161,6 +201,15 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
 
 def _fmt(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2f}"
+
+
+def profiling_note(bench) -> str:
+    """How each point is served, for the plan printed by `validate`."""
+    if not bench.enable_profiling:
+        return ""
+    if bench.separate_profiling_run:
+        return " (served twice per point: unprofiled for timings, profiled for traces)"
+    return " (profiled)"
 
 
 def post_processing_stages(ctx: RunContext, cfg: ExperimentConfig, force: bool = False) -> None:
@@ -217,7 +266,7 @@ def parse_npu_profiler_data(trace_dir: str | Path) -> list[Path]:
 
 
 def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = False) -> None:
-    from ..core.trace_analysis import summarize
+    from ..core.trace_analysis import summarize, summarize_ascend
 
     for p in ctx.points:
         label = p["label"]
@@ -236,15 +285,26 @@ def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = F
                 ctx.update_point(label, npu_trace_views=[ctx.relpath(v) for v in views], trace_parse_error=None)
 
         if cfg.analysis.trace_summary and (force or not p.get("trace_metrics_file")):
-            log(f"{label}: extracting fused-MoE kernel metrics from {trace_abs}")
+            log(f"{label}: extracting kernel metrics from {trace_abs}")
             try:
                 summary = summarize(str(trace_abs))
-            except SystemExit as exc:  # raised when no rank traces exist
-                message = (f"{exc} (the fused-MoE kernel analysis reads PyTorch profiler traces named "
-                           f"*rank*.pt.trace.json.gz)")
-                ctx.update_point(label, trace_error=message)
-                log(f"{label}: {message}")
-                continue
+            except FileNotFoundError:
+                # No PyTorch-format rank traces. The Ascend profiler is what this
+                # stack actually writes, so analyse its output instead.
+                try:
+                    summary = summarize_ascend(str(trace_abs))
+                except Exception as exc:  # noqa: BLE001
+                    message = (f"{exc} (neither PyTorch rank traces named *rank*.pt.trace.json.gz nor parsed "
+                               f"Ascend profiler output were found)")
+                    ctx.update_point(label, trace_error=message)
+                    log(f"{label}: {message}")
+                    continue
+                d = summary.get("decomposition") or {}
+                moe = (d.get("compute_pct") or {}).get("moe")
+                strag = (summary.get("stragglers") or {}).get("GroupedMatmul") or {}
+                log(f"{label}: {len(summary['ranks'])} ranks, MoE {moe:.1f}% of compute, "
+                    f"straggler {strag.get('straggler', float('nan')):.3f}x"
+                    if moe is not None else f"{label}: analysed {len(summary['ranks'])} ranks")
             summary["trace_dir"] = p["trace_dir"]
             rel = ctx.write_json(schema.trace_metrics_file(label), summary)
             ctx.update_point(label, trace_metrics_file=rel, trace_summary=trace_scalars(summary), trace_error=None)
@@ -299,6 +359,15 @@ def figures_stage(ctx: RunContext) -> None:
         ctx.skip_stage(STAGE_FIGURES, f"figure rendering failed: {error!r} "
                                       f"(re-render with: moe-reliability-results plot {ctx.run_id})")
         log(f"figure rendering failed: {error!r}")
+        return
+    if not written:
+        # Nothing to plot, normally because the benchmark produced no usable
+        # points. Leaving the stage completed would make resume skip it for the
+        # life of the run, so there would be no figures even once the failed
+        # points have been retried successfully.
+        ctx.skip_stage(STAGE_FIGURES, "no figures rendered (no benchmark results to plot); "
+                                      "retried on the next resume")
+        log("rendered 0 figures - leaving the stage open for a later resume")
         return
     ctx.manifest["figures"] = [ctx.relpath(p) for p in written]
     ctx.save()

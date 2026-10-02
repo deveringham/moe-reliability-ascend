@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -38,14 +39,21 @@ __all__ = [
     "VALIDATED_STACK",
     "VALIDATED_CANN",
     "apply_environment",
+    "check_atb",
     "check_cann",
+    "check_custom_ops",
     "check_devices",
     "configure_environment",
+    "contention_warning",
     "collect_provenance",
+    "custom_op_vendors",
     "diagnose",
+    "host_snapshot",
+    "npu_processes",
     "package_versions",
     "stack_mismatches",
     "triton_ascend_conflicts",
+    "triton_runtime",
     "ascend_versions",
 ]
 
@@ -100,9 +108,32 @@ def check_cann() -> str:
     if not Path(home).is_dir():
         raise AscendEnvironmentError(f"ASCEND_TOOLKIT_HOME={home} does not exist; activate a valid CANN "
                                      f"installation:\n  {CANN_ACTIVATE_HINT}")
-    if not os.environ.get("ATB_HOME_PATH"):
-        log("warning: NNAL/ATB environment not activated (ATB_HOME_PATH unset); vLLM Ascend needs libatb.so: "
-            "source /usr/local/Ascend/nnal/atb/set_env.sh")
+    try:
+        check_atb()
+    except AscendEnvironmentError as exc:
+        log(f"warning: {exc}")
+    return home
+
+
+def check_atb() -> str:
+    """Return the NNAL/ATB home of the activated environment.
+
+    ATB_HOME_PATH being set is not sufficient: torch_npu loads libatb.so through
+    the dynamic loader, so the library has to be reachable from this process.
+    When it is not, the failure surfaces much later as an opaque
+    ``OSError: libatb.so: cannot open shared object file`` inside a vLLM worker.
+    """
+    home = os.environ.get("ATB_HOME_PATH")
+    if not home:
+        raise AscendEnvironmentError(
+            "NNAL/ATB is not activated (ATB_HOME_PATH unset); vLLM Ascend needs libatb.so:\n"
+            f"  {CANN_ACTIVATE_HINT}")
+    try:
+        ctypes.CDLL("libatb.so")
+    except OSError as exc:
+        raise AscendEnvironmentError(
+            f"libatb.so could not be loaded ({exc}); NNAL is installed at {home} but is not on the "
+            f"library search path:\n  {CANN_ACTIVATE_HINT}") from exc
     return home
 
 
@@ -198,6 +229,65 @@ def triton_ascend_conflicts(path: list[str] | None = None) -> list[str]:
     return conflicts
 
 
+def triton_runtime() -> dict[str, Any]:
+    """What ``import triton`` actually resolves to, as opposed to what is recorded.
+
+    Triton Ascend installs its implementation over the ``triton`` package, so the
+    distribution metadata of community Triton can survive while its files do not.
+    Reporting only the recorded versions therefore describes an installation that
+    is not the one being imported.
+    """
+    info: dict[str, Any] = {"dists": package_versions(("triton", "triton-ascend"))}
+    try:
+        import triton  # noqa: PLC0415
+
+        info["module_version"] = getattr(triton, "__version__", None)
+        info["module_path"] = getattr(triton, "__file__", None)
+    except Exception as exc:  # noqa: BLE001
+        info["import_error"] = f"{type(exc).__name__}: {exc}"
+    return info
+
+
+def check_custom_ops() -> str:
+    """Verify vLLM Ascend's bundled CANN custom operators can actually be loaded.
+
+    vLLM Ascend ships operators such as AddRmsNormBias as a CANN vendor package
+    inside the wheel, loaded by dlopen at run time. If the vendor libraries
+    cannot be opened -- a host libstdc++ older than the one they were built
+    against is the usual cause -- CANN falls back to the stock operator library
+    and the model fails with ``aclnnXxx ... not in libopapi.so``, which reads
+    like a CANN version problem rather than a loader one.
+    """
+    vendors = custom_op_vendors()
+    if not vendors:
+        raise AscendEnvironmentError("vLLM Ascend ships no custom operator vendor package; run `uv sync`")
+
+    registered = [p for p in os.environ.get("ASCEND_CUSTOM_OPP_PATH", "").split(":") if p]
+    problems: list[str] = []
+    for vendor in vendors:
+        if not any(Path(p) == vendor for p in registered):
+            problems.append(f"{vendor.name} is not on ASCEND_CUSTOM_OPP_PATH")
+        for lib in sorted(vendor.glob("op_*/**/libcust_*.so")):
+            try:
+                ctypes.CDLL(str(lib))
+            except OSError as exc:
+                problems.append(f"{lib.name}: {exc}")
+    if problems:
+        raise AscendEnvironmentError(
+            f"vLLM Ascend custom operators are not usable ({'; '.join(problems[:3])}"
+            f"{', ...' if len(problems) > 3 else ''}); the model will fail with a missing aclnn operator")
+    return f"{len(vendors)} vendor package(s) loadable"
+
+
+def custom_op_vendors() -> list[Path]:
+    """Custom operator vendor packages bundled with the installed vllm_ascend."""
+    spec = importlib.util.find_spec("vllm_ascend")
+    if spec is None or not spec.origin:
+        return []
+    root = Path(spec.origin).parent / "_cann_ops_custom" / "vendors"
+    return sorted(p for p in root.glob("*") if p.is_dir()) if root.is_dir() else []
+
+
 # --------------------------------------------------------------------------- #
 #  Activation
 # --------------------------------------------------------------------------- #
@@ -263,6 +353,90 @@ def ascend_versions(toolkit_home: str | None = None,
     return info
 
 
+#: ``| 0       0                 | 1267978       | VLLMWorker_TP      | 38153   | NA |``
+_NPU_PROCESS_RE = re.compile(r"^\|\s*(\d+)\s+\d+\s*\|\s*(\d+)\s*\|\s*(\S+)")
+
+
+def npu_processes(npu_smi: str | None = None) -> list[dict[str, Any]]:
+    """Processes currently holding an NPU, as ``npu-smi info`` reports them."""
+    text = npu_smi if npu_smi is not None else _run(["npu-smi", "info"])
+    if not text:
+        return []
+    out = []
+    for line in text.splitlines():
+        m = _NPU_PROCESS_RE.match(line)
+        if m:
+            out.append({"npu": int(m.group(1)), "pid": int(m.group(2)), "name": m.group(3)})
+    return out
+
+
+def own_pids() -> set[int]:
+    """This process and everything descended from it."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = [p for p in Path("/proc").iterdir() if p.name.isdigit()]
+    except OSError:
+        return {os.getpid()}
+    for entry in entries:
+        try:  # "pid (comm) state ppid ...", and comm may itself contain spaces
+            ppid = int((entry / "stat").read_text().rsplit(") ", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        children.setdefault(ppid, []).append(int(entry.name))
+    seen: set[int] = set()
+    stack = [os.getpid()]
+    while stack:
+        pid = stack.pop()
+        if pid not in seen:
+            seen.add(pid)
+            stack.extend(children.get(pid, ()))
+    return seen
+
+
+def host_snapshot(visible_devices: str = "") -> dict[str, Any]:
+    """Host load and NPU occupancy, including work that is not this run's.
+
+    Timings are only comparable across sweep points if the machine is in the same
+    state for each of them, and another job competes whether it sits on the NPUs
+    this run uses or merely on the same host.
+
+    Work is identified as foreign by its process id rather than by which device
+    it holds. Comparing devices against ``visible_devices`` cannot report
+    anything for a run that uses the whole node, which is exactly when a second
+    job on the same NPUs does the most damage.
+    """
+    ours = {int(d) for d in visible_devices.replace(",", " ").split() if d.strip().isdigit()}
+    mine = own_pids()
+    procs = npu_processes()
+    foreign = [p for p in procs if p["pid"] not in mine]
+    shared = [p for p in foreign if not ours or p["npu"] in ours]
+    info: dict[str, Any] = {
+        "npu_processes": procs,
+        "foreign_npu_processes": foreign,
+        "foreign_npus": sorted({p["npu"] for p in foreign}),
+        # Foreign work on the very devices this run is using.
+        "shared_npus": sorted({p["npu"] for p in shared}),
+    }
+    try:
+        info["loadavg"] = [round(v, 2) for v in os.getloadavg()]
+    except OSError:
+        info["loadavg"] = None
+    return info
+
+
+def contention_warning(snapshot: Mapping[str, Any]) -> str | None:
+    """A one-line description of competing work, or None when the host looks quiet."""
+    foreign = snapshot.get("foreign_npu_processes") or []
+    if not foreign:
+        return None
+    pids = sorted({p["pid"] for p in foreign})
+    shared = snapshot.get("shared_npus") or []
+    where = (f"sharing NPU(s) {shared} with this run" if shared
+             else f"on NPU(s) {snapshot['foreign_npus']} outside this run")
+    return (f"{len(foreign)} process(es) {where} (pid {', '.join(str(p) for p in pids)}), "
+            f"load {snapshot.get('loadavg')}; timings may not be comparable across sweep points")
+
+
 def collect_provenance(runtime: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Host, software and NPU information stored with every run."""
     info: dict[str, Any] = {
@@ -301,6 +475,7 @@ def diagnose(n_npus: int | None = None, visible_devices: str = "") -> list[tuple
 
     apply_environment({}, visible_devices)
     record("CANN environment", check_cann)
+    record("NNAL/ATB runtime", check_atb)
     versions = ascend_versions()
     results.append(("CANN version", versions.get("cann_version") == VALIDATED_CANN,
                     f"{versions.get('cann_version')} (validated {VALIDATED_CANN})"))
@@ -317,9 +492,20 @@ def diagnose(n_npus: int | None = None, visible_devices: str = "") -> list[tuple
         results.append((f"{name}=={want}", have is not None and _public(have) == want, str(have)))
     try:
         conflicts = triton_ascend_conflicts()
-        results.append(("Triton Ascend integrity", not conflicts,
-                        "ok" if not conflicts else f"{len(conflicts)} overwritten file(s); repair with: "
-                                                   f"{TRITON_REPAIR_HINT}"))
+        if conflicts:
+            detail = f"{len(conflicts)} overwritten file(s); repair with: {TRITON_REPAIR_HINT}"
+        else:
+            tr = triton_runtime()
+            detail = f"import triton -> {tr.get('module_version')}"
+            if tr.get("import_error"):
+                detail = f"import triton failed: {tr['import_error']}"
+            elif tr["dists"].get("triton"):
+                # Both distributions are recorded but only one owns the files.
+                detail += (f" (triton-ascend {tr['dists'].get('triton-ascend')} owns the files; community triton "
+                           f"{tr['dists']['triton']} metadata is also installed, so a plain `uv sync` can overwrite "
+                           f"them -- repair with: {TRITON_REPAIR_HINT})")
+        results.append(("Triton Ascend integrity", not conflicts, detail))
     except Exception as exc:  # noqa: BLE001
         results.append(("Triton Ascend integrity", False, str(exc)))
+    record("custom operators", check_custom_ops)
     return results

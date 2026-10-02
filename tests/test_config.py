@@ -75,7 +75,9 @@ def test_overrides(forced_config_data):
     assert cfg.server.batch_size == 256
     assert cfg.imbalance.imbalance_levels == [0, 50, 100]
     assert cfg.model.model_name == "qwen"
-    assert cfg.benchmark.save_request_metrics is False  # derived from profiling
+    # Derived from profiling: kept, because the default separate unprofiled pass
+    # measures latency without the profiler's overhead.
+    assert cfg.benchmark.save_request_metrics is True
     with pytest.raises(ConfigError, match="section.key=value"):
         apply_overrides({}, ["batch_size=3"])
 

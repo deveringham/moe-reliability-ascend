@@ -28,7 +28,7 @@ Model under test.
 |---|---|---|---|
 | `model_id` | str | *required* | Hugging Face model id or local checkpoint path served by vLLM. |
 | `model_name` | str | *required* | Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing). |
-| `probe` | str | `"auto"` | Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
+| `probe` | str | `"auto"` | Model family, used to read the MoE dimensions from the model configuration (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
 
 ### `[hardware]`
 
@@ -79,7 +79,9 @@ Stage 2 (synthetic workloads): workload construction.
 | key | type | default | description |
 |---|---|---|---|
 | `target_alphas` | list[float] | `[0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.6, 2.0]` | Scaling factors of the natural per-layer coefficient of variation of expert load. |
-| `target_prompt_lengths` | list[int] | `[1000, 5000]` | Workload sizes in prompts (converted to token budgets using the average tokens per prompt). |
+| `target_prompt_lengths` | list[int] | `[1000, 5000]` | Workload sizes in prompts (converted to token budgets using the average tokens per prompt, unless `length_in_requests` is set). |
+| `length_in_requests` | bool | `false` | Stop selection at a fixed number of requests instead of a fixed token budget. With a token budget the request count varies with alpha - more imbalanced workloads are built from more, shorter prompts - which confounds imbalance with batch size. |
+| `prompt_length_tolerance` | float | `0.0` | Restrict selection to prompts whose token count is within this relative distance of the pool median (`0.25` keeps 0.75x to 1.25x the median; `0` disables it). Keeps per-workload differences from being dominated by prompt size. |
 | `max_repeats` | list[int] | `[0, 10]` | Workload sets to build, one per maximum number of times a prompt may be repeated. |
 | `reuse_workloads_from` | str | `""` | Run id or run directory whose workloads are reused (skips activation capture and workload construction). |
 
@@ -91,9 +93,12 @@ Stage 3: benchmarking of each sweep point.
 |---|---|---|---|
 | `workload_max_repeats` | int | `0` | Which workload set (max_repeats) to benchmark. |
 | `workload_prompt_length` | int | `1000` | Which workload size (target prompt length) to benchmark. |
+| `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `true` | Record PyTorch profiler traces on all workers. |
+| `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
-| `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true unless profiling, which perturbs timings). |
+| `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
 
 ### `[analysis]`
 
@@ -145,7 +150,7 @@ Model under test.
 |---|---|---|---|
 | `model_id` | str | *required* | Hugging Face model id or local checkpoint path served by vLLM. |
 | `model_name` | str | *required* | Short model name used in run ids and file names (names containing 'deepseek' enable DeepSeek-specific activation preprocessing). |
-| `probe` | str | `"auto"` | Router probe family used to read MoE dimensions (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
+| `probe` | str | `"auto"` | Model family, used to read the MoE dimensions from the model configuration (auto infers it from model_id). Choices: `auto`, `deepseek`, `qwen`, `mistral`. |
 
 ### `[hardware]`
 
@@ -197,9 +202,12 @@ Benchmarking of each imbalance level.
 | key | type | default | description |
 |---|---|---|---|
 | `n_samples` | int | `15000` | Number of MMLU prompts sent to each checkpoint. |
+| `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `false` | Record PyTorch profiler traces on all workers. |
+| `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
-| `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true unless profiling, which perturbs timings). |
+| `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
 
 ### `[analysis]`
 

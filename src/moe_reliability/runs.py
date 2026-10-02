@@ -165,10 +165,22 @@ class RunContext:
         entry.update(status=schema.STATUS_SKIPPED, note=reason, started_at=None, finished_at=utcnow(), error=None)
         self.save()
         
-    def ensure_points(self, values: list[float | int]) -> None:
-        """Create the sweep points, or check them against an existing manifest."""
+    def ensure_points(self, values: list[float | int], repeats: int = 1) -> None:
+        """Create the sweep points, or check them against an existing manifest.
+
+        With ``repeats`` above 1 every value becomes that many points, each served
+        and measured separately. Points that share a value differ only in the state
+        of the machine, so their spread is the run's own noise floor - without it a
+        difference between values cannot be told from run-to-run variation.
+        """
         parameter = self.manifest["sweep_parameter"]
-        labels = [schema.point_label(parameter, v) for v in values]
+        repeats = max(1, int(repeats))
+        spec: list[tuple[float | int, int, str]] = []
+        for v in values:
+            base = schema.point_label(parameter, v)
+            for r in range(1, repeats + 1):
+                spec.append((v, r, base if r == 1 else f"{base}_r{r}"))
+        labels = [label for _, _, label in spec]
         existing = [p["label"] for p in self.manifest["points"]]
         if existing:
             if existing != labels:
@@ -176,8 +188,8 @@ class RunContext:
                                f"points ({labels})")
             return
         self.manifest["points"] = [
-            {"index": i, "value": v, "label": label, "status": schema.STATUS_PENDING}
-            for i, (v, label) in enumerate(zip(values, labels))
+            {"index": i, "value": v, "repeat": r, "label": label, "status": schema.STATUS_PENDING}
+            for i, (v, r, label) in enumerate(spec)
         ]
         self.save()
 

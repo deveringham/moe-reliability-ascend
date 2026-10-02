@@ -1,0 +1,57 @@
+# Positive control: can this measurement detect expert imbalance at all?
+#
+# Two sweeps found no latency effect, but neither established that an effect
+# would have been visible if it were there. Without that, a null is not
+# interpretable. This runs the extreme the infrastructure grid uses - a router
+# bias of 100 on expert 0 - against the unmodified model, with 25 in between for
+# a dose-response.
+#
+# Expert 0 lives on one expert-parallel rank, so a bias this large should put
+# that rank's share of the work far above the others. Measured across 64 experts
+# the alpha sweep only ever moved the busiest rank from 1.08x to 1.12x of the
+# mean; if this does not move latency either, the problem is the measurement
+# rather than the phenomenon.
+#
+# repeats = 3 gives the noise floor from the run itself: points sharing a level
+# differ only in the state of the machine.
+#
+# 300 prompts is below the batch size, so each point is served in one wave and
+# TPOT measures steady-state decode.
+#
+#   uv run moe-reliability validate configs/examples/imbalance_positive_control.toml
+#   ./nrun -t poscontrol 'uv run moe-reliability run configs/examples/imbalance_positive_control.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "poscontrol"
+description = "Router bias 0 / 25 / 100, three repeats each, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+[client]
+concurrency_limit = 512
+
+[imbalance]
+imbalance_levels = [0, 25, 100]
+# Left off for speed. If even level 100 shows no latency effect, turn this on:
+# it measures expert load directly and separates "routing never moved" from
+# "routing moved but latency did not".
+validate_imbalance = false
+
+[benchmark]
+n_samples = 300
+repeats = 3
+enable_profiling = false
+save_request_metrics = true

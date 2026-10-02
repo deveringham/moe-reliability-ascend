@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import torch
 
 from moe_reliability.config import ExperimentConfig
 from moe_reliability.pipelines import forced_imbalance, run_pipeline
 from moe_reliability.runs import RunContext
 from moe_reliability_results import ResultsStore, io, schema
+from conftest import N_EXPERTS, N_LAYERS
 
 
 def test_run_stores_metrics_and_figures(deployment, forced_config_data, results_dir, tmp_path):
@@ -74,13 +74,16 @@ def test_failed_point_gives_partial_run_and_retry(deployment, forced_config_data
 def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
     forced_config_data["benchmark"]["enable_profiling"] = True
     cfg = ExperimentConfig.from_dict(forced_config_data)
-    assert cfg.benchmark.save_request_metrics is False
+    # The separate unprofiled pass measures latency without the profiler, so the
+    # request metrics are kept even though profiling is on.
+    assert cfg.benchmark.separate_profiling_run is True
+    assert cfg.benchmark.save_request_metrics is True
     ctx = RunContext.create(cfg)
     assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
 
     for label in ("imbalance_0", "imbalance_100"):
         p = ctx.point(label)
-        assert p["metrics_file"] is None and p["request_summary"]["n_requests"] == 24
+        assert p["metrics_file"] is not None and p["request_summary"]["n_requests"] == 24
         assert p["npu_trace_views"] == [f"traces/{label}/worker_{r}/ASCEND_PROFILER_OUTPUT/trace_view.json"
                                         for r in (0, 1)]
         assert p["trace_parse_error"] is None
@@ -88,6 +91,31 @@ def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
         assert "*rank*.pt.trace.json.gz" in p["trace_error"] and p["trace_metrics_file"] is None
     assert ctx.stage_status("trace_analysis") == schema.STATUS_COMPLETED
     assert ctx.stage_status("hta") == schema.STATUS_SKIPPED
+
+
+def test_separate_profiling_run_serves_each_point_twice(deployment, forced_config_data):
+    """Timings must come from an unprofiled pass, traces from a profiled one."""
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    calls = [c for c in deployment.calls if not c["capture"]]
+    assert len(calls) == 4                                   # 2 points x 2 passes
+    assert [c["trace_dir"] is None for c in calls] == [True, False, True, False]
+
+
+def test_single_pass_when_separate_profiling_run_disabled(deployment, forced_config_data):
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    forced_config_data["benchmark"]["separate_profiling_run"] = False
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    # Without a clean pass the only timings available are the perturbed ones.
+    assert cfg.benchmark.save_request_metrics is False
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    calls = [c for c in deployment.calls if not c["capture"]]
+    assert len(calls) == 2 and all(c["trace_dir"] for c in calls)
 
 
 def test_kernel_metrics_from_rank_traces(deployment, forced_config_data):
@@ -136,21 +164,40 @@ def test_exception_marks_run_failed(deployment, forced_config_data, monkeypatch)
     assert "disk full" in manifest["stages"]["checkpoints"]["error"]
 
 
-def test_expert_load_matches_probe_collation():
-    class Probe:
-        n_experts = 4
+def test_figures_stage_stays_open_when_nothing_is_rendered(deployment, forced_config_data, monkeypatch):
+    """A run with no usable points must not record figures as completed.
 
-        def get_active_experts(self):
-            # [batch, seq, k, n_routers]: router 0 always picks experts 0 and 1
-            t = torch.zeros((1, 5, 2, 3), dtype=torch.int64)
-            t[:, :, 1, 0] = 1
-            t[:, :, :, 1] = 3
-            return t
+    The stage would otherwise be skipped for the life of the run, so retrying the
+    failed points with `resume --retry-failed` could never produce figures.
+    """
+    from moe_reliability.pipelines import common
 
-    load = forced_imbalance._expert_load(Probe(), router_id=0)
-    assert load["n_assignments"] == 10
+    monkeypatch.setattr(common, "serve_and_measure", lambda *args, **kwargs: None)
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    run_pipeline(ctx, cfg)
+
+    assert ctx.stage_status(common.STAGE_FIGURES) == schema.STATUS_SKIPPED
+    assert common.should_run(ctx, common.STAGE_FIGURES)
+
+
+def test_expert_load_counts_a_routed_expert_capture():
+    # [tokens, layers, k]: layer 0 always picks experts 0 and 1, layer 1 only 3
+    prompt = np.zeros((3, 2, 2), dtype=np.int16)
+    prompt[:, 0, 1] = 1
+    prompt[:, 1, :] = 3
+    generated = np.zeros((2, 2, 2), dtype=np.int16)
+    generated[:, 0, 1] = 1
+    generated[:, 1, :] = 3
+    records = [{"prompt_routed_experts": prompt, "routed_experts": generated}]
+
+    load = forced_imbalance._expert_load(records, n_experts=4, layer=0)
+    assert load["n_assignments"] == 10          # 5 tokens x k=2, prompt and generated
     np.testing.assert_allclose(load["frequencies"], [0.5, 0.5, 0.0, 0.0])
-    np.testing.assert_allclose(forced_imbalance._expert_load(Probe(), router_id=1)["frequencies"], [0, 0, 0, 1])
+    np.testing.assert_allclose(
+        forced_imbalance._expert_load(records, n_experts=4, layer=1)["frequencies"], [0, 0, 0, 1])
+    assert forced_imbalance._has_capture(records)
+    assert not forced_imbalance._has_capture([{"prompt_routed_experts": np.zeros((0, 2, 2))}])
 
 
 def test_checkpoint_path_naming(forced_config_data):
@@ -158,3 +205,94 @@ def test_checkpoint_path_naming(forced_config_data):
     cfg = ExperimentConfig.from_dict(forced_config_data)
     assert forced_imbalance.checkpoint_path(cfg, 0) == "org/Mixtral-test"
     assert forced_imbalance.checkpoint_path(cfg, 12.5).endswith("mixtral-imbalance12.5")
+
+
+def test_repeats_measure_each_level_more_than_once(deployment, forced_config_data):
+    """Points sharing a value give the run its own noise floor."""
+    forced_config_data["benchmark"]["repeats"] = 3
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    labels = [p["label"] for p in ctx.points]
+    assert labels == ["imbalance_0", "imbalance_0_r2", "imbalance_0_r3",
+                      "imbalance_100", "imbalance_100_r2", "imbalance_100_r3"]
+    assert [p["value"] for p in ctx.points] == [0, 0, 0, 100, 100, 100]
+    assert [p["repeat"] for p in ctx.points] == [1, 2, 3, 1, 2, 3]
+    # every repeat is served and measured separately
+    assert all(p["status"] == schema.STATUS_COMPLETED for p in ctx.points)
+    assert len({p["metrics_file"] for p in ctx.points}) == 6
+    assert len([c for c in deployment.calls if not c["capture"]]) == 6
+
+
+def test_points_record_competing_work_on_other_npus(deployment, forced_config_data, monkeypatch):
+    """A job on NPUs this run does not own is recorded with every point."""
+    from moe_reliability.pipelines import common
+
+    busy = {"npu_processes": [{"npu": 4, "pid": 99, "name": "python3"}],
+            "foreign_npu_processes": [{"npu": 4, "pid": 99, "name": "python3"}],
+            "foreign_npus": [4], "loadavg": [40.0, 30.0, 20.0]}
+    monkeypatch.setattr(common, "host_snapshot", lambda visible_devices: busy)
+
+    forced_config_data["hardware"] = {"n_npus": 2, "visible_devices": "0,1"}
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    for label in ("imbalance_0", "imbalance_100"):
+        p = ctx.point(label)
+        assert p["host_before"]["foreign_npus"] == [4]
+        assert p["host_after"]["foreign_npus"] == [4]
+
+
+def test_validation_reads_experts_from_the_serving_stack(deployment, forced_config_data):
+    """Router load comes from vLLM's routed-expert capture, not a Hugging Face pass."""
+    forced_config_data["imbalance"]["validate_imbalance"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert ctx.stage_status("validation") == schema.STATUS_COMPLETED
+
+    # one capture per level, served with expert capture enabled
+    captures = [c for c in deployment.calls if c["capture"]]
+    assert len(captures) == 2 and all(c["trace_dir"] is None for c in captures)
+
+    for label in ("imbalance_0", "imbalance_100"):
+        p = ctx.point(label)
+        s = p["validation_summary"]
+        assert s["n_assignments"] > 0
+        assert 0.0 <= s["max_expert_frequency"] <= 1.0
+        assert s["expected_frequency"] == 1 / N_EXPERTS
+        doc = io.read_json(ctx.path / p["validation_file"])
+        assert doc["n_experts"] == N_EXPERTS and len(doc["per_router_frequencies"]) == N_LAYERS
+        np.testing.assert_allclose(sum(doc["frequencies"]), 1.0, atol=1e-6)
+
+
+def test_points_are_served_in_a_shuffled_but_reproducible_order(deployment, forced_config_data):
+    """Serving in parameter order aliases drift during a run onto the parameter."""
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 25, 50, 100]
+    forced_config_data["experiment"]["seed"] = 7
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    assert cfg.benchmark.shuffle_points is True
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    # stored in parameter order, whatever the serving order was
+    assert [p["value"] for p in ctx.points] == [0, 25, 50, 100]
+    served = [p["value"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])]
+    assert sorted(served) == [0, 25, 50, 100]
+    assert served != [0, 25, 50, 100], "a 4-point sweep served in parameter order is not shuffled"
+
+    # the same seed gives the same order again
+    again = RunContext.create(ExperimentConfig.from_dict(forced_config_data))
+    assert run_pipeline(again, cfg) == schema.STATUS_COMPLETED
+    assert [p["value"] for p in sorted(again.points, key=lambda p: p["exec_order"])] == served
+
+
+def test_shuffle_can_be_turned_off(deployment, forced_config_data):
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 25, 50, 100]
+    forced_config_data["benchmark"]["shuffle_points"] = False
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert [p["value"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])] == [0, 25, 50, 100]

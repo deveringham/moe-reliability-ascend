@@ -14,13 +14,8 @@
 # 16.09.2026
 ###
 
-from datasets import load_dataset, get_dataset_config_names
+from datasets import load_dataset
 
-
-def get_mmlu_subjects():
-    all_subsets = get_dataset_config_names("cais/mmlu")
-    subjects = [s for s in all_subsets if s not in ["all", "auxiliary_train"]]
-    return subjects
 
 def get_data_mmlu(n_samples=100, shuffle_seed=100, subset="all"):
     
