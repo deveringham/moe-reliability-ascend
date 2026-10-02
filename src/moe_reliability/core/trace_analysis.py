@@ -344,4 +344,15 @@ def summarize_ascend(trace_dir, op_types=("GroupedMatmul",)):
         out["straggler_op"] = first["op_type"]
         out["straggler"] = first["straggler"]
         out["totals_max_over_mean"] = first["totals_max_over_mean"]
+        # Names the PyTorch-trace summary also uses, so figures and the results
+        # library read either kind of summary. max_over_mean is the per-rank
+        # totals statistic; straggler is the one that does not cancel.
+        out["max_over_mean"] = first["totals_max_over_mean"]
+        out["mean_over_ranks_us"] = first["mean_rank_total_us"]
+        out["per_rank_mean_us"] = first["per_rank_total_us"]
+        out["calls_per_rank"] = first["calls_per_rank"]
+        out["total_over_ranks_ms"] = sum(first["per_rank_total_us"]) / 1000.0
+        totals_us = first["per_rank_total_us"]
+        out["max_over_min"] = max(totals_us) / min(totals_us) if min(totals_us) else None
+        out["hottest_rank"] = first["ranks"][totals_us.index(max(totals_us))]
     return out

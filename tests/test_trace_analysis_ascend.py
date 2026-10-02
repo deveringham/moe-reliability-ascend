@@ -97,3 +97,12 @@ def test_summarize_ascend_exposes_flat_scalars(traces):
 def test_summarize_ascend_without_profiler_output(tmp_path):
     with pytest.raises(FileNotFoundError, match="no parsed Ascend profiler output"):
         ta.summarize_ascend(tmp_path)
+
+
+def test_summary_carries_the_pytorch_trace_key_names(traces):
+    """Figures and the results library read either kind of trace summary."""
+    s = ta.summarize_ascend(traces)
+    assert s["max_over_mean"] == pytest.approx(s["totals_max_over_mean"])
+    for key in ("mean_over_ranks_us", "per_rank_mean_us", "calls_per_rank",
+                "total_over_ranks_ms", "max_over_min", "hottest_rank"):
+        assert key in s, key

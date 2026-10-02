@@ -299,9 +299,9 @@ def trace_analysis_stage(ctx: RunContext, cfg: ExperimentConfig, force: bool = F
                     log(f"{label}: {message}")
                     continue
                 d = summary.get("decomposition") or {}
-                moe = (d.get("by_category_pct") or {}).get("moe")
+                moe = (d.get("compute_pct") or {}).get("moe")
                 strag = (summary.get("stragglers") or {}).get("GroupedMatmul") or {}
-                log(f"{label}: {len(summary['ranks'])} ranks, MoE {moe:.1f}% of kernel time, "
+                log(f"{label}: {len(summary['ranks'])} ranks, MoE {moe:.1f}% of compute, "
                     f"straggler {strag.get('straggler', float('nan')):.3f}x"
                     if moe is not None else f"{label}: analysed {len(summary['ranks'])} ranks")
             summary["trace_dir"] = p["trace_dir"]
