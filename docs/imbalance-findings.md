@@ -1,14 +1,16 @@
 # MoE Imbalance Findings
 
-2026-10-02
+2026-10-02 (updated with the Mixtral results)
 
 Local copy of the shared doc at
 https://claude.ai/code/artifact/3a7b75ec-2d4e-462f-b021-2babaa95ec70 — edits made
 there are not reflected here.
 
-Expert load imbalance did not measurably change serving latency on DeepSeek-V2-Lite
-under any manipulation tried: router bias 0 to 100, workload alpha 0.75 to 1.44, at
-4 and 8-way expert parallelism. The traces show the reason is not that imbalance
+Expert load imbalance did not measurably change serving latency under any
+manipulation tried, on either model: router bias 0 to 100 and workload alpha 0.75
+to 1.44 on DeepSeek-V2-Lite at 4 and 8-way expert parallelism, and alpha 0.78 to
+1.43 on Mixtral 8x7B at 8-way, where one expert sits on each rank and MoE is 70%
+of compute. The traces show the reason is not that imbalance
 fails to form. Stragglers do form, and a kernel efficiency gain from coarser expert
 grouping cancels them.
 
@@ -29,11 +31,18 @@ shows routing collapsed onto 6 of 64 experts, each taking exactly 1/6 of
 assignments, with the coefficient of variation across experts at 3.109 against 0.265
 for the base model. All six experts sit on one rank of four.
 
-Scope of the claim: DeepSeek-V2-Lite-Chat (64 routed experts, top-6, 26 MoE layers),
-vLLM Ascend 0.23.0, 2 to 8-way expert parallelism, batch 512, 300-request workloads
-served in a single wave. It does not extend to wider expert parallelism, to models
-with coarser expert granularity, or to deployments where MoE is a larger share of
-step time.
+Mixtral 8x7B is the harder test and gives the same answer. It has 8 experts and
+top-2, so on 8 NPUs each rank holds exactly one expert and rank load is expert load
+with no averaging, and MoE is about 70% of compute against 34% on DeepSeek. TPOT
+across six alphas spans 124.91 to 129.71 ms, 3.8%, with no ordering by imbalance;
+the straggler runs 1.021x to 1.067x and is not monotone in alpha (rho 0.71,
+p = 0.11). All 8 experts stay live at every alpha.
+
+Scope of the claim: DeepSeek-V2-Lite-Chat (64 routed experts, top-6, 26 MoE layers)
+at 2 to 8-way expert parallelism, and Mixtral 8x7B-Instruct (8 experts, top-2, 32
+layers) at 8-way; vLLM Ascend 0.23.0, batch 512, 300-request workloads served in a
+single wave. It does not extend to expert parallelism wider than 8, or to
+deployments where the decode step is bound differently.
 
 ## Experiments
 
@@ -50,6 +59,7 @@ All on DeepSeek-V2-Lite-Chat, batch 512, expert parallelism on. Run ids are unde
 | `20261001-170127` trace-check | profiled bias 0 vs 100 | 4 | Rank 0 at 6.7x the GEMM work of others, yet still half the balanced case's per-rank time |
 | `20261001-172617` alpha-repeats | alpha with prompt repeats, all 64 experts live | 4 | No effect. Straggler 1.036x → 1.055x |
 | `20261001-222102` alpha-repeats-npu8 | the same workloads at 8-way EP | 8 | No effect. Straggler 1.052x → 1.088x |
+| `20261001-233545` mixtral-alpha | the same sweep on Mixtral 8x7B, one expert per rank | 8 | No effect. TPOT 124.9–129.7 ms, straggler 1.021x–1.067x and not monotone, MoE 70% of compute |
 
 Two 8-NPU runs before the last one were discarded: another user's job took NPUs 4–7
 mid-run, both hung, and the contended readings were inflated throughout — one point
@@ -61,6 +71,8 @@ The shared doc carries this as a chart; the underlying values are below. Source:
 profiler `kernel_details.csv`, 6 workload alphas x 2 expert-parallel widths,
 identical workloads.
 
+DeepSeek, by expert-parallel width:
+
 | Effective alpha | Straggler, 4 ranks | Straggler, 8 ranks |
 | --- | --- | --- |
 | 0.745 | 1.044x | 1.052x |
@@ -70,11 +82,30 @@ identical workloads.
 | 1.441 | 1.055x | 1.088x |
 | 1.443 | 1.051x | 1.087x |
 
+Mixtral at 8 ranks, one expert each:
+
+| Effective alpha | Straggler | TPOT ms | MoE % of compute |
+| --- | --- | --- | --- |
+| 0.778 | 1.032x | 124.91 | 70.0 |
+| 0.813 | 1.021x | 128.00 | 66.5 |
+| 1.000 | 1.056x | 125.90 | 70.6 |
+| 1.221 | 1.055x | 126.58 | 70.1 |
+| 1.339 | 1.033x | 129.71 | 66.9 |
+| 1.428 | 1.067x | 127.27 | 70.1 |
+
 The metric pairs each GroupedMatmul call across ranks and sums the per-call maxima,
 divided by the mean rank total: what the layers actually waited for. Per-rank totals
 on the same data read 1.004x to 1.015x and show none of this. The two rightmost
-rows are near-replicates — effective alpha 1.441 and 1.443 — so the gap between them
-is the measurement's own scatter.
+DeepSeek rows are near-replicates — effective alpha 1.441 and 1.443 — so the gap
+between them is the measurement's own scatter.
+
+Doubling expert-parallel width raises the straggler and its sensitivity to alpha.
+Halving the experts per rank does not: Mixtral puts one expert on each rank against
+DeepSeek's eight, and lands in the same band. Alpha scales the *natural* CV, and
+Mixtral's is 0.141 against DeepSeek's 0.45, so asking for the same alpha asks for
+the same relative imbalance — the finer granularity and the lower baseline cancel.
+Rank load reaches 1.175x to 1.308x of the mean on Mixtral against 1.181x to 1.311x
+on DeepSeek.
 
 ## Why latency never moves
 
@@ -94,9 +125,17 @@ other three (105,710 us against ~15,800 us), yet its 105,710 us is still half th
 198,812 us that *every* rank spends in the balanced case. The busiest rank under
 maximum imbalance does less work than any rank under none.
 
-MoE is a large enough share of kernel time for this to have mattered: 44% at 4
-ranks, 34% at 8. The effect is absent because it is compensated, not because it is
-negligible.
+MoE is a large enough share of the work for this to have mattered, and the Mixtral
+run settles that objection. Of compute kernel time it is 34% on DeepSeek at 8 ranks
+and about 70% on Mixtral, whose top-2 of 8 routing puts most of the model's
+arithmetic in the experts. Latency is flat on both. The effect is absent because it
+is compensated, not because MoE is too small a part of the step.
+
+Those shares exclude communication. Measured as a share of *summed* kernel duration,
+HCCL work is 80 to 88%, but a collective's duration is mostly the time it sat
+blocked waiting for the other ranks, and kernels on different streams overlap, so
+that sum is not wall time. By wall time — merging each rank's kernel intervals — a
+profiled window runs at about 74% occupancy.
 
 One caveat on the bias-100 figures. The checkpoint recipe zero-centres every gate
 row and adds the bias to row 0, so the non-biased experts end up with near-identical
@@ -136,16 +175,22 @@ against repeats of 129.7 and 130.1; alpha 1.2 at 149.6 ms while host load spiked
 alpha 1.6 at 146.0 ms on 8 NPUs, which read 130.7 ms once the node was free.
 Measured contention cost is about 3% on TPOT and 31% on TTFT at load 16.
 
-Two smaller ones. Sweep points run in alpha order, so anything drifting during a run
-aliases onto the swept parameter — that is what manufactured an apparent threshold
-at alpha 1.2. And the first MoE layer reported `cv_nat` of 7.94, which is sqrt(63):
+**The standard figure plots the statistic that hides it.** `kernel_sweep.png` draws
+`max_over_mean`, the per-rank totals form, which reads 1.003x to 1.012x on the
+Mixtral traces. Read at face value it says the ranks are balanced to within about
+1%, while the paired-call straggler on the same traces is 1.067x. Anyone working
+from that figure alone will conclude there is nothing to find.
+
+Two smaller ones. Sweep points ran in alpha order until this was fixed, so anything
+drifting during a run aliased onto the swept parameter — that is what manufactured
+an apparent threshold at alpha 1.2. And the first MoE layer reported `cv_nat` of 7.94, which is sqrt(63):
 layer 0 of DeepSeek-V2-Lite is dense, routes everything to one expert, and inflates
 the reported workload MAE by roughly half at the extreme alphas. Effective alpha
 should be computed excluding it.
 
 ## Tooling fixed
 
-Twelve commits on branch `claude-fixes`, 90 tests passing (from 79). `nrun`, `npull`
+Fifteen commits on branch `claude-fixes`, 98 tests passing (from 79). `nrun`, `npull`
 and `.rsync-exclude` are in `.git/info/exclude`, so those three fixes are
 working-tree only and are not on the branch.
 
@@ -161,6 +206,10 @@ working-tree only and are not on the branch.
 | Host contention snapshot per point | Another user's job inflated points invisibly. Now flagged live, by pid |
 | Routed experts read from vLLM | The Hugging Face probe hooked the router module, which transformers 5.5.4 never calls — it computes the logits functionally from `gate.weight`. `validate_imbalance` raised KeyError and could not have worked on this stack. Removed 1199 lines |
 | Profiler calls bounded | `start_profiling` had no timeout where `stop_profiling` had 600s. One profiled point hung 55 minutes holding 8 NPUs |
+| `benchmark.shuffle_points` | Points were served in parameter order, so drift during a run aliased onto the parameter. Seeded, so it stays reproducible; the manifest keeps parameter order so plots are unaffected |
+| Bounded server startup | The readiness poll was a `while True` with no deadline: a server that came up but never answered held all eight NPUs for 50 minutes |
+| Ascend trace analysis | `trace_summary` read PyTorch-format traces this stack never writes, so it had only ever recorded an error. The new path reports wall time, compute shares, the straggler and the largest operators |
+| `npull` excludes raw traces | A profiled run writes a few hundred MB of `trace_view.json` per rank per point; pulling one filled a 90 GB workstation disk. Use `-a` to include them |
 
 Two of these were found by the tooling itself within minutes of being committed: the
 contention check fired on 3 of 9 points in the positive control, and repeats exposed
@@ -168,23 +217,19 @@ the false 136.2 ms reading.
 
 ## Open questions
 
-1. **Wider expert parallelism.** The straggler scales with it: for the same
-   workloads the busiest rank carries 1.04x the mean at 2 ranks, 1.13x at 4, 1.31x
-   at 8 and a predicted 1.63x at 16. Sixteen ranks would reach bias-100 levels of
-   rank imbalance with all 64 experts still live, which is the one regime where the
-   straggler might outrun the efficiency gain.
-2. **Coarser expert granularity.** DeepSeek-V2-Lite is close to the least favourable
-   case — 64 experts, top-6, so 16 per rank at 4-way EP and heavy averaging. Mixtral
-   8x7B is 8 experts, top-2: 2 per rank, where averaging suppresses imbalance by
-   about 1.4x instead of 5.6x. `forced_imbalance.toml` already defaults to Mixtral.
+1. **Wider expert parallelism.** The one lever still untested, and the only one
+   that raised the straggler so far: for the same workloads the busiest rank carries
+   1.04x the mean at 2 ranks, 1.13x at 4, 1.31x at 8 and a predicted 1.63x at 16.
+   Sixteen ranks would reach bias-100 levels of rank imbalance with every expert
+   still live.
+2. **Coarser expert granularity: answered, and it is not the lever.** Mixtral puts
+   one expert on each rank instead of eight and changes nothing, because alpha is
+   relative to a natural CV that is three times lower. To make granularity bite you
+   would have to drive absolute CV, not alpha.
 3. **Does EPLB change anything?** `server.enable_eplb` exists, so somebody expected
    imbalance to cost something. Running high imbalance with it on and off is a
    direct test, and a null there would be a strong result in itself.
-4. **Where the step time actually goes.** MoE is 34–44% of kernel time, and an 8.8%
-   straggler in it does not surface in TPOT. Worth decomposing the decode step —
-   attention, communication, scheduler — to establish what the binding constraint
-   is.
-
-Still unfixed in the pipeline: sweep points run in alpha order (randomising would
-decorrelate time from the swept parameter), and `start_vllm_server`'s readiness poll
-is a `while True` with no deadline, which is what hung one 8-NPU run for 50 minutes.
+4. **Where the step time actually goes.** The traces now report it: about 74%
+   occupancy by wall time, with collectives dominating summed kernel duration
+   because they block. Worth separating transfer from wait inside the collectives,
+   which is what would say whether a straggler can ever surface as latency here.

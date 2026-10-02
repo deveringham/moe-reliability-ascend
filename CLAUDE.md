@@ -98,11 +98,14 @@ Anything not in the above category.
 
 Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 
-- **The headline is a null.** Expert imbalance does not change latency on
-  DeepSeek-V2-Lite at 2–8 way expert parallelism, over router bias 0–100 and
-  workload alpha 0.75–1.44. Stragglers do form, but concentrating tokens makes
-  the fused-MoE GEMM enough cheaper per call to cancel them. Do not re-run that
-  ground without a reason.
+- **The headline is a null**, on both models tested: DeepSeek-V2-Lite at 2–8 way
+  expert parallelism over router bias 0–100 and alpha 0.75–1.44, and Mixtral
+  8x7B at 8-way (one expert per rank, MoE 70% of compute) over alpha 0.78–1.43.
+  Stragglers do form, but concentrating tokens makes the fused-MoE GEMM enough
+  cheaper per call to cancel them. Do not re-run that ground without a reason.
+- **Alpha is relative to each model's natural CV**, so equal alpha on two models
+  is equal *relative* imbalance, not equal rank load. That is why Mixtral's one
+  expert per rank behaves like DeepSeek's eight.
 - **Set `benchmark.repeats` above 1.** It is the only noise floor. Three single
   points looked like effects this session and dissolved under replication.
 - **Per-rank totals hide stragglers.** `trace_max_over_mean` sums each rank's
