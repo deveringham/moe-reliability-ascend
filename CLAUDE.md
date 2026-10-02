@@ -123,6 +123,9 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 - Points record a `host_before`/`host_after` snapshot and warn when another
   process shares the NPUs. Check it before trusting a comparison: a neighbouring
   job costs ~3% TPOT and ~31% TTFT, and inflated a whole 8-NPU sweep.
-- Sweep points run in parameter order, so anything drifting during a run aliases
-  onto the swept parameter. `start_vllm_server`'s readiness poll has no deadline
-  and can hang holding every NPU. Both still unfixed.
+- Sweep points are served in a seeded random order (`benchmark.shuffle_points`,
+  on by default), so anything drifting during a run no longer aliases onto the
+  swept parameter. The recorded `execution_order` says what ran when. Turn it
+  off only to reproduce an older run's ordering.
+- `start_vllm_server`'s readiness poll is bounded by `startup_timeout` (1800s)
+  and raises rather than hanging on to every NPU.
