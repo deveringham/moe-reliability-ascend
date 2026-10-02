@@ -106,3 +106,47 @@ def test_summary_carries_the_pytorch_trace_key_names(traces):
     for key in ("mean_over_ranks_us", "per_rank_mean_us", "calls_per_rank",
                 "total_over_ranks_ms", "max_over_min", "hottest_rank"):
         assert key in s, key
+
+
+@pytest.fixture
+def waiting_traces(tmp_path):
+    """Three ranks on one collective, with rank 2 always arriving last.
+
+    Every rank leaves the collective together, so rank 2's short duration is the
+    transfer and the other two are blocked for the difference. Compute is equal
+    across ranks, which is the case worth separating: all of the spread in busy
+    time is waiting.
+    """
+    ops = [("GroupedMatmul", 2, 20.0)]
+    for rank, waits in ((0, (40.0, 60.0)), (1, (50.0, 50.0)), (2, (10.0, 10.0))):
+        _rank_dir(tmp_path, rank, ops=ops,
+                  kernels=[("GroupedMatmul", 100.0, 10.0), ("hcom_allReduce_", 200.0, waits[0]),
+                           ("GroupedMatmul", 400.0, 10.0), ("hcom_allReduce_", 500.0, waits[1])])
+    return tmp_path
+
+
+def test_collective_wait_splits_transfer_from_blocking(waiting_traces):
+    w = ta.collective_wait(waiting_traces, "hcom_allReduce_")
+    assert w["ranks"] == [0, 1, 2] and w["calls_per_rank"] == 2
+    # the last arriver's duration is the transfer: 10 + 10
+    assert w["transfer_us"] == pytest.approx(20.0)
+    # everything above that floor is blocked time, per rank
+    assert w["per_rank_wait_us"] == pytest.approx([80.0, 80.0, 0.0])
+    # 160 of the 220us summed across ranks (100 + 100 + 20) is waiting, not transfer
+    assert w["wait_pct"] == pytest.approx(100.0 * 160.0 / 220.0)
+
+
+def test_collective_wait_names_the_rank_the_others_wait_for(waiting_traces):
+    w = ta.collective_wait(waiting_traces, "hcom_allReduce_")
+    assert w["last_arriver_counts"] == [0, 0, 2]
+    assert w["pace_setter_rank"] == 2
+    assert w["pace_setter_share"] == pytest.approx(1.0)  # paces every call
+
+
+def test_summary_finds_the_dominant_collective_without_being_told(waiting_traces):
+    out = ta.summarize_ascend(waiting_traces)
+    assert out["collective_op"] == "hcom_allReduce_"
+    assert out["pace_setter_rank"] == 2
+    assert out["collective_wait_pct"] == pytest.approx(100.0 * 160.0 / 220.0)
+    # idle is reported too, as the complement of occupancy
+    assert 0.0 < out["occupancy_min"] <= out["occupancy_mean"] <= 1.0

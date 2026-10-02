@@ -108,6 +108,15 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   expert per rank behaves like DeepSeek's eight.
 - **Set `benchmark.repeats` above 1.** It is the only noise floor. Three single
   points looked like effects this session and dissolved under replication.
+- **Summed collective duration is ~95% waiting, not transfer.** `collective_wait`
+  splits it: a collective ends for all ranks together, so the last arriver's
+  duration bounds the transfer and every other rank's excess is blocked time.
+  Treating the 71-78% "communication" in a step decomposition as communication
+  cost overstates it by roughly twenty times.
+- **The lowest-occupancy rank is the bottleneck, not a victim** (30 of 30 points).
+  Ranks that arrive early wait *inside* a collective kernel and so count as busy,
+  which inverts the obvious reading. One rank paces each server instance, it is a
+  different rank every run, and it is unrelated to alpha.
 - **Per-rank totals hide stragglers.** `trace_max_over_mean` sums each rank's
   kernel time, which equalises when the busiest rank differs per layer: it read
   1.004x where per-call pairing read 1.088x. Pair calls across ranks and sum the

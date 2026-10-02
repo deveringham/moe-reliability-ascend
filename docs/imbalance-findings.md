@@ -215,6 +215,70 @@ Two of these were found by the tooling itself within minutes of being committed:
 contention check fired on 3 of 9 points in the positive control, and repeats exposed
 the false 136.2 ms reading.
 
+## Idle time: the ranks wait far more than they differ
+
+Prompted by a question about whether imbalance shows up as device idle time or
+transient spikes rather than mean latency. Neither does, but looking turned up
+something larger. Computed offline over 30 profiled points already on disk -
+DeepSeek-V2-Lite at 4 and 8 ranks, Mixtral at 8, alphas 0.5 to 2.0.
+
+**About 95% of collective time is waiting, not transfer.** `hcom_allReduce_` is
+66.6 s of the 87 s of summed kernel duration in a typical point. Splitting it by
+`collective_wait` - a collective ends for every rank together, so the last rank
+to arrive waits least and its duration bounds the transfer, while every other
+rank's excess is blocked time:
+
+```
+wait share of collective duration: mean 94.9%   range 92.7% - 96.8%   n = 30
+```
+
+So the 71-78% "communication" in the step decomposition is almost entirely one
+rank waiting for another; actual data movement is around 3-4% of summed kernel
+time. Any reading of an MoE profile that treats summed collective duration as
+communication cost is wrong by roughly twenty times.
+
+**One rank paces each server instance, and it is a different rank every time.**
+In most points a single rank is the last to arrive for 60-98% of all collectives
+(`pace_setter_share` 0.54 to 0.98). Which rank it is changes between runs of an
+identical configuration, so it is not topology: rank 0 in one point, rank 3 in
+the next.
+
+**The near-idle rank is the bottleneck, not a victim.** Occupancy per rank spans
+0.18 to 0.90 within a single point, and the rank with the lowest occupancy is the
+pace-setter in **30 of 30 points**. The inversion is the whole point: a rank that
+looks idle is the one everyone else is blocked on, because the ranks that arrive
+early spend the wait inside a collective kernel and therefore count as busy.
+`busy_max_over_mean` reads about 1.33 at 4 ranks and 1.16 at 8, against a
+fused-MoE straggler of 1.026.
+
+**It has nothing to do with imbalance.** `busy_max_over_mean` shows no alpha
+dependence (r = -0.02, +0.05, -0.28 across the three sweeps with enough points),
+the wait share is flat across alpha, and fused-MoE time per rank matches to 0.5%
+in every point. Whatever makes one rank late, it is not its share of expert work.
+
+This gives the headline null a mechanism it did not have. Imbalance is invisible
+twice over: a ~20% skew in expert tokens becomes only a ~2.6% skew in fused-MoE
+time, and that 2.6% is then buried under a ~33% asymmetry in waiting caused by
+something else entirely. The step is gated by collective sync, and the sync is
+paced by an arbitrary rank.
+
+Tails were checked at the same time and show nothing either. TPOT p99 and max
+track the mean, and their correlation with alpha changes sign across runs
+(+0.54, +0.17, -0.09, +0.58, -0.40, +0.52); the positive cases are exactly the
+early runs served in alpha order or under a neighbouring job. One structural
+effect did appear, independent of alpha: p99 sits 3.5% above the mean at 4 ranks
+and 12.6% at 8, so tail inflation grows with expert-parallel degree.
+
+Caveats. The split assumes a collective ends for all ranks at once, so with a
+pipelined ring implementation the per-call minimum is an upper bound on wait and
+a lower bound on transfer - the ratio is extreme enough that the conclusion holds,
+but 94.9% is not a precise figure. Within-request spikes remain unmeasured: TPOT
+averages over a request's decode steps and we record no inter-token latencies, so
+a single slow step is smeared out. And `trace_active_iterations = 2` does not
+bound the profiler window as its name suggests; the spans are ~34 s, essentially
+the whole serving period, which is what made this analysis possible but should be
+understood before relying on the option.
+
 ## EPLB: it works, and it buys nothing here
 
 Run 2026-10-02, grid `eplb-eval`, DeepSeek-V2-Lite at 4-way expert parallelism,
