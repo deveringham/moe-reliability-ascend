@@ -101,11 +101,16 @@ touches hardware, which goes through `./nrun`.
    do not route identically, as ~2% of prompt-token assignments flip, but the
    flips are symmetric, and pooled drift between replays is ~80x below
    different prompts. Decode routing diverges and must be excluded.
-3. **Wider expert parallelism.** The one lever that has raised the straggler:
+3. **Serving regime: answered for 4 NPUs** ([regime-findings.md](regime-findings.md),
+   2026-10-05). Prefill is the one regime where imbalance costs kernel time (the hot
+   rank's GEMMs run 1.6x slower at bias 100, above the GEMM ridge point), but GEMMs
+   are 10-16% of a step and the step lengthens by only 1.5-5%. Decode stays a null
+   because its GEMMs are memory-bound. Graph mode does not amplify it.
+4. **Wider expert parallelism.** The one lever that has raised the straggler:
    1.04x at 2 ranks, 1.13x at 4, 1.31x at 8, extrapolating to 1.63x at 16. Tail
    inflation also grows with rank count, independent of alpha - p99 sits 3.5%
    above the mean at 4 ranks and 12.6% at 8.
-4. **EPLB at a realistic cadence.** Our intervals were cut from 600+50 to 50+10
+5. **EPLB at a realistic cadence.** Our intervals were cut from 600+50 to 50+10
    to make it fire inside a point at all, which leaves the weight transfer
    occupying about a third of every cycle. That overstates its overhead and may
    explain why realised imbalance (1.139) never approaches predicted (1.007).
