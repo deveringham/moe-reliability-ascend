@@ -97,6 +97,10 @@ touches hardware, which goes through `./nrun`.
    topic drives routing content and length does not. Replaying a fixed set of
    prompts compares routing on identical inputs and removes the confound by
    construction rather than statistically.
+   Measured since ([drift-findings.md](drift-findings.md)): identical prompts
+   do not route identically, as ~2% of prompt-token assignments flip, but the
+   flips are symmetric, and pooled drift between replays is ~80x below
+   different prompts. Decode routing diverges and must be excluded.
 3. **Wider expert parallelism.** The one lever that has raised the straggler:
    1.04x at 2 ranks, 1.13x at 4, 1.31x at 8, extrapolating to 1.63x at 16. Tail
    inflation also grows with rank count, independent of alpha - p99 sits 3.5%

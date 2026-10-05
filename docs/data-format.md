@@ -120,6 +120,16 @@ One JSON object per line, one line per captured prompt:
 
 `Run.activations()` returns the expert id arrays as `numpy.int16` arrays.
 
+Records captured before 2026-10-05 split the two arrays in the wrong place:
+`prompt_routed_experts` holds the first `num_output_tokens` (100) prompt tokens,
+and `routed_experts` holds the rest of the prompt followed by the generated
+tokens. Their concatenation is correct. Anything that pools the two (workload
+construction, checkpoint validation, `drift.record_histograms` with the default
+`include_prefill=True`) is unaffected. For prompt-only or decode-only routing,
+concatenate and re-split at `num_input_tokens`. The concatenation covers
+`num_input_tokens + num_output_tokens - 1` tokens: the final generated token is
+never fed back, so it has no routing.
+
 ## `workloads/workloads_repeats<R>.json`
 
 | field | description |

@@ -189,9 +189,14 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
         choice = response.choices[0]
         routed_experts = decode_routed_experts(getattr(choice, "routed_experts", None))
         prompt_routed_experts = decode_routed_experts(getattr(response, "prompt_routed_experts", None))
-        num_input_tokens = response.usage.completion_tokens
-        num_output_tokens = response.usage.prompt_tokens
+        num_input_tokens = response.usage.prompt_tokens
+        num_output_tokens = response.usage.completion_tokens
 
+        # The server returns one array over prompt and generated tokens; split it
+        # at the prompt length. Records captured before 2026-10-05 split at the
+        # completion count instead, so their prompt_routed_experts is always
+        # max_new_tokens long. Their concatenation is still correct: re-split at
+        # num_input_tokens to recover the two parts.
         if prompt_routed_experts is None and routed_experts is not None and routed_experts.shape[0] > num_input_tokens:
             prompt_routed_experts = routed_experts[:num_input_tokens]
             routed_experts = routed_experts[num_input_tokens:]
@@ -201,8 +206,8 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
             "prompt_id": prompt_idx,
             "ttft": None, # Don't report times when recording expert activations, as they are not valid
             "tpot": None,
-            "num_output_tokens": num_input_tokens,
-            "num_input_tokens": num_output_tokens,
+            "num_output_tokens": num_output_tokens,
+            "num_input_tokens": num_input_tokens,
             "total_time": end_time - start_time,
             # [gen_len, n_moe_layers, top_k] and [prompt_len, n_moe_layers, top_k]
             "routed_experts": routed_experts,
