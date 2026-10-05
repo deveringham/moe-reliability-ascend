@@ -1,0 +1,57 @@
+# Traces for mixtral_prefill_alpha.toml: straggler, MoE share of compute, and
+# how much of a prefill step the critical-path GEMM is, per alpha.
+#
+# Reuses the timing run's workloads, so both see identical prompts. A
+# 2000-request prefill-only point is only ~80 forward passes at a 4096-token
+# budget, so the profiler window opens at iteration 30 rather than the default
+# 100, which it would never reach.
+#
+#   ./nrun -t mixprof 'uv run moe-reliability run configs/examples/mixtral_prefill_profiled.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "mixtral-prefill-profiled"
+description = "Mixtral 8x7B, profiled, prefill-only, alpha 0.5 / 1.0 / 2.0, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[activations]
+n_samples = 1500
+
+[workloads]
+reuse_workloads_from = "20261005-144149_synthetic_mixtral_npu4_bs512_mixtral-prefill-alpha"
+target_alphas = [0.5, 1.0, 2.0]
+target_prompt_lengths = [2000]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [10]
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 2000
+repeats = 1
+enable_profiling = true
+separate_profiling_run = true
+trace_active_iterations = 2
+trace_start_iteration = 30
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = true
+trace_summary = true

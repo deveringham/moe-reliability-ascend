@@ -105,6 +105,7 @@ Stage 3: benchmarking of each sweep point.
 | `enable_profiling` | bool | `true` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
+| `trace_start_iteration` | int | `100` | Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80. |
 | `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
 
 ### `[analysis]`
@@ -221,6 +222,7 @@ Benchmarking of each imbalance level.
 | `enable_profiling` | bool | `false` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
+| `trace_start_iteration` | int | `100` | Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80. |
 | `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
 
 ### `[analysis]`

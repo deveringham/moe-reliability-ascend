@@ -174,6 +174,7 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
            "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
+    Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
 ))
@@ -196,6 +197,7 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
            "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
+    Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
 ))
@@ -479,6 +481,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     positive("client", "concurrency_limit")
     positive("client", "n_warmup_samples", allow_zero=True)
     positive("benchmark", "trace_active_iterations")
+    positive("benchmark", "trace_start_iteration")
 
     etype = cfg["experiment"]["type"]
     probe = cfg["model"]["probe"]

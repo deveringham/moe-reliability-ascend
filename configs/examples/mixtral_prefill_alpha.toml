@@ -1,0 +1,58 @@
+# Natural-routing imbalance on Mixtral 8x7B, prefill-only, 4 NPUs.
+#
+# On DeepSeek-V2-Lite the cost of imbalance is capped because expert GEMMs are
+# only 10-16% of a prefill step's wall time (docs/regime-findings.md). Mixtral
+# is the configuration on 4 NPUs most likely to lift that cap:
+#   - two experts per rank, so routing skew is rank skew with little averaging;
+#   - top-2 of 8 gives ~1,000 tokens per expert per 4096-token step, far past
+#     the GEMM ridge point (~200), so time should track tokens;
+#   - experts are ~20x larger than DeepSeek's (176M against 8.7M parameters)
+#     and MoE is ~70% of compute.
+# Eager mode, as in the DeepSeek prefill traces, so the two compare directly.
+#
+# Workloads are rebuilt from the 8-NPU run's 1500 activation records at 2000
+# requests: its own 300-request workloads are only ~12 prefill steps.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/mixtral_prefill_alpha.toml'
+#   ./nrun -t mixtral 'uv run moe-reliability run configs/examples/mixtral_prefill_alpha.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "mixtral-prefill-alpha"
+description = "Mixtral 8x7B alpha 0.5 / 1.0 / 2.0, prefill-only, 4 repeats, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[activations]
+n_samples = 1500
+reuse_activations_from = "20261001-233545_synthetic_mixtral_npu8_bs512_mixtral-alpha"
+
+[workloads]
+target_alphas = [0.5, 1.0, 2.0]
+target_prompt_lengths = [2000]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [10]
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 2000
+repeats = 4
+enable_profiling = false
+save_request_metrics = true

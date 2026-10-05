@@ -25,6 +25,12 @@ does not amplify the effect.
 Decode, the regime of every earlier sweep, remains a null, now explained by the
 GEMM regime rather than only observed.
 
+**On Mixtral 8x7B the structure would pass imbalance through, but natural
+traffic does not create it.** Expert GEMMs are 40-45% of a Mixtral prefill step,
+four times DeepSeek's share. Natural-routing workloads, though, move the rank
+straggler only from 1.11x to 1.14x, and prefill throughput stays flat to within
+1%.
+
 ## Why prefill and not decode: the GEMM regime
 
 For a bf16 DeepSeek-V2-Lite expert, arithmetic intensity is roughly the number
@@ -99,6 +105,44 @@ Effects are order-adjusted (bias and execution order fitted together).
   tokens/s.** That fits a step whose time grows with tokens throughout, not
   only in the GEMMs.
 
+
+## Mixtral 8x7B: the cap lifts, but natural routing does not skew enough
+
+Same deployment shape (4 NPUs, eager, prefill-only, 4096-token budget), two
+experts per rank, natural-routing workloads of 2000 requests built from the
+1500 recorded MMLU prompts of the 8-NPU run. The workload pool reached
+effective alphas of only 0.85, 1.00 and 1.20 against targets of 0.5-2.0.
+
+| Prefill, 4096 budget, eager | DeepSeek bias 0 | Mixtral alpha 0.85 | alpha 1.00 | alpha 1.20 |
+|---|---|---|---|---|
+| MoE share of compute | 47% | 80% | 80% | 79% |
+| Critical-path GEMM / wall | 9.5% | 41.9% | 39.8% | 45.1% |
+| Rank occupancy | 68% | 88% | 83% | 88% |
+| GroupedMatmul straggler (paired calls) | 1.07x | 1.111x | 1.106x | 1.143x |
+| Per-rank totals, max / mean | 1.013x | 1.014x | 1.016x | 1.022x |
+
+- **The structural cap lifts.** Expert GEMMs are 40-45% of a Mixtral prefill
+  step, four times DeepSeek's share, and the ranks are 83-88% occupied. A
+  rank carrying substantially more tokens would lengthen the step by a large
+  fraction of its GEMM increase.
+- **Natural routing does not create that skew.** From alpha 0.85 to 1.20 the
+  straggler moves from 1.11x to 1.14x, at most ~1.3% on the step. Two experts
+  per rank and top-2 routing average most of the expert-level skew away at
+  rank level.
+- **Throughput is flat.** Sustained prefill throughput (90th percentile of
+  2.5 s bins) is ~16.3k, 16.3k and 16.2k tokens/s at the three alphas
+  (`20261005-144149`, 4 repeats each, mostly without a neighbour).
+- **Slow episodes are external.** Five of 15 points dropped from ~15k to 6-9k
+  tokens/s partway through and sometimes recovered. They are not tied to a
+  workload (they hit every alpha across the two runs) and host load stayed low;
+  before/after snapshots are too coarse to catch their cause. A per-point
+  throughput timeline (`end_s` binned) is the way to spot them.
+
+This changes the question for detection on 4 NPUs. The deployment can turn
+rank imbalance into latency once expert GEMMs dominate the step, which they do
+on Mixtral. The limiting factor is whether traffic ever skews rank load enough.
+Natural MMLU traffic does not.
+
 ## Method notes
 
 - **Blocked shuffles fixed.** Every run here put all bias-100 repeats before any
@@ -141,22 +185,23 @@ Effects are order-adjusted (bias and execution order fitted together).
 | `20261005-111916` mixed16k-replicate | 100 tokens, 16384 budget, 5 repeats |
 | `20261005-120755`, `-123138` graph-regime-000, -001 | Graph mode, prefill-only / 100 tokens, 4 repeats |
 | `20261005-140350` graph-prefill-profiled | Graph traces, prefill, bias 0 / 100 |
+| `20261005-144149` mixtral-prefill-alpha | Mixtral, prefill-only, alpha 0.5 / 1.0 / 2.0 (effective 0.85-1.20), 4 repeats |
+| `20261005-151011` mixtral-prefill-profiled | Mixtral traces, same workloads |
 
 Analysis: `scripts/regime_summary.py <grid>`; trace normalisation is inline in
 this session and should move into the results library.
 
 ## Open
 
-1. **A larger expert on 4 NPUs.** Mixtral 8x7B puts two experts per rank, about
-   1,000 tokens per expert per prefill step, with experts ~20x larger than
-   DeepSeek's (176M against 8.7M parameters) and MoE about 70% of compute. That is the configuration most
-   likely to make GEMMs a large share of the step. Its natural-routing alpha
-   workloads exist from the 8-NPU run.
-2. **What fills the rest of the step.** At ~3.5 ms per GEMM call against
-   0.3-0.6 ms of GEMM, most of a prefill step is collective waiting and idle.
-   The pace-setter question from 2026-10-02 applies here too, and it caps
-   everything above.
-3. **Natural imbalance in prefill.** `configs/examples/prefill_alpha.toml` is
-   ready. Given a 1.5-5% ceiling under total collapse, natural alpha (1.1-1.3x
-   rank skew) is not expected to be measurable at the latency level on this
-   model.
+1. **A controlled rank skew on Mixtral.** The structure now passes rank
+   imbalance through; what is missing is an instrument that creates it. The
+   forced-imbalance recipe collapses routing onto experts 0 and 1, both on rank 0,
+   which is a valid extreme positive control (rank 0 takes ~4x its share of
+   expert work) but cannot grade the skew. A graded control needs a recipe that
+   adds a logit bias toward one rank's experts without zero-centring the routers.
+2. **What fills the rest of a DeepSeek step.** At ~3.5 ms per GEMM call against
+   0.3-0.6 ms of GEMM, most of a DeepSeek prefill step is collective waiting and
+   idle. The pace-setter question from 2026-10-02 applies here too.
+3. **Natural imbalance in DeepSeek prefill.** `configs/examples/prefill_alpha.toml`
+   is ready but, given a 1.5-5% ceiling under total collapse, is not expected to
+   be measurable at the latency level.

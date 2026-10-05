@@ -358,7 +358,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   n_gpus=1, n_warmup_samples=5,
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
                                   enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
-                                  trace_dir=None, trace_active_iterations=2, port=8000):
+                                  trace_dir=None, trace_active_iterations=2, trace_start_iteration=100,
+                                  port=8000):
     server_process = None
     results = None
     try:
@@ -373,7 +374,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                            enable_prefix_caching=enable_prefix_caching, enable_bnb=enable_bnb,
                                            eplb=eplb,
                                            enable_expert_capture=enable_expert_capture,
-                                           trace_dir=trace_dir, trace_start_iteration=100,
+                                           trace_dir=trace_dir, trace_start_iteration=trace_start_iteration,
                                            trace_active_iterations=trace_active_iterations)
 
         # Start client

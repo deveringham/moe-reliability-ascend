@@ -138,6 +138,7 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         enable_expert_capture=enable_expert_capture,
         trace_dir=trace_dir,
         trace_active_iterations=cfg.benchmark.trace_active_iterations,
+        trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
     ))
 

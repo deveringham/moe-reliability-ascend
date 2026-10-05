@@ -121,3 +121,12 @@ def test_reference_mentions_every_key():
 def test_write_toml_helper(tmp_path, forced_config_data):
     path = write_toml(tmp_path / "c.toml", forced_config_data)
     assert ExperimentConfig.load(path).server.batch_size == 16
+
+
+def test_trace_start_iteration_defaults_and_overrides(forced_config_data):
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    assert cfg.benchmark.trace_start_iteration == 100
+    cfg = ExperimentConfig.from_dict(forced_config_data, ["benchmark.trace_start_iteration=30"])
+    assert cfg.benchmark.trace_start_iteration == 30
+    with pytest.raises(ConfigError, match="trace_start_iteration"):
+        ExperimentConfig.from_dict(forced_config_data, ["benchmark.trace_start_iteration=0"])
