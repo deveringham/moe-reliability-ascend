@@ -1,0 +1,47 @@
+# Graded rank skew: does any latency metric move as one rank's load rises?
+#
+# Router bias on rank 0's experts at logit offsets calibrated in
+# router_bias_calibration.toml (2026-10-05, 200 MMLU prompts per level):
+#
+#   offset             0      0.25   0.5    1      2      3
+#   DeepSeek busiest   1.02x  1.30x  1.66x  2.34x  3.45x  ~3.9x
+#   Mixtral busiest    1.01x  1.18x  1.37x  1.76x  2.62x  ~3.3x
+#
+# Every expert stays live up to offset 2, unlike the checkpoint recipe's
+# collapse. The grids run this for both models in prefill-only and 100-token
+# regimes; see configs/grids/router_bias_*.toml.
+
+[experiment]
+type = "forced_imbalance"
+name = "rbias-sweep"
+description = "Router bias on rank 0, offsets 0-3, three repeats in rounds, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.25, 0.5, 1, 2, 3]
+validate_imbalance = false
+
+[benchmark]
+n_samples = 3000
+repeats = 3
+enable_profiling = false
+save_request_metrics = true

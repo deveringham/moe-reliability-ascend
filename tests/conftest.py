@@ -80,13 +80,16 @@ class FakeDeployment:
         self.trace_format = trace_format
 
     def __call__(self, cfg, model_path, prompts, trace_dir, enable_expert_capture=False,
-                 eplb_record_path=None):
+                 eplb_record_path=None, server_env=None):
         from moe_reliability.pipelines.common import eplb_settings
 
         rng = np.random.default_rng(len(self.calls) + 1)
         self.calls.append({"model_path": model_path, "n_prompts": len(prompts), "trace_dir": trace_dir,
                            "capture": enable_expert_capture, "batch_size": cfg.server.batch_size,
-                           "eplb": eplb_settings(cfg, eplb_record_path)})
+                           "eplb": eplb_settings(cfg, eplb_record_path), "server_env": server_env})
+        bias = np.zeros(N_EXPERTS)
+        if server_env and "MOE_ROUTER_BIAS" in server_env:
+            bias = np.asarray(json.loads(server_env["MOE_ROUTER_BIAS"]), dtype=float)
         if model_path in self.fail_models:
             return None  # measure_vllm_throughput returns None when inference fails
         slowdown = 1.0 + (3.0 if "imbalance" in str(model_path) else 0.0)
@@ -100,6 +103,7 @@ class FakeDeployment:
                 hot = i % N_EXPERTS
                 probs = np.full(N_EXPERTS, 1.0)
                 probs[hot] = 6.0
+                probs = probs * np.exp(bias)  # a logit offset scales the selection odds
                 probs /= probs.sum()
 
                 def draw(n_tokens, probs=probs):

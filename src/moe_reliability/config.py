@@ -180,12 +180,22 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
-    Option("imbalance_levels", "list[number]", [0, 100], "Router bias added to expert 0 in every layer; "
-           "0 serves the unmodified model."),
+    Option("method", "str", "checkpoint", "How imbalance is injected. checkpoint writes a modified model whose "
+           "routing collapses onto the lowest-numbered experts at any nonzero level (one useful setting: total "
+           "collapse). router_bias serves the unmodified model and adds the level to the router logits of the "
+           "experts in bias_target, a graded skew that keeps routing input-dependent.",
+           choices=("checkpoint", "router_bias")),
+    Option("imbalance_levels", "list[number]", [0, 100], "checkpoint: bias added to expert 0's router row. "
+           "router_bias: logit offset added to the targeted experts. 0 serves the unmodified model."),
+    Option("bias_target", "str", "rank:0", "router_bias only: 'rank:<r>' biases every expert placed on "
+           "expert-parallel rank r (contiguous placement, hardware.n_npus ranks); 'experts:<i>,<j>' biases "
+           "those experts."),
     Option("model_dir", "str", "models", "Directory for generated imbalanced checkpoints "
            "(reused across runs when present)."),
-    Option("validate_imbalance", "bool", False, "Measure expert load with Hugging Face inference before "
-           "benchmarking each checkpoint."),
+    Option("validate_imbalance", "bool", False, "Capture routed experts at every level before benchmarking "
+           "and record per-expert and per-rank load."),
+    Option("validation_samples", "int", 0, "Prompts for validation: 0 uses six fixed prompts, N > 0 the first "
+           "N MMLU prompts. Rank shares need a few hundred to be stable."),
 ))
 
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
@@ -513,6 +523,23 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
             errors.append("imbalance.imbalance_levels must be a non-empty list of numbers >= 0")
         if len(set(levels)) != len(levels):
             errors.append("imbalance.imbalance_levels contains duplicates")
+        if cfg["imbalance"]["validation_samples"] < 0:
+            errors.append("imbalance.validation_samples must be >= 0")
+        if cfg["imbalance"]["method"] == "router_bias":
+            from .router_bias import parse_target
+            try:
+                kind, ids = parse_target(cfg["imbalance"]["bias_target"])
+                if kind == "rank" and ids[0] >= cfg["hardware"]["n_npus"]:
+                    errors.append(f"imbalance.bias_target names rank {ids[0]} but hardware.n_npus = "
+                                  f"{cfg['hardware']['n_npus']}")
+            except ValueError as e:
+                errors.append(f"imbalance.bias_target: {e}")
+            if cfg["server"]["enable_eplb"]:
+                errors.append("imbalance.method = 'router_bias' assumes contiguous expert placement; "
+                              "EPLB moves experts between ranks, so a rank target would not stay on one rank")
+            if probe_family is None:
+                errors.append("imbalance.method = 'router_bias' needs the expert count: set model.probe "
+                              f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
         if cfg["imbalance"]["validate_imbalance"] and probe_family is None:
             errors.append("imbalance.validate_imbalance requires model.probe to be set explicitly "
                           f"(one of {list(PROBE_CHOICES[1:])}) for this model_id")

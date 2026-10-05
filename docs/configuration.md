@@ -206,9 +206,19 @@ Forced router imbalance.
 
 | key | type | default | description |
 |---|---|---|---|
-| `imbalance_levels` | list[number] | `[0, 100]` | Router bias added to expert 0 in every layer; 0 serves the unmodified model. |
+| `method` | str | `"checkpoint"` | How imbalance is injected. `checkpoint` writes a modified model whose routing collapses onto the lowest-numbered experts at any nonzero level (one useful setting: total collapse). `router_bias` serves the unmodified model and adds the level to the router logits of the experts in `bias_target`, a graded skew that keeps routing input-dependent. Choices: `checkpoint`, `router_bias`. |
+| `imbalance_levels` | list[number] | `[0, 100]` | `checkpoint`: bias added to expert 0's router row. `router_bias`: logit offset added to the targeted experts. 0 serves the unmodified model. |
+| `bias_target` | str | `"rank:0"` | `router_bias` only: `rank:<r>` biases every expert placed on expert-parallel rank r (contiguous placement, `hardware.n_npus` ranks); `experts:<i>,<j>` biases those experts. |
 | `model_dir` | str | `"models"` | Directory for generated imbalanced checkpoints (reused across runs when present). |
-| `validate_imbalance` | bool | `false` | Measure expert load with Hugging Face inference before benchmarking each checkpoint. |
+| `validate_imbalance` | bool | `false` | Capture routed experts at every level before benchmarking and record per-expert and per-rank load. |
+| `validation_samples` | int | `0` | Prompts for validation: 0 uses six fixed prompts, N > 0 the first N MMLU prompts. Rank shares need a few hundred to be stable. |
+
+The `router_bias` method is a vLLM general plugin (`moe_reliability.router_bias`,
+registered as an entry point, so run `uv sync` on the node after installing). The
+pipeline passes each level's bias vector to the server in `MOE_ROUTER_BIAS`, and
+the plugin adds it to the router logits in vllm-ascend's expert selection. Each
+point records its `server_env`, and validation records per-rank shares
+(`rank_share_mean`, `rank_max_over_mean`).
 
 ### `[benchmark]`
 

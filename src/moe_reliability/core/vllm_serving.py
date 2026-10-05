@@ -15,7 +15,7 @@ import numpy as np
 from openai import AsyncOpenAI
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, max_num_batched_tokens=4096, enforce_eager=True, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, max_num_batched_tokens=4096, enforce_eager=True, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800, extra_env=None):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -56,6 +56,8 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     # gated on additional_config.eplb_config.dynamic_eplb, and refuses to start
     # unless DYNAMIC_EPLB is also set in the environment.
     env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
     if eplb:
         cmd.extend(["--additional-config", json.dumps({"eplb_config": dict(eplb)})])
         env["DYNAMIC_EPLB"] = "true"
@@ -359,7 +361,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
                                   enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
                                   trace_dir=None, trace_active_iterations=2, trace_start_iteration=100,
-                                  port=8000):
+                                  port=8000, extra_env=None):
     server_process = None
     results = None
     try:
@@ -375,7 +377,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                            eplb=eplb,
                                            enable_expert_capture=enable_expert_capture,
                                            trace_dir=trace_dir, trace_start_iteration=trace_start_iteration,
-                                           trace_active_iterations=trace_active_iterations)
+                                           trace_active_iterations=trace_active_iterations,
+                                           extra_env=extra_env)
 
         # Start client
         client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")

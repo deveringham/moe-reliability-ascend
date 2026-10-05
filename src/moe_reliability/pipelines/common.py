@@ -114,7 +114,8 @@ def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
 
 def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[Any],
                        trace_dir: str | None, enable_expert_capture: bool = False,
-                       eplb_record_path: str | None = None) -> list[dict] | None:
+                       eplb_record_path: str | None = None,
+                       server_env: dict[str, str] | None = None) -> list[dict] | None:
     from ..core.vllm_serving import measure_vllm_throughput
 
     return asyncio.run(measure_vllm_throughput(
@@ -140,6 +141,7 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         trace_active_iterations=cfg.benchmark.trace_active_iterations,
         trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
+        extra_env=server_env,
     ))
 
 # Runs and records metrics for all pending sweep points
@@ -242,9 +244,11 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         # rearrangement that never fired from one that fired and changed nothing.
         eplb_rel = f"{label}_eplb_expert_map.json" if cfg.server.eplb_record_map else None
         eplb_path = str(ctx.abspath(eplb_rel)) if eplb_rel else None
+        # Per-point server environment, e.g. an injected router bias.
+        server_env = p.get("server_env") or None
         results = serve_and_measure(cfg, model_path, prompts,
                                     trace_dir=None if separate else trace_path,
-                                    eplb_record_path=eplb_path)
+                                    eplb_record_path=eplb_path, server_env=server_env)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -256,7 +260,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         if separate:
             log(f"{label}: profiling pass")
             if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
-                                 eplb_record_path=eplb_path) is None:
+                                 eplb_record_path=eplb_path, server_env=server_env) is None:
                 # The measurements stand on their own; only the traces are lost.
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
