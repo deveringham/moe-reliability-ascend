@@ -147,3 +147,21 @@ def test_hta_stage_and_plots(deployment, forced_config_data, results_dir, monkey
     assert all({"tpot", "ttft"} <= set(v) for v in T.values())
     plots.plot_moe_imbalance_overview(K, T)
     plt.close("all")
+
+
+def test_request_summary_reports_makespan_and_throughput():
+    from moe_reliability_results.metrics import summarize_requests
+
+    requests = [
+        {"ttft": 0.5, "tpot": 0.0, "num_input_tokens": 100, "num_output_tokens": 1,
+         "total_time": 1.0, "start_s": 0.0, "end_s": 1.0},
+        {"ttft": 1.5, "tpot": 0.0, "num_input_tokens": 300, "num_output_tokens": 1,
+         "total_time": 2.0, "start_s": 2.0, "end_s": 4.0},
+    ]
+    s = summarize_requests(requests)
+    assert s["makespan_s"] == pytest.approx(4.0)
+    assert s["input_tokens_per_s"] == pytest.approx(100.0)
+    # Points recorded before the offsets existed summarise without them.
+    old = summarize_requests([{k: v for k, v in r.items() if k not in ("start_s", "end_s")}
+                              for r in requests])
+    assert old["makespan_s"] is None and old["input_tokens_per_s"] is None

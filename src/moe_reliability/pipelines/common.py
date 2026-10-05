@@ -124,6 +124,8 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         max_new_tokens=cfg.client.max_new_tokens,
         max_model_len=cfg.server.max_model_len,
         batch_size=cfg.server.batch_size,
+        max_num_batched_tokens=cfg.server.max_num_batched_tokens,
+        enforce_eager=cfg.server.enforce_eager,
         concurrency_limit=cfg.client.concurrency_limit,
         gpu_memory_utilization=cfg.server.gpu_memory_utilization,
         n_gpus=cfg.hardware.n_npus,  # tensor-parallel size
@@ -145,14 +147,29 @@ def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, A
 
     Points are stored and plotted in parameter order, but serving them in that
     order aliases anything that drifts during a run - a neighbouring job, thermal
-    state, a cache filling - onto the swept parameter itself. Shuffling breaks
-    that correlation; the experiment seed keeps it reproducible.
+    state, a cache filling - onto the swept parameter itself.
+
+    Points are served in rounds, one per repeat, each holding every value once
+    in a random order. A single shuffle of all points can fall into blocks (all
+    of one value first), and with a shared seed every run of a grid falls into
+    the same blocks: on 2026-10-05 every run served all three bias-100 repeats
+    before any bias-0 one. Rounds keep each value spread evenly over the run.
+    The seed folds in the experiment name so runs of a grid are ordered
+    differently, and stays reproducible for a resume.
     """
     points = list(ctx.points)
     if not cfg.benchmark.shuffle_points or len(points) < 3:
         return points
-    random.Random(cfg.experiment.seed).shuffle(points)
-    return points
+    rng = random.Random(f"{cfg.experiment.seed}:{cfg.experiment.name}")
+    rounds: dict[int, list[dict[str, Any]]] = {}
+    for p in points:
+        rounds.setdefault(int(p.get("repeat") or 1), []).append(p)
+    order: list[dict[str, Any]] = []
+    for r in sorted(rounds):
+        batch = rounds[r]
+        rng.shuffle(batch)
+        order.extend(batch)
+    return order
 
 
 def _warn_if_eplb_cannot_fire(cfg: ExperimentConfig) -> None:

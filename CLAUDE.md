@@ -132,7 +132,7 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 - Points record a `host_before`/`host_after` snapshot and warn when another
   process shares the NPUs. Check it before trusting a comparison: a neighbouring
   job costs ~3% TPOT and ~31% TTFT, and inflated a whole 8-NPU sweep.
-- Sweep points are served in a seeded random order (`benchmark.shuffle_points`,
+- Sweep points are served in seeded random rounds, one per repeat (`benchmark.shuffle_points`,
   on by default), so anything drifting during a run no longer aliases onto the
   swept parameter. The recorded `execution_order` says what ran when. Turn it
   off only to reproduce an older run's ordering.

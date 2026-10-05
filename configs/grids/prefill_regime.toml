@@ -1,0 +1,21 @@
+# Where, if anywhere, does expert imbalance cost latency on 4 NPUs?
+#
+#   2 generation lengths x 2 token budgets = 4 runs
+#   each: bias 0 / 100 x 3 repeats = 6 points, 24 points in all
+#
+# max_new_tokens = 1 makes every request a pure prefill; 100 is the mixed
+# continuous-batching regime of every earlier sweep and is the in-session
+# control, expected flat. A larger forward-pass budget puts more tokens through
+# each expert per call, pushing further past the ridge, so if the roofline
+# account is right the bias-100 penalty in the prefill arm should grow with it.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/prefill_regime.toml --dry-run'
+#   ./nrun -t prefill 'uv run moe-reliability grid configs/grids/prefill_regime.toml'
+
+[grid]
+name = "prefill-regime"
+base = "../examples/prefill_poscontrol.toml"
+
+[matrix]
+"client.max_new_tokens" = [1, 100]
+"server.max_num_batched_tokens" = [4096, 16384]

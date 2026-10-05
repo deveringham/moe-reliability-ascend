@@ -49,7 +49,9 @@ vLLM server deployment.
 | `max_model_len` | int | `2048` | Maximum model context length. |
 | `gpu_memory_utilization` | float | `0.6` | Fraction of NPU memory vLLM may use (vLLM's --gpu-memory-utilization). |
 | `batch_size` | int | `512` | Maximum number of concurrently batched sequences (--max-num-seqs). |
+| `max_num_batched_tokens` | int | `4096` | Token budget of one forward pass (`--max-num-batched-tokens`). Sets how many tokens a prefill step carries, and so how many tokens each expert's GEMM sees; decode steps are bounded by `batch_size` instead. |
 | `enable_expert_parallel` | bool | `true` | Enable expert parallelism. |
+| `enforce_eager` | bool | `true` | Run the model eagerly (`--enforce-eager`). Eager mode leaves the NPUs idle between host-launched kernels, ~30% of a prefill step on 4 NPUs, which shrinks every kernel's share of the step; `false` lets vllm-ascend capture graphs. |
 | `enable_prefix_caching` | bool | `false` | Enable prefix caching. |
 | `enable_eplb` | bool | `false` | Enable vllm-ascend dynamic expert-parallel load balancing. Sets `additional_config.eplb_config.dynamic_eplb` and `DYNAMIC_EPLB` in the server environment; vLLM's own `--enable-eplb` does **not** reach the vllm-ascend implementation. |
 | `eplb_policy_type` | int | `2` | Rearrangement policy: `0` random, `1` DefaultEplb, `2` SwiftBalanceEplb, `3` FlashLB. |
@@ -99,7 +101,7 @@ Stage 3: benchmarking of each sweep point.
 | `workload_max_repeats` | int | `0` | Which workload set (max_repeats) to benchmark. |
 | `workload_prompt_length` | int | `1000` | Which workload size (target prompt length) to benchmark. |
 | `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
-| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `true` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
@@ -176,7 +178,9 @@ vLLM server deployment.
 | `max_model_len` | int | `2048` | Maximum model context length. |
 | `gpu_memory_utilization` | float | `0.6` | Fraction of NPU memory vLLM may use (vLLM's --gpu-memory-utilization). |
 | `batch_size` | int | `512` | Maximum number of concurrently batched sequences (--max-num-seqs). |
+| `max_num_batched_tokens` | int | `4096` | Token budget of one forward pass (`--max-num-batched-tokens`). Sets how many tokens a prefill step carries, and so how many tokens each expert's GEMM sees; decode steps are bounded by `batch_size` instead. |
 | `enable_expert_parallel` | bool | `true` | Enable expert parallelism. |
+| `enforce_eager` | bool | `true` | Run the model eagerly (`--enforce-eager`). Eager mode leaves the NPUs idle between host-launched kernels, ~30% of a prefill step on 4 NPUs, which shrinks every kernel's share of the step; `false` lets vllm-ascend capture graphs. |
 | `enable_prefix_caching` | bool | `false` | Enable prefix caching. |
 | `enable_eplb` | bool | `false` | Enable vllm-ascend dynamic expert-parallel load balancing. Sets `additional_config.eplb_config.dynamic_eplb` and `DYNAMIC_EPLB` in the server environment; vLLM's own `--enable-eplb` does **not** reach the vllm-ascend implementation. |
 | `eplb_policy_type` | int | `2` | Rearrangement policy: `0` random, `1` DefaultEplb, `2` SwiftBalanceEplb, `3` FlashLB. |
@@ -213,7 +217,7 @@ Benchmarking of each imbalance level.
 |---|---|---|---|
 | `n_samples` | int | `15000` | Number of MMLU prompts sent to each checkpoint. |
 | `repeats` | int | `1` | Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor. |
-| `shuffle_points` | bool | `true` | Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
+| `shuffle_points` | bool | `true` | Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter. |
 | `enable_profiling` | bool | `false` | Record PyTorch profiler traces on all workers. |
 | `separate_profiling_run` | bool | `true` | Benchmark each point twice when profiling: once unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a single profiled pass cannot provide both. |
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |

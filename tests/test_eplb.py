@@ -103,3 +103,19 @@ def test_recording_the_placement_sets_its_own_env_flag(launched):
     vllm_serving.start_vllm_server(
         "some/model", eplb={"dynamic_eplb": True, "expert_map_record_path": "/runs/p/map.json"})
     assert launched["env"]["EXPERT_MAP_RECORD"] == "true"
+
+
+def test_server_takes_the_forward_pass_token_budget(launched):
+    vllm_serving.start_vllm_server("some/model")
+    cmd = launched["cmd"]
+    assert cmd[cmd.index("--max-num-batched-tokens") + 1] == "4096"
+    vllm_serving.start_vllm_server("some/model", max_num_batched_tokens=16384)
+    cmd = launched["cmd"]
+    assert cmd[cmd.index("--max-num-batched-tokens") + 1] == "16384"
+
+
+def test_server_runs_eagerly_unless_told_otherwise(launched):
+    vllm_serving.start_vllm_server("some/model")
+    assert "--enforce-eager" in launched["cmd"]
+    vllm_serving.start_vllm_server("some/model", enforce_eager=False)
+    assert "--enforce-eager" not in launched["cmd"]

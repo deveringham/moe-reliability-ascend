@@ -15,7 +15,7 @@ import numpy as np
 from openai import AsyncOpenAI
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, max_num_batched_tokens=4096, enforce_eager=True, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -25,12 +25,11 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--max-model-len", str(max_model_len),
         "--gpu-memory-utilization", str(gpu_memory_utilization),
         "--max-num-seqs", str(batch_size), # Batch size is used to set max number of batched requests
-        "--max-num-batched-tokens", "4096", # Max number of tokens per forward pass is fixed based on hardware
+        "--max-num-batched-tokens", str(max_num_batched_tokens), # Token budget of one forward pass
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
         "--override-generation-config", '{"temperature": 0.0}',
-        "--enforce-eager",
         "--no-async-scheduling",
     ]
     
@@ -38,6 +37,9 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--profiler-config")
         cmd.append(f'{{"profiler": "torch", "torch_profiler_dir": "{trace_dir}", "active_iterations": {trace_active_iterations}, "delay_iterations": {trace_start_iteration}, "torch_profiler_with_stack": false}}')
     
+    if enforce_eager:
+        cmd.append("--enforce-eager")
+
     if enable_expert_parallel:
         cmd.append("--enable-expert-parallel")
 
@@ -286,9 +288,13 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
     semaphore = asyncio.Semaphore(concurrency_limit)
 
     # Wrapper function that acquires the semaphore before making the request
+    # Offsets from the batch start, so a point's makespan and throughput can be
+    # recovered: per-request TTFT is mostly queueing when every request is
+    # submitted at once, so the batch wall time is the cleaner prefill measure.
     async def rate_limited_measure_request(i, prompt):
         async with semaphore:
-            return await measure_request(
+            start_s = time.perf_counter() - batch_start_time
+            res = await measure_request(
                 client, 
                 model, 
                 i, 
@@ -299,6 +305,9 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
                 prompt_formatted=prompt_formatted,
                 capture_experts=capture_experts
             )
+            res["start_s"] = start_s
+            res["end_s"] = time.perf_counter() - batch_start_time
+            return res
     
     # Fire all requests
     tasks = [rate_limited_measure_request(i, prompt) for i, prompt in enumerate(prompts)]
@@ -344,7 +353,8 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 # - Run inference
 # - Return timing measurements
 async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
-                                  max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
+                                  max_model_len=1024, batch_size=256, max_num_batched_tokens=4096, enforce_eager=True,
+                                  gpu_memory_utilization=0.85,
                                   n_gpus=1, n_warmup_samples=5,
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
                                   enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
@@ -356,6 +366,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         server_process = start_vllm_server(model, port=port, seed=seed,
                                            max_model_len=max_model_len,
                                            batch_size=batch_size,
+                                           max_num_batched_tokens=max_num_batched_tokens,
+                                           enforce_eager=enforce_eager,
                                            gpu_memory_utilization=gpu_memory_utilization,
                                            n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
                                            enable_prefix_caching=enable_prefix_caching, enable_bnb=enable_bnb,

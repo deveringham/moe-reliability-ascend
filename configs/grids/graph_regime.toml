@@ -1,0 +1,27 @@
+# Does imbalance cost more once the eager-mode idle time is gone?
+#
+#   2 generation lengths = 2 runs, each bias 0 / 100 x 4 repeats = 8 points
+#
+# In eager mode a prefill step on 4 NPUs is ~30% idle between host-launched
+# kernels, and the critical-path MoE GEMM is only ~10% of wall time, so a 3.7x
+# GroupedMatmul straggler at bias 100 surfaced as ~+5% per step
+# (prefill_profiled, 2026-10-05). Graph mode removes most of the launch gaps,
+# so the same straggler should be a larger share of the step. It is also how
+# a production deployment would run.
+#
+# The 4096-token budget is kept because vllm-ascend compiles graphs for the
+# token range up to it; repeats are served in interleaved rounds.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/graph_regime.toml --dry-run'
+#   ./nrun -t graph 'uv run moe-reliability grid configs/grids/graph_regime.toml'
+
+[grid]
+name = "graph-regime"
+base = "../examples/prefill_poscontrol.toml"
+
+[set]
+"server.enforce_eager" = false
+"benchmark.repeats" = 4
+
+[matrix]
+"client.max_new_tokens" = [1, 100]

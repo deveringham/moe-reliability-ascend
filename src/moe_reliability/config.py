@@ -107,7 +107,13 @@ _SERVER = Section("server", "vLLM server deployment.", (
     Option("gpu_memory_utilization", "float", 0.6, "Fraction of NPU memory vLLM may use "
            "(vLLM's --gpu-memory-utilization)."),
     Option("batch_size", "int", 512, "Maximum number of concurrently batched sequences (--max-num-seqs)."),
+    Option("max_num_batched_tokens", "int", 4096, "Token budget of one forward pass (--max-num-batched-tokens). "
+           "Sets how many tokens a prefill step carries, and so how many tokens each expert's GEMM sees: "
+           "decode steps are bounded by batch_size instead."),
     Option("enable_expert_parallel", "bool", True, "Enable expert parallelism."),
+    Option("enforce_eager", "bool", True, "Run the model eagerly (--enforce-eager). Eager mode leaves the NPUs "
+           "idle between host-launched kernels, ~30% of a prefill step on 4 NPUs, which shrinks every kernel's "
+           "share of the step; false lets vllm-ascend capture graphs."),
     Option("enable_prefix_caching", "bool", False, "Enable prefix caching."),
     Option("enable_eplb", "bool", False, "Enable vllm-ascend dynamic expert-parallel load balancing. "
            "Sets additional_config.eplb_config.dynamic_eplb and DYNAMIC_EPLB in the server environment; "
@@ -162,7 +168,7 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
     Option("workload_max_repeats", "int", 0, "Which workload set (max_repeats) to benchmark."),
     Option("workload_prompt_length", "int", 1000, "Which workload size (target prompt length) to benchmark."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
-    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", True, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
@@ -184,7 +190,7 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
     Option("n_samples", "int", 15000, "Number of MMLU prompts sent to each checkpoint."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
-    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
@@ -463,7 +469,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     if cfg["model"]["enable_bnb"]:
         errors.append("model.enable_bnb: bitsandbytes quantization is not supported by vLLM Ascend; serve a "
                       "ModelSlim, LLM-Compressor or block-wise FP8 checkpoint instead")
-    for key in ("max_model_len", "batch_size"):
+    for key in ("max_model_len", "batch_size", "max_num_batched_tokens"):
         positive("server", key)
     if not 0 < cfg["server"]["gpu_memory_utilization"] <= 1:
         errors.append("server.gpu_memory_utilization must be in (0, 1]")

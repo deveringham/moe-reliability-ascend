@@ -89,6 +89,14 @@ def summarize_requests(requests: Iterable[Mapping[str, Any]] | None) -> dict[str
     summary.update(_stats("ttft_ms", [r["ttft"] * 1000 for r in timed]))
     summary.update(_stats("tpot_ms", [r["tpot"] * 1000 for r in timed if r.get("tpot") is not None]))
     summary.update(_stats("e2e_s", [r.get("total_time") for r in requests]))
+    # Wall time from the first request sent to the last one finished. Only
+    # recorded since 2026-10-05; older points have no offsets.
+    ends = [r["end_s"] for r in requests if r.get("end_s") is not None]
+    starts = [r["start_s"] for r in requests if r.get("start_s") is not None]
+    makespan = (max(ends) - min(starts)) if ends and starts else None
+    summary["makespan_s"] = makespan
+    summary["input_tokens_per_s"] = summary["input_tokens_total"] / makespan if makespan else None
+    summary["output_tokens_per_s"] = summary["output_tokens_total"] / makespan if makespan else None
     return summary
 
 

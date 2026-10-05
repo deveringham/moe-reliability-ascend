@@ -1,0 +1,56 @@
+# Natural-routing imbalance in the prefill regime: the detector-relevant version
+# of prefill_poscontrol.toml.
+#
+# Forced imbalance is not a clean instrument - bias 100 also collapses 64 active
+# experts to 6 - so if the prefill positive control shows a cost, this asks
+# whether the imbalance real traffic produces shows one too. Workloads are
+# selected from recorded MMLU routing to hit a target per-layer CV, with every
+# expert live; alpha is relative to the model's natural CV.
+#
+# A fixed request count and a prompt-length tolerance keep workload size from
+# moving with alpha (237 -> 340 requests under a token budget, 98% collinear,
+# in the 2026-10-02 sweeps). Prompts may repeat: prefix caching is off, so a
+# repeat is recomputed and only its routing statistics matter.
+#
+#   uv run moe-reliability validate configs/examples/prefill_alpha.toml
+
+[experiment]
+type = "synthetic_workloads"
+name = "prefill-alpha"
+description = "Alpha sweep, prefill-only, fixed request count, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 16384
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[activations]
+n_samples = 3000
+reuse_activations_from = "20261001-133042_synthetic_deepseek-v2_npu4_bs512_alpha-sweep"
+
+[workloads]
+target_alphas = [0.6, 1.0, 1.6, 2.0]
+target_prompt_lengths = [2000]
+length_in_requests = true
+prompt_length_tolerance = 0.15
+max_repeats = [10]
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 2000
+repeats = 3
+enable_profiling = false
+save_request_metrics = true
