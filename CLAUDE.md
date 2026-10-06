@@ -107,12 +107,21 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
   4 NPUs, 100-token TPOT rises ~13-19 ms per +1x busiest-rank load on both
   models, in eager and graph mode alike. It needs a busiest rank of 1.8x or more;
-  natural traffic sits near 1.1x, where the null above still holds. Mixtral's
-  cost is the hot rank's GEMMs; DeepSeek's mechanism is not settled.
-- **Window-averaged trace figures do not reconcile with TPOT.** Per-step device
-  growth from one profiled point disagreed with TPOT growth by 1.5-3x in 3 of 4
-  comparisons, probably because each window holds a different prefill/decode mix.
-  Classify steps before comparing them across points.
+  natural traffic sits near 1.1x, where the null above still holds. The
+  *mechanism* is not established on either model, and two accounts have already
+  been retracted.
+- **A balanced point runs without the router-bias plugin at all** (`server_env`
+  returns `{}` at strength 0), so every comparison against offset 0 mixes skew
+  with the instrument's own host cost - visible on ranks carrying zero bias. Run
+  an all-zero bias vector as the control before trusting an absolute size.
+- **Compare like steps, never window averages.** `scripts/step_profile.py` splits
+  a trace into engine steps with their batch and token counts. Chunked prefill
+  puts prompt tokens in most steps and the mix moves with the swept parameter
+  (45% to 87% of token-time), which made window averages disagree with TPOT by
+  1.5-3x. A saturated decode step is the same length at every eager offset.
+- **Step wall does not reconstruct TPOT** (-45% to +19% against the twin run).
+  Attributing a TPOT change to particular steps needs ITL capture in the client,
+  which does not exist yet.
 - **Router-bias offsets are calibrated per model** in the `rbias-calibration`
   runs. DeepSeek collapses to 16 live experts at offset 3 and Mixtral to 3 at
   offset 4. Those levels vary the active expert count, not just skew.

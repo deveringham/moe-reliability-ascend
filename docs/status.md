@@ -31,9 +31,11 @@ cannot surface.
 injected router bias that keeps every expert live raises 100-token TPOT by ~12%
 per +1x of busiest-rank load on Mixtral (t = 36, monotone over six levels) and
 ~7% on DeepSeek (t = 7) on 4 NPUs, and graph mode leaves it unchanged in
-milliseconds on both. Mixtral pays through the hot rank's GEMMs, which dominate
-its step. DeepSeek's mechanism is not settled: the trace accounting does not yet
-reconcile with TPOT. The cost needs a
+milliseconds on both. **The mechanism is not established on either model**: a
+saturated decode step is the same length at every eager offset, which withdrew
+the GEMM account, and step wall still misses TPOT by -45% to +19%. A balanced
+point also runs without the bias plugin installed, so the absolute size is an
+upper bound until a zero-bias control is run. The cost needs a
 busiest rank of 1.8x or more. Natural traffic reaches ~1.1x, so the null above is
 a statement about realistic skew, not a property of the stack.
 
@@ -136,6 +138,12 @@ touches hardware, which goes through `./nrun`.
 - **Prefill-only makespan and TTFT.** The engine's queue sits empty for 83-90% of
   a DeepSeek prefill-only run, so these measure the client and API server. That
   explains the noise once blamed on the neighbouring job.
+- **Window-averaged trace figures.** A profiled window's step mix moves with the
+  swept parameter, so averages over it compare different workloads. Split steps
+  and match them on batch and prefill content (`scripts/step_profile.py`).
+- **An instrument that is absent in the control arm.** The router-bias plugin is
+  not installed at strength 0, so its own cost rides on every effect measured
+  against a balanced point.
 
 - **TTFT is a queueing number, not a latency number.** ~2386 ms at the standard
   4-NPU/300-request config, but all requests are submitted at once, so it
