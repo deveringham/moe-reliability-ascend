@@ -33,9 +33,10 @@ per +1x of busiest-rank load on Mixtral (t = 36, monotone over six levels) and
 ~7% on DeepSeek (t = 7) on 4 NPUs, and graph mode leaves it unchanged in
 milliseconds on both. **The mechanism is not established on either model**: a
 saturated decode step is the same length at every eager offset, which withdrew
-the GEMM account, and step wall still misses TPOT by -45% to +19%. A balanced
-point also runs without the bias plugin installed, so the absolute size is an
-upper bound until a zero-bias control is run. The cost needs a
+the GEMM account, and step wall still misses TPOT by -45% to +19%. A zero-bias
+control has since shown the instrument itself cost 10.0 ms per token on DeepSeek
+and nothing on Mixtral, so the eager DeepSeek figures are inflated by ~43% and
+have to be re-measured. The cost needs a
 busiest rank of 1.8x or more. Natural traffic reaches ~1.1x, so the null above is
 a statement about realistic skew, not a property of the stack.
 
@@ -143,7 +144,13 @@ touches hardware, which goes through `./nrun`.
   and match them on batch and prefill content (`scripts/step_profile.py`).
 - **An instrument that is absent in the control arm.** The router-bias plugin is
   not installed at strength 0, so its own cost rides on every effect measured
-  against a balanced point.
+  against a balanced point: 10.0 ms per token on eager DeepSeek, nothing on
+  Mixtral. `imbalance.bias_plugin_at_zero` fixes it for future runs; affected
+  sweeps cannot be refitted, only re-run.
+- **Client-side ITL distributions under heavy concurrency.** The pooled mean is
+  within 3% of TPOT, but individual gaps arrive in bursts, so percentiles measure
+  the client. Within-request spikes remain unmeasured; the engine-side histogram
+  `vllm:inter_token_latency_seconds` is the way to close it.
 
 - **TTFT is a queueing number, not a latency number.** ~2386 ms at the standard
   4-NPU/300-request config, but all requests are submitted at once, so it

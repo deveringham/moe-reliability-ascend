@@ -32,12 +32,15 @@ in. The eager cost sits in below-full-batch decode steps and in
 prefill-carrying steps; in graph mode it sits in full-batch decode steps
 instead. Token-weighted step wall still misses TPOT by -45% to +19%.
 
-**Two caveats on the size of the effect.** A balanced point runs without the
-router-bias plugin installed at all, so every comparison against offset 0
-includes the instrument's own host cost, which is visible on ranks that carry no
-bias. And graph mode serves fast enough that the engine starts to starve. The
-graph-mode slope at full batch is the cleanest evidence that skew itself costs
-time; the eager numbers are upper bounds.
+**The instrument inflated the eager DeepSeek figures.** A balanced point ran
+without the router-bias plugin installed at all. Measured against a control that
+installs it with an all-zero vector (below), the plugin costs 10.0 ms per token
+on DeepSeek and nothing on Mixtral, so the level-0-to-2 comparison overstates
+DeepSeek's cost by 43% and Mixtral's by 9%. Its offset is collinear with "level
+> 0", so the published sweeps cannot be corrected post hoc: every eager DeepSeek
+number here is an upper bound until the sweep is re-run with
+`imbalance.bias_plugin_at_zero`. Graph mode also serves fast enough that the
+engine starts to starve.
 
 **The 2026-10-02 null still holds where it was measured.** Natural traffic
 gives a busiest rank of about 1.1x. The lowest offset (1.18-1.30x) costs 1-4%,
@@ -327,6 +330,69 @@ own host cost, and graph mode shows a cost without it. No single mechanism is
 established. What is established is the latency effect itself and that the
 earlier per-step explanations do not hold.
 
+## The zero-bias control (2026-10-06)
+
+`imbalance.bias_plugin_at_zero` installs the plugin at level 0 with an all-zero
+vector, so both arms pay its per-call tensor add and the comparison isolates the
+skew. `rbias-zero-control` runs level 0 and 2 at three repeats per model, once
+with the flag and once without, on a quiet node (0 to 2 neighbour snapshots of 6
+per run). TPOT mean, ms:
+
+| | Level 0, no plugin | Level 0, plugin (zero vector) | Level 2 |
+|---|---|---|---|
+| DeepSeek, flag off | 165.1 ± 4.0 | | 214.2 ± 2.9 |
+| DeepSeek, flag on | | 175.1 ± 3.2 | 209.5 ± 3.8 |
+| Mixtral, flag off | 166.5 ± 1.4 | | 194.1 ± 3.0 |
+| Mixtral, flag on | | 165.9 ± 0.6 | 191.3 ± 1.8 |
+
+- **The instrument costs 10.0 ms on DeepSeek** (+6.1%, t = 3.4) and nothing
+  measurable on Mixtral (-0.6 ms, t = -0.6). The level-2 arms are identical
+  configurations in both runs, so their difference is run-to-run drift: -2.2% on
+  DeepSeek and -1.5% on Mixtral. Drift and the instrument cost have opposite
+  signs here, so correcting for it puts DeepSeek's instrument cost nearer
+  13.6 ms (+8%).
+- **The skew cost at level 2, with the instrument held constant: +34.3 ms on
+  DeepSeek and +25.3 ms on Mixtral.** Measured against a plugin-free baseline in
+  the same grid the same quantity reads +49.1 and +27.6 ms, so the earlier form
+  of the comparison overstates DeepSeek by 43% and Mixtral by 9%, the latter
+  within drift.
+- **Why only DeepSeek.** Eager DeepSeek decode is host-bound here, which the
+  step-resolved section shows directly, so extra host work per call lengthens the
+  step. Mixtral's step is dominated by device time, which hides it. DeepSeek also
+  adds a 64-wide vector where Mixtral adds an 8-wide one.
+
+**The earlier sweeps cannot be corrected after the fact.** The plugin was present
+at exactly the nonzero levels, so its offset is collinear with "level > 0": no
+refit can separate a constant instrument cost from a genuine jump at the first
+nonzero level. Every eager DeepSeek figure in this document is an upper bound
+until the sweep is re-run with the flag on. Mixtral's figures stand.
+
+## Inter-token latency capture: usable in aggregate, not in distribution
+
+`benchmark.save_itl` records the gap between consecutive streamed chunks of each
+request, as `itl_ms` in the metrics file. It behaves as intended at low load and
+not at the load these sweeps use.
+
+| | 60 prompts, 32 tokens | 3000 prompts, 100 tokens |
+|---|---|---|
+| Pooled mean ITL vs mean TPOT | 122.4 vs 122.6 ms | 157.6 vs 162.5 ms |
+| ITL p50 | 118.8 ms | 0.3 ms |
+| Gaps under 1 ms | none | 62-70% |
+| `itl_ms_spike_share` | 0.00 | 0.999 |
+
+- **The mean is sound**: it sits within 3% of TPOT at every point, which is the
+  consistency the series has to satisfy.
+- **The distribution is the client's, not the engine's.** A typical series runs
+  `[..., 616.0, 0.3, 0.2, 194.9, ...]`: one long stall, then several chunks
+  within a millisecond. With 3000 streams on one asyncio loop the client cannot
+  service sockets promptly, so chunks are read in bursts. The percentiles and
+  `itl_ms_spike_share` therefore measure client delivery, and are not evidence
+  about decode steps at this concurrency. They are meaningful at 60 prompts.
+- **The fix is server-side.** vLLM exposes `vllm:inter_token_latency_seconds` as
+  a histogram on `/metrics`, measured in the engine. Scraping it before and after
+  each point gives an ITL distribution immune to client batching. Until that
+  exists, TPOT still cannot be attributed to particular steps.
+
 ## Prefill-only serving was frontend-starved
 
 vLLM's periodic stats line records the engine's waiting and running queues.
@@ -376,6 +442,8 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261006-083710` rbias-deepseek-quiet | DeepSeek prefill-only re-run, no neighbour |
 | `20261006-094351`, `-103651` rbias-graph-000, -001 | Graph mode, 100 tokens, offsets 0-2 x 3, DeepSeek and Mixtral |
 | `20261006-112553`, `-115820` rbias-graph-profiled-* | Graph-mode traces at offsets 0 / 2 |
+| `20261006-135100` itl-smoke | ITL capture and zero-bias control, 60 prompts |
+| `20261006-135720` ... `-150633` rbias-zero-control-000..003 | Zero-bias control: 2 models x plugin on/off x levels 0 / 2 x 3 |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits. On the node, where the raw traces live: `scripts/step_profile.py <run_dir>`
@@ -389,16 +457,15 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
-1. **A zero-bias control.** Serve a point with `MOE_ROUTER_BIAS` set to an
-   all-zero vector, so the plugin wraps and adds as usual but routing is
-   unchanged. That separates the instrument's cost from the skew's and is the
-   single cheapest thing left: two points per model, no new code beyond letting
-   `server_env` emit a zero vector. Every number in this document that compares
-   against offset 0 depends on it.
-2. **Inter-token latency capture in the client.** Step wall does not account for
-   TPOT (-45% to +19%), and without ITLs there is no way to attribute a TPOT
-   change to particular steps. This also closes the long-standing gap noted in
-   status.md.
+1. **Re-run the eager sweeps with `bias_plugin_at_zero`.** Done for level 0
+   against 2; the slopes in the Latency section are still measured against a
+   plugin-free baseline and overstate DeepSeek by ~43%. Six levels x 3 repeats x
+   2 models, about 2 hours, and it replaces the headline numbers.
+2. **Scrape `vllm:inter_token_latency_seconds` per point.** Client-side ITLs are
+   sound in the mean but their distribution is client delivery at this
+   concurrency, so within-request spikes are still unmeasured. The server-side
+   histogram is immune to it; a `/metrics` read before and after each point is
+   the whole change.
 3. **Why DeepSeek's eager small-batch decode steps blow up.** +48 to +56% at
    offsets 1-2 (Mixtral's are flat),
    absent in graph mode, with the pacing rank's device idle. Candidates: the

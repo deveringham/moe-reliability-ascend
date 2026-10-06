@@ -110,10 +110,13 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   natural traffic sits near 1.1x, where the null above still holds. The
   *mechanism* is not established on either model, and two accounts have already
   been retracted.
-- **A balanced point runs without the router-bias plugin at all** (`server_env`
-  returns `{}` at strength 0), so every comparison against offset 0 mixes skew
-  with the instrument's own host cost - visible on ranks carrying zero bias. Run
-  an all-zero bias vector as the control before trusting an absolute size.
+- **Set `imbalance.bias_plugin_at_zero` on every router-bias sweep.** Without it
+  `server_env` returns `{}` at level 0, so the balanced arm runs without the
+  plugin while every other point pays its per-call tensor add. Measured: 10.0 ms
+  per token on DeepSeek (+6.1%, eager, where decode is host-bound) and nothing on
+  Mixtral. It overstates DeepSeek's level-0-to-2 cost by 43%. The offset is
+  collinear with "level > 0", so an affected sweep cannot be fixed by refitting -
+  it has to be re-run.
 - **Compare like steps, never window averages.** `scripts/step_profile.py` splits
   a trace into engine steps with their batch and token counts. Chunked prefill
   puts prompt tokens in most steps and the mix moves with the swept parameter
@@ -121,8 +124,11 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   1.5-3x. A saturated decode step is the same length at every eager offset, and
   the two models put their cost in different kinds of step.
 - **Step wall does not reconstruct TPOT** (-45% to +19% against the twin run).
-  Attributing a TPOT change to particular steps needs ITL capture in the client,
-  which does not exist yet.
+- **Client-side ITLs (`benchmark.save_itl`) are sound in the mean only.** Pooled
+  mean sits within 3% of TPOT, but at 3000-way concurrency 62-70% of gaps are
+  under 1 ms and arrive in bursts: the percentiles and `itl_ms_spike_share`
+  measure the client's event loop, not decode steps. They are meaningful at ~60
+  prompts. For distributions use vLLM's own `vllm:inter_token_latency_seconds`.
 - **Router-bias offsets are calibrated per model** in the `rbias-calibration`
   runs. DeepSeek collapses to 16 live experts at offset 3 and Mixtral to 3 at
   offset 4. Those levels vary the active expert count, not just skew.
