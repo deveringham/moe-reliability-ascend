@@ -1,0 +1,26 @@
+# Traces at offsets 0 / 2 in graph mode, 100 tokens, both models: does the hot
+# rank's idle time between kernels (DeepSeek, eager: 148 ms of a 233 ms step)
+# disappear, and does Mixtral's GEMM straggler still reach the step?
+# Each point served twice (unprofiled timings, profiled traces).
+#
+#   ./nrun -t rbgraphp 'uv run moe-reliability grid configs/grids/router_bias_graph_profiled.toml'
+
+[grid]
+name = "rbias-graph-profiled"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"server.enforce_eager" = false
+"client.max_new_tokens" = 100
+"imbalance.imbalance_levels" = [0, 2]
+"benchmark.repeats" = 1
+"benchmark.enable_profiling" = true
+"benchmark.separate_profiling_run" = true
+"benchmark.trace_start_iteration" = 30
+"benchmark.n_samples" = 2000
+
+[matrix]
+"model.model_id,model.model_name" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2"],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral"],
+]

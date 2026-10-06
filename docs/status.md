@@ -30,9 +30,10 @@ cannot surface.
 **Update 2026-10-06: it does surface once the skew is strong enough.** A graded,
 injected router bias that keeps every expert live raises 100-token TPOT by ~12%
 per +1x of busiest-rank load on Mixtral (t = 36, monotone over six levels) and
-~7% on DeepSeek (t = 7) on 4 NPUs. Mixtral pays through the hot rank's GEMMs,
-which dominate its step. DeepSeek pays through the hot rank's *host*: its device
-idles between launches and every collective waits for it. The cost needs a
+~7% on DeepSeek (t = 7) on 4 NPUs, and graph mode leaves it unchanged in
+milliseconds on both. Mixtral pays through the hot rank's GEMMs, which dominate
+its step. DeepSeek's mechanism is not settled: the trace accounting does not yet
+reconcile with TPOT. The cost needs a
 busiest rank of 1.8x or more. Natural traffic reaches ~1.1x, so the null above is
 a statement about realistic skew, not a property of the stack.
 
@@ -98,9 +99,11 @@ touches hardware, which goes through `./nrun`.
    the pace-setting rank's device idles 130-150 ms of a ~175-230 ms step,
    spread over every kernel transition. It is host-launch-bound. Host CANN API
    totals match across ranks, so the time goes between launches (Python or CPU
-   scheduling). Injected skew makes the hot rank the pace-setter. Next: host
-   events from the profiler database, and CPU affinity on a node whose load
-   average sits at 12-15 from other users. Graph mode should remove it.
+   scheduling). Injected skew makes the hot rank the pace-setter. Graph mode
+   removes the in-step gaps but not the skew cost, so this explains eager-mode
+   variance rather than what imbalance costs. In graph mode the largest idle is
+   between steps: 45 ms of a 102 ms balanced DeepSeek step is the host preparing
+   the next one.
 2. **Drift detection: the canary set.** The detector catches gross router failure
    (a collapse to 6 of 64 experts scores 37x above the benign ceiling, AUC 1.000)
    but is blind to subtle failure. The limiting noise is *workload*, not

@@ -105,10 +105,14 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   cheaper per call to cancel them. Do not re-run that ground without a reason.
 - **Strong injected skew does cost latency** (2026-10-06,
   `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
-  4 NPUs, 100-token TPOT rises ~12% per +1x busiest-rank load on Mixtral (hot
-  rank's GEMMs) and ~7% on DeepSeek (hot rank's host launches). It needs a
-  busiest rank of 1.8x or more; natural traffic sits near 1.1x, where the null
-  above still holds.
+  4 NPUs, 100-token TPOT rises ~13-19 ms per +1x busiest-rank load on both
+  models, in eager and graph mode alike. It needs a busiest rank of 1.8x or more;
+  natural traffic sits near 1.1x, where the null above still holds. Mixtral's
+  cost is the hot rank's GEMMs; DeepSeek's mechanism is not settled.
+- **Window-averaged trace figures do not reconcile with TPOT.** Per-step device
+  growth from one profiled point disagreed with TPOT growth by 1.5-3x in 3 of 4
+  comparisons, probably because each window holds a different prefill/decode mix.
+  Classify steps before comparing them across points.
 - **Router-bias offsets are calibrated per model** in the `rbias-calibration`
   runs. DeepSeek collapses to 16 live experts at offset 3 and Mixtral to 3 at
   offset 4. Those levels vary the active expert count, not just skew.

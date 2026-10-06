@@ -1,7 +1,8 @@
 # Graded Rank Skew: Router-Bias Sweeps on 4 NPUs
 
 2026-10-05/06. DeepSeek-V2-Lite-Chat and Mixtral 8x7B, 4x Ascend 910B3
-(NPUs 0-3), 4-way expert parallelism, batch 512, eager mode, 4096-token budget.
+(NPUs 0-3), 4-way expert parallelism, batch 512, 4096-token budget. Eager mode
+unless marked; the graph-mode replication is at the end.
 Rank 0's experts get a logit offset before top-k selection
 (`imbalance.method = "router_bias"`, `bias_target = "rank:0"`). That grades the
 skew while every expert stays live and routing stays input-dependent, which the
@@ -17,15 +18,23 @@ regime TPOT rises with the busiest rank's load:
   163.5 ms balanced to 208.7 ms at 3.36x.
 - **DeepSeek:** +7.2% per +1x (t = 7.4), 179.1 ms to 213.1 ms at 3.45x.
 
-The mechanisms differ:
+**Graph mode leaves the cost unchanged in milliseconds** (+13.5 against +13.0 ms
+per +1x on DeepSeek, +18.1 against +19.2 on Mixtral). Graph mode is how a
+production deployment would run, so the result does not depend on eager mode's
+launch overhead.
 
-- **Mixtral: the hot rank's GEMMs.** MoE is ~63% of compute. Nearly
-  all of rank 0's extra GEMM time reaches the step, and per-step trace growth
+Mechanism:
+
+- **Mixtral, eager: the hot rank's GEMMs.** MoE is ~63% of compute. Nearly all
+  of rank 0's extra GEMM time reaches the step, and per-step trace growth
   matches the measured TPOT growth within a few ms.
-- **DeepSeek: the hot rank's host.** The GEMM straggler accounts for 7 of the
-  57 ms per step that offset 2 adds. The rest is rank 0's device sitting idle
-  between kernel launches. Skew makes rank 0 the host-bound rank that every
-  collective waits for.
+- **DeepSeek: not established.** In eager mode the GEMM straggler is 7 of the
+  57 ms per step that offset 2 adds, and the rest shows up as rank 0 idling
+  between kernel launches. In graph mode those gaps are gone and rank 0 is
+  late because of its own GEMMs. The device step then grows only ~10 ms, while
+  TPOT grows 20-35 ms. The per-step trace accounting does not reconcile with
+  TPOT in 3 of the 4 profiled comparisons, so it cannot carry a mechanism claim
+  yet (see the graph-mode section).
 
 **The 2026-10-02 null still holds where it was measured.** Natural traffic
 gives a busiest rank of about 1.1x. The lowest offset (1.18-1.30x) costs 1-4%,
@@ -115,7 +124,7 @@ rank waits for it inside the all-reduce. This is the mechanism the 2026-10-05
 regime work predicted once GEMMs dominate the step: on Mixtral they do, and it
 only needed a skew that natural traffic does not supply.
 
-### DeepSeek: the skew moves the host-bound pace-setter onto rank 0
+### DeepSeek, eager: rank 0 idles between launches
 
 On DeepSeek the GEMM straggler is a tenth of the step growth. Idle time between
 kernels, by rank (ms per step, span 176 at offset 0 and 233 at offset 2):
@@ -130,10 +139,11 @@ kernels, by rank (ms per step, span 176 at offset 0 and 233 at offset 2):
   is spread over every kernel transition (attention, dense matmuls, MoE
   dispatch and combine), not concentrated in the MoE path. Its device is
   waiting for its host to launch the next kernel.
-- **This is the 2026-10-02 pace-setter,** the arbitrary low-occupancy rank, now
-  explained mechanistically: DeepSeek decode in eager mode is host-launch-bound,
-  and the slowest host sets the step. Skew makes rank 0 that rank and makes it
-  slower than the arbitrary pace-setter was (148 against 129 ms idle).
+- **This looks like the 2026-10-02 pace-setter,** the arbitrary low-occupancy
+  rank: in eager mode one host is slowest and sets the step. Skew makes rank 0
+  that rank, and slower than the arbitrary pace-setter was (148 against 129 ms
+  idle). The graph-mode traces do not support this as the *cause* of the skew
+  cost: with the in-step gaps gone, the cost in TPOT stays the same.
 - **It is not more launch work.** The host-side CANN API totals
   (`api_statistic.csv`) for rank 0 and rank 3 are the same at both offsets: the
   same launch count, the same launch time, no extra synchronisation calls. The
@@ -145,12 +155,62 @@ pace-setter's, plus 6.8 ms from the GEMM straggler. The measured +57.5 ms is
 larger. The profiled window also holds fewer steps at offset 2 (379 against
 440), so part of the gap may be a different mix of prefill and decode steps.
 
-### A constant step-boundary gap
+### A step-boundary gap
 
-Every rank of both models has a ~16-18 ms gap between `Cast` and `Fill` once
-per step: about 10% of a decode step during which no NPU runs anything. It does
-not depend on skew. It is the scheduler and input preparation between steps,
-and graph mode or async scheduling is the lever for it, not balancing.
+Every rank of both models has a gap between `Cast` and `Fill` once per step,
+when no NPU runs anything while the host prepares the next step. In eager mode
+it is ~16-18 ms (about 10% of a step) at every offset. In graph mode it is
+**45.5 ms of a 102 ms DeepSeek step** at offset 0, shrinking to 14 ms at offset
+2 as the slower device step overlaps more of the host's preparation. Once
+graph mode removes launch overhead, host-side scheduling is the largest single
+cost in a balanced step, larger than anything imbalance does.
+
+## Graph mode
+
+`rbias-graph` (offsets 0 / 0.5 / 1 / 2 x 3 repeats, 100 tokens, otherwise as
+the eager runs) and `rbias-graph-profiled` (offsets 0 / 2). No neighbour on the
+DeepSeek run; 3 of 12 Mixtral points had one.
+
+| TPOT mean, ms | Offset 0 | 0.5 | 1 | 2 | Per +1x load |
+|---|---|---|---|---|---|
+| DeepSeek, eager | 179.1 | 187.4 | 192.0 | 213.1 | +13.0 (t = 7.4) |
+| DeepSeek, graph | 139.5±1.8 | 144.9±6.5 | 143.1±2.6 | 174.1±5.6 | +13.5 (t = 5.0) |
+| Mixtral, eager | 163.5 | 168.4 | 175.8 | 192.1 | +19.2 (t = 36) |
+| Mixtral, graph | 156.0±5.4 | 156.7±7.8 | 151.0±0.6 | 184.5±5.0 | +18.1 (t = 3.8) |
+
+- **The cost survives graph mode in absolute terms on both models,** so it is
+  not eager-mode launch overhead. As a share it grows on DeepSeek (+10.1% per
+  +1x against +7.2%) because the baseline is 40 ms faster.
+- **In graph mode the cost appears as a step at offset 2,** not a steady rise:
+  offsets 0.5 and 1 are within noise of balanced on both models. In eager mode
+  Mixtral rose at every level. With three repeats this shape is suggestive only.
+- **The frontend starts to bind.** Graph mode serves fast enough that the
+  DeepSeek run's engine queue was empty for 28% of stats intervals (eager 100-
+  token: 1%). Makespan and TTFT are affected. TPOT probably less so, but a
+  starved engine runs smaller decode batches, so this is a caveat on the graph
+  TPOT figures too.
+
+Traces, per call (100 tokens, offset 0 → 2):
+
+| | DeepSeek graph | Mixtral graph |
+|---|---|---|
+| Rank 0 GEMM per call | 144 → 213 us | 615 → 1,402 us |
+| Other ranks' GEMM per call | 144 → 73 us | ~610 → ~555 us |
+| Rank 0 compute (busy - wait) per call, offset 2 | 724 us (others ~562) | |
+| Pace-setter at offset 2 | rank 0 (60%) | rank 0 (49%) |
+| Device step growth | +9.6 ms | +65 ms |
+| TPOT growth, unprofiled twin run | +20 ms | +44 ms |
+
+- **DeepSeek graph mode looks like Mixtral eager:** rank 0's in-step idle is no
+  larger than the other ranks', and its extra compute (~8 ms per step) matches
+  the device step growth. The hot rank is late because of its GEMMs.
+- **Device step growth and TPOT growth disagree,** in both directions (DeepSeek
+  graph +9.6 against +20; Mixtral graph +65 against +44; DeepSeek eager +57.5
+  against +34). Each comes from one profiled point whose window holds a
+  different mix of prefill and decode steps (Mixtral graph: 671 steps at offset
+  0 against 430 at offset 2). Decomposing TPOT needs step-resolved analysis
+  (classify steps by token count, compare decode-only steps across offsets),
+  not window averages.
 
 ## Prefill-only serving was frontend-starved
 
@@ -199,6 +259,8 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261005-193016`, `-201135` rbias-mixtral-000, -001 | Mixtral, prefill only / 100 tokens, 6 offsets x 3 |
 | `20261005-211031` ... `-224930` rbias-profiled-* | Traces at offsets 0 / 1 / 2, both models, both regimes |
 | `20261006-083710` rbias-deepseek-quiet | DeepSeek prefill-only re-run, no neighbour |
+| `20261006-094351`, `-103651` rbias-graph-000, -001 | Graph mode, 100 tokens, offsets 0-2 x 3, DeepSeek and Mixtral |
+| `20261006-112553`, `-115820` rbias-graph-profiled-* | Graph-mode traces at offsets 0 / 2 |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/kernel_gaps.py <trace_dir>` (on the node, where the raw traces
@@ -209,19 +271,25 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
-1. **Why the hot rank's host is slower on DeepSeek.** The host-side Python
-   events in `trace_view.json` (3.7 GB per rank, too large for `json.load`; use
-   `ascend_pytorch_profiler_*.db`) would show where rank 0's time between
-   launches goes. CPU affinity is the other candidate: four workers sharing a
-   host with a load average of 15 is the natural way to get one arbitrarily
-   slow rank.
-2. **Fix the frontend before any more prefill-only latency work.** Pre-tokenise
+1. **Step-resolved trace analysis.** Split each profiled window into steps by
+   the step kernel, classify them by token count, and compare decode-only steps
+   across offsets. This is what reconciles device time with TPOT, and the
+   DeepSeek mechanism depends on it.
+2. **Why the eager pace-setter idles.** The host-side Python events
+   (`ascend_pytorch_profiler_*.db`; `trace_view.json` is 3.7 GB per rank) would
+   show where its time between launches goes. CPU affinity is the other
+   candidate. This explains eager-mode run-to-run variance, but graph mode shows
+   it is not what the skew cost hinges on.
+3. **Fix the frontend before any more prefill-only latency work.** Pre-tokenise
    prompts, run more API server processes, or drive the engine directly. Until then,
    prefill-only makespan and TTFT are frontend measurements.
-3. **Graph mode on DeepSeek.** If the DeepSeek effect is host-launch-bound,
-   graph mode should mostly remove it while leaving Mixtral's GEMM effect
-   intact. That is a cheap test of the mechanism.
-4. **Where natural traffic sits.** The cost scale is now calibrated: ~12% TPOT
+   Graph mode makes this more pressing: even the 100-token regime starts to
+   starve.
+4. **The step-boundary gap.** 45% of a balanced graph-mode DeepSeek step is the
+   host preparing the next step. Async scheduling, if vllm-ascend supports it
+   here, is the biggest available win on this deployment, independent of
+   imbalance.
+5. **Where natural traffic sits.** The cost scale is now calibrated: ~12% TPOT
    per +1x on Mixtral. A workload shift that pushed a rank to 1.5x would cost
    ~6%, so detection needs to resolve rank load near that point, not the
    1.1x natural level.
