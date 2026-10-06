@@ -103,6 +103,20 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   8x7B at 8-way (one expert per rank, MoE 70% of compute) over alpha 0.78–1.43.
   Stragglers do form, but concentrating tokens makes the fused-MoE GEMM enough
   cheaper per call to cancel them. Do not re-run that ground without a reason.
+- **Strong injected skew does cost latency** (2026-10-06,
+  `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
+  4 NPUs, 100-token TPOT rises ~12% per +1x busiest-rank load on Mixtral (hot
+  rank's GEMMs) and ~7% on DeepSeek (hot rank's host launches). It needs a
+  busiest rank of 1.8x or more; natural traffic sits near 1.1x, where the null
+  above still holds.
+- **Router-bias offsets are calibrated per model** in the `rbias-calibration`
+  runs. DeepSeek collapses to 16 live experts at offset 3 and Mixtral to 3 at
+  offset 4. Those levels vary the active expert count, not just skew.
+- **Prefill-only latency is frontend-bound.** With 3000 prompts submitted at once
+  the engine's queue sits empty 83-90% of the time on DeepSeek (38% on
+  Mixtral), so makespan and TTFT measure the client and API server. Check the
+  log's `Waiting:` counts before trusting a prefill-only latency. Traces are
+  unaffected.
 - **Alpha is relative to each model's natural CV**, so equal alpha on two models
   is equal *relative* imbalance, not equal rank load. That is why Mixtral's one
   expert per rank behaves like DeepSeek's eight.

@@ -1,7 +1,9 @@
 # Where this project stands
 
-Orientation document, 2026-10-02. One pass, no detail: the numbers and their
-derivations are in [imbalance-findings.md](imbalance-findings.md).
+Orientation document, 2026-10-02, updated 2026-10-06. One pass, no detail: the
+numbers and their derivations are in [imbalance-findings.md](imbalance-findings.md),
+[regime-findings.md](regime-findings.md) and
+[router-bias-findings.md](router-bias-findings.md).
 
 ## The question, and the answer so far
 
@@ -24,6 +26,15 @@ Two independent mechanisms make imbalance invisible, and they compose:
 
 So imbalance is not merely hard to see here; there are two separate reasons it
 cannot surface.
+
+**Update 2026-10-06: it does surface once the skew is strong enough.** A graded,
+injected router bias that keeps every expert live raises 100-token TPOT by ~12%
+per +1x of busiest-rank load on Mixtral (t = 36, monotone over six levels) and
+~7% on DeepSeek (t = 7) on 4 NPUs. Mixtral pays through the hot rank's GEMMs,
+which dominate its step. DeepSeek pays through the hot rank's *host*: its device
+idles between launches and every collective waits for it. The cost needs a
+busiest rank of 1.8x or more. Natural traffic reaches ~1.1x, so the null above is
+a statement about realistic skew, not a property of the stack.
 
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
 expert parallelism, and Mixtral 8x7B (8 experts, top-2) at 8-way, over router
@@ -83,11 +94,13 @@ touches hardware, which goes through `./nrun`.
 
 ## Open, in the order I would take them
 
-1. **The pace-setter.** A ~33% asymmetry in waiting, moving between ranks run to
-   run, with no explanation. It is the largest unexplained effect in our data and
-   the only plausible route by which any compute straggler could ever matter.
-   Correlating its identity against launch order, NUMA/PCIe placement and CPU
-   affinity is cheap and needs no NPUs.
+1. **The pace-setter.** Partly explained 2026-10-06: in DeepSeek decode (eager)
+   the pace-setting rank's device idles 130-150 ms of a ~175-230 ms step,
+   spread over every kernel transition. It is host-launch-bound. Host CANN API
+   totals match across ranks, so the time goes between launches (Python or CPU
+   scheduling). Injected skew makes the hot rank the pace-setter. Next: host
+   events from the profiler database, and CPU affinity on a node whose load
+   average sits at 12-15 from other users. Graph mode should remove it.
 2. **Drift detection: the canary set.** The detector catches gross router failure
    (a collapse to 6 of 64 experts scores 37x above the benign ceiling, AUC 1.000)
    but is blind to subtle failure. The limiting noise is *workload*, not
@@ -116,6 +129,10 @@ touches hardware, which goes through `./nrun`.
    explain why realised imbalance (1.139) never approaches predicted (1.007).
 
 ## What not to trust
+
+- **Prefill-only makespan and TTFT.** The engine's queue sits empty for 83-90% of
+  a DeepSeek prefill-only run, so these measure the client and API server. That
+  explains the noise once blamed on the neighbouring job.
 
 - **TTFT is a queueing number, not a latency number.** ~2386 ms at the standard
   4-NPU/300-request config, but all requests are submitted at once, so it
