@@ -177,6 +177,11 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
     Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
+    Option("save_itl", "bool", True, "Record inter-token latencies: the gap between consecutive streamed "
+           "chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step "
+           "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
+           "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
+           "metrics file."),
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
@@ -196,6 +201,11 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
            "and record per-expert and per-rank load."),
     Option("validation_samples", "int", 0, "Prompts for validation: 0 uses six fixed prompts, N > 0 the first "
            "N MMLU prompts. Rank shares need a few hundred to be stable."),
+    Option("bias_plugin_at_zero", "bool", False, "router_bias only: install the plugin at level 0 as well, with "
+           "an all-zero bias vector. The plugin adds a tensor to the router logits on every expert-selection "
+           "call of every rank, so a level-0 point without it is cheaper for a reason unrelated to skew, and "
+           "the difference between the arms is the skew plus the instrument. Turn this on to isolate the skew; "
+           "compare the two forms of level 0 to measure what the instrument costs."),
 ))
 
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
@@ -210,6 +220,11 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
     Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
+    Option("save_itl", "bool", True, "Record inter-token latencies: the gap between consecutive streamed "
+           "chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step "
+           "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
+           "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
+           "metrics file."),
 ))
 
 _ANALYSIS = Section("analysis", "Post-processing of profiler traces.", (

@@ -44,6 +44,31 @@ def test_bias_vector_and_server_env():
     assert json.loads(env[RB.ENV_VAR]) == [0, 0, 2.5, 2.5, 0, 0, 0, 0]
 
 
+def test_zero_bias_control_installs_the_plugin_with_an_all_zero_vector():
+    # The instrument is not free: without this, a level-0 point serves without the
+    # wrapper and so pays none of its per-call cost, which lands in the comparison.
+    assert RB.server_env("rank:1", 0, 8, 4, at_zero=True) == {RB.ENV_VAR: json.dumps([0.0] * 8)}
+    assert RB.server_env("rank:1", 0, 8, 4) == {}
+    # A nonzero level is unaffected by the flag.
+    assert RB.server_env("rank:1", 2.5, 8, 4, at_zero=True) == RB.server_env("rank:1", 2.5, 8, 4)
+
+
+def test_zero_bias_control_wraps_and_leaves_routing_unchanged():
+    torch = pytest.importorskip("torch")
+    seen = {}
+
+    def select(hidden_states, router_logits, top_k):
+        seen["logits"] = router_logits
+        return router_logits.topk(top_k, dim=-1).indices
+
+    biased = RB._wrap(select, [0.0] * 4)
+    logits = torch.tensor([[1.0, 2.0, 0.0, -1.0]])
+    ids = biased(hidden_states=None, router_logits=logits, top_k=2)
+    assert sorted(ids[0].tolist()) == [0, 1]  # the unbiased choice
+    assert torch.equal(seen["logits"], logits)  # same values...
+    assert seen["logits"] is not logits  # ...but the add still ran, which is the point
+
+
 def test_wrapper_adds_the_bias_to_router_logits_only():
     torch = pytest.importorskip("torch")
     seen = {}

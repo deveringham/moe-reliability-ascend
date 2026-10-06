@@ -57,10 +57,12 @@ def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
 
     n_experts, n_ranks = _expert_count(cfg), cfg.hardware.n_npus
     targeted = target_experts(cfg.imbalance.bias_target, n_experts, n_ranks)
-    log(f"router bias on {cfg.imbalance.bias_target}: experts {targeted} of {n_experts}, {n_ranks} ranks")
+    log(f"router bias on {cfg.imbalance.bias_target}: experts {targeted} of {n_experts}, {n_ranks} ranks"
+        + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else ""))
     for p in ctx.points:
         ctx.update_point(p["label"], model_path=cfg.model.model_id, checkpoint_created=False,
-                         server_env=server_env(cfg.imbalance.bias_target, p["value"], n_experts, n_ranks),
+                         server_env=server_env(cfg.imbalance.bias_target, p["value"], n_experts, n_ranks,
+                                               at_zero=cfg.imbalance.bias_plugin_at_zero),
                          bias_experts=targeted)
 
 

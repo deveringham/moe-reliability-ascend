@@ -24,6 +24,13 @@ offset is applied inside the server, as a vLLM general plugin:
 - with the variable unset, :func:`register` does nothing, so normal runs are
   unaffected.
 
+The wrapper is not free: it runs a tensor add on every expert-selection call, on
+every rank, including ranks whose entries are all zero. A level-0 point with the
+variable unset therefore serves without that cost, and comparing it against a
+biased point measures the skew *and* the instrument. ``bias_plugin_at_zero``
+makes level 0 install the plugin with an all-zero vector, so every arm of a sweep
+pays the same per-call cost and the comparison isolates the skew.
+
 The bias also shifts the combine weights the top-k softmax produces, not only
 the selection. That changes the model's outputs but not what the experiment
 measures: expert load and the time it costs.
@@ -86,9 +93,16 @@ def bias_vector(spec: str, strength: float, n_experts: int, n_ranks: int) -> lis
     return [float(strength) if e in targeted else 0.0 for e in range(n_experts)]
 
 
-def server_env(spec: str, strength: float, n_experts: int, n_ranks: int) -> dict[str, str]:
-    """Environment for a server that should route with this bias; empty at strength 0."""
-    if strength == 0:
+def server_env(spec: str, strength: float, n_experts: int, n_ranks: int,
+               at_zero: bool = False) -> dict[str, str]:
+    """Environment for a server that should route with this bias.
+
+    Empty at strength 0, which serves without the plugin and so without its
+    per-call cost. With ``at_zero``, strength 0 instead installs an all-zero
+    vector: routing is untouched but the wrapper runs, which is the control arm
+    for everything the plugin itself costs.
+    """
+    if strength == 0 and not at_zero:
         return {}
     return {ENV_VAR: json.dumps(bias_vector(spec, strength, n_experts, n_ranks))}
 
@@ -134,5 +148,9 @@ def register() -> None:
             continue  # plugins can load more than once per process
         setattr(sel, name, _wrap(fn, bias))
     targeted = [i for i, v in enumerate(bias) if v]
-    logger.warning("router bias active (pid %d): +%s on experts %s of %d", os.getpid(),
-                   sorted({v for v in bias if v}), targeted, len(bias))
+    if not targeted:
+        logger.warning("router bias active (pid %d): all-zero vector over %d experts, the zero-bias "
+                       "control - routing is unchanged and the wrapper's cost is paid", os.getpid(), len(bias))
+    else:
+        logger.warning("router bias active (pid %d): +%s on experts %s of %d", os.getpid(),
+                       sorted({v for v in bias if v}), targeted, len(bias))

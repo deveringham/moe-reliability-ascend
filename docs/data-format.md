@@ -85,6 +85,15 @@ accept both variants. The format is versioned by `manifest.schema_version` (curr
 `output_tokens_total`, `input_tokens_mean`, `output_tokens_mean`, and `mean`, `p50`, `p90`, `p99` and
 `max` of `ttft_ms`, `tpot_ms` and `e2e_s` (for example `tpot_ms_p99`).
 
+Inter-token latency fields, present since 2026-10-06 (`benchmark.save_itl`):
+`n_itl`, `itl_ms_mean/p50/p90/p99/max`, `itl_ms_median`, `itl_spike_count`,
+`itl_ms_spike_share` (the fraction of decode time in gaps above twice the median
+gap), `itl_max_chunk_shortfall` and `itl_chunks_are_tokens`. The last is false
+when the server coalesced tokens into one streamed chunk, which makes the series
+per-chunk rather than per-token; check it before reading an ITL as a token
+latency. A request that stops on EOS is one chunk short, because that token
+carries no content, so a shortfall of one is expected and not coalescing.
+
 `trace_summary` fields: `mean_over_ranks_us`, `max_over_mean`, `max_over_min`, `hottest_rank`,
 `total_over_ranks_ms`, `calls_per_rank`, `steps`, `dom_mean_over_ranks_us`, `dom_max_over_mean`.
 
@@ -97,12 +106,16 @@ accept both variants. The format is versioned by `manifest.schema_version` (curr
   "requests": [
     {"prompt": [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}],
      "prompt_id": 0, "ttft": 0.0412, "tpot": 0.0187,
-     "num_output_tokens": 100, "num_input_tokens": 143, "total_time": 1.94}
+     "num_output_tokens": 100, "num_input_tokens": 143, "total_time": 1.94,
+     "n_chunks": 100, "itl_ms": [18.9, 18.4, 19.1, "..."]}
   ]
 }
 ```
 
-Times are in seconds. `prompt_id` is the index of the prompt in the list sent to the server.
+Times are in seconds, except `itl_ms`, which is in milliseconds. `prompt_id` is
+the index of the prompt in the list sent to the server. `itl_ms` holds one gap
+between each pair of consecutive streamed chunks, so it is one shorter than
+`n_chunks`; both are absent unless `benchmark.save_itl` was on.
 
 ## `activations/records.jsonl`
 

@@ -107,6 +107,7 @@ Stage 3: benchmarking of each sweep point.
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
 | `trace_start_iteration` | int | `100` | Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80. |
 | `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
+| `save_itl` | bool | `true` | Record inter-token latencies: the gap between consecutive streamed chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT can be attributed to. Costs one timestamp per token in the client and a list per request in the metrics file. |
 
 ### `[analysis]`
 
@@ -209,6 +210,7 @@ Forced router imbalance.
 | `method` | str | `"checkpoint"` | How imbalance is injected. `checkpoint` writes a modified model whose routing collapses onto the lowest-numbered experts at any nonzero level (one useful setting: total collapse). `router_bias` serves the unmodified model and adds the level to the router logits of the experts in `bias_target`, a graded skew that keeps routing input-dependent. Choices: `checkpoint`, `router_bias`. |
 | `imbalance_levels` | list[number] | `[0, 100]` | `checkpoint`: bias added to expert 0's router row. `router_bias`: logit offset added to the targeted experts. 0 serves the unmodified model. |
 | `bias_target` | str | `"rank:0"` | `router_bias` only: `rank:<r>` biases every expert placed on expert-parallel rank r (contiguous placement, `hardware.n_npus` ranks); `experts:<i>,<j>` biases those experts. |
+| `bias_plugin_at_zero` | bool | `false` | `router_bias` only: install the plugin at level 0 as well, with an all-zero bias vector. The plugin adds a tensor to the router logits on every expert-selection call of every rank, so a level-0 point without it is cheaper for a reason unrelated to skew, and the difference between the arms is the skew plus the instrument. Turn this on to isolate the skew; compare the two forms of level 0 to measure what the instrument costs. |
 | `model_dir` | str | `"models"` | Directory for generated imbalanced checkpoints (reused across runs when present). |
 | `validate_imbalance` | bool | `false` | Capture routed experts at every level before benchmarking and record per-expert and per-rank load. |
 | `validation_samples` | int | `0` | Prompts for validation: 0 uses six fixed prompts, N > 0 the first N MMLU prompts. Rank shares need a few hundred to be stable. |
@@ -234,6 +236,7 @@ Benchmarking of each imbalance level.
 | `trace_active_iterations` | int | `2` | Number of profiled scheduler iterations. |
 | `trace_start_iteration` | int | `100` | Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80. |
 | `save_request_metrics` | bool | *derived* | Store per-request TTFT/TPOT measurements (default: true, unless profiling without a separate unprofiled pass). |
+| `save_itl` | bool | `true` | Record inter-token latencies: the gap between consecutive streamed chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT can be attributed to. Costs one timestamp per token in the client and a list per request in the metrics file. |
 
 ### `[analysis]`
 

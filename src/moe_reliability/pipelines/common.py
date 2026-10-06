@@ -142,6 +142,7 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
         extra_env=server_env,
+        collect_itl=cfg.benchmark.save_itl,
     ))
 
 # Runs and records metrics for all pending sweep points

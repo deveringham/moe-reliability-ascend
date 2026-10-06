@@ -97,7 +97,43 @@ def summarize_requests(requests: Iterable[Mapping[str, Any]] | None) -> dict[str
     summary["makespan_s"] = makespan
     summary["input_tokens_per_s"] = summary["input_tokens_total"] / makespan if makespan else None
     summary["output_tokens_per_s"] = summary["output_tokens_total"] / makespan if makespan else None
+    summary.update(_itl_stats(requests))
     return summary
+
+
+def _itl_stats(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Pooled inter-token latencies, and how much of the decode time sits in spikes.
+
+    Only present since 2026-10-06 (benchmark.save_itl). TPOT is a per-request
+    mean, so it hides a single slow step; these pool every gap in the point.
+    ``itl_ms_spike_share`` is the fraction of all decode time spent in gaps above
+    twice the median gap, which is what a straggler that stalls one step at a
+    time would raise while leaving the mean almost unchanged.
+
+    A gap spans two streamed chunks, so the series only measures per-token
+    latency where each chunk carried one token; ``itl_chunks_are_tokens`` says
+    whether it did.
+    """
+    pooled = [v for r in requests for v in (r.get("itl_ms") or [])]
+    out: dict[str, Any] = {"n_itl": len(pooled)}
+    # A chunk is normally one token; where the server coalesced them the series is
+    # not per-token, so say so rather than reporting a per-token latency. A request
+    # that stops on EOS ends with a token carrying no content and so no chunk, so a
+    # shortfall of one is expected and only a larger one means coalescing.
+    short = [(r.get("num_output_tokens") or 0) - r["n_chunks"]
+             for r in requests if r.get("n_chunks") is not None]
+    out["itl_max_chunk_shortfall"] = max(short) if short else None
+    out["itl_chunks_are_tokens"] = all(v <= 1 for v in short) if short else None
+    if not pooled:
+        return out | _stats("itl_ms", [])
+    out.update(_stats("itl_ms", pooled))
+    arr = np.asarray(pooled, dtype=float)
+    median = float(np.median(arr))
+    spikes = arr[arr > 2 * median]
+    out["itl_ms_median"] = median
+    out["itl_spike_count"] = int(spikes.size)
+    out["itl_ms_spike_share"] = float(spikes.sum() / arr.sum()) if arr.sum() else None
+    return out
 
 
 def trace_scalars(trace_summary: Mapping[str, Any] | None) -> dict[str, Any]:

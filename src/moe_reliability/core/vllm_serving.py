@@ -169,7 +169,7 @@ def decode_routed_experts(payload):
     return np.asarray(payload, dtype=np.int16)
 
 # Sends a single streaming request and measures TTFT and TPOT
-async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100,
+async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100, collect_itl=False,
                           get_response=False, prompt_formatted=True, capture_experts=False):
     
     start_time = time.perf_counter()
@@ -234,16 +234,23 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
 
     response_str = ""
     num_output_tokens = 0
-    
+    # Arrival time of every chunk that carries content. One chunk is normally one
+    # token, but the server is free to coalesce, so n_chunks is recorded too and
+    # the ITL series is only a per-token series where the two agree.
+    chunk_times = []
+
     async for chunk in response:
         # Get output tokens
         if get_response:
             if chunk.choices and chunk.choices[0].delta.content:
                 response_str += chunk.choices[0].delta.content
-        
+
         # Time of first token (in order to deduct decode fromm TPOT)
         if first_token_time is None and chunk.choices:
             first_token_time = time.perf_counter()
+
+        if collect_itl and chunk.choices and chunk.choices[0].delta.content:
+            chunk_times.append(time.perf_counter())
             
         # The last chunk when using include_usage=True contains the token stats
         if chunk.usage is not None:
@@ -274,12 +281,16 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
         "num_input_tokens": num_input_tokens,
         "total_time": end_time - start_time
     }
+    if collect_itl:
+        result["n_chunks"] = len(chunk_times)
+        result["itl_ms"] = [round((b - a) * 1000, 3)
+                            for a, b in zip(chunk_times, chunk_times[1:])]
     if get_response:
         result["response"] = response_str
     return result
     
 # Runs a batch of prompts concurrently and calculates aggregate metrics
-async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False):
+async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False, collect_itl=False):
 
     print(f"Sending batch of {len(prompts)} concurrent requests...")
     
@@ -305,7 +316,8 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
                 max_new_tokens=max_new_tokens, 
                 get_response=False,
                 prompt_formatted=prompt_formatted,
-                capture_experts=capture_experts
+                capture_experts=capture_experts,
+                collect_itl=collect_itl
             )
             res["start_s"] = start_s
             res["end_s"] = time.perf_counter() - batch_start_time
@@ -361,7 +373,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
                                   enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
                                   trace_dir=None, trace_active_iterations=2, trace_start_iteration=100,
-                                  port=8000, extra_env=None):
+                                  port=8000, extra_env=None, collect_itl=False):
     server_process = None
     results = None
     try:
@@ -397,7 +409,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         results = await run_batch(client, model, prompts,
                                   seed=seed, print_output=print_output, max_new_tokens=max_new_tokens,
                                   concurrency_limit=concurrency_limit, capture_experts=enable_expert_capture,
-                                  prompt_formatted=True)
+                                  prompt_formatted=True, collect_itl=collect_itl)
         
         # Stop profiling
         if trace_dir is not None:
