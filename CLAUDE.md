@@ -118,7 +118,8 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   a trace into engine steps with their batch and token counts. Chunked prefill
   puts prompt tokens in most steps and the mix moves with the swept parameter
   (45% to 87% of token-time), which made window averages disagree with TPOT by
-  1.5-3x. A saturated decode step is the same length at every eager offset.
+  1.5-3x. A saturated decode step is the same length at every eager offset, and
+  the two models put their cost in different kinds of step.
 - **Step wall does not reconstruct TPOT** (-45% to +19% against the twin run).
   Attributing a TPOT change to particular steps needs ITL capture in the client,
   which does not exist yet.

@@ -264,11 +264,13 @@ brackets):
   → 170.0, Mixtral 153.2 → 153.1 ms. Whatever raises TPOT in eager mode, it is
   not the length of a saturated decode step. That contradicts the "hot rank's
   GEMMs lengthen the step" reading recorded above for Mixtral eager.
-- **The eager cost sits in decode steps below full batch** (+43 to +55%) and in
-  prefill-carrying steps. Mixtral's mixed steps carrying 2500-4096 prefill
-  tokens go 303.5 → 353.8 → 437.2 ms across offsets 0 / 1 / 2, which is the
-  right scale to explain its TPOT slope given those steps hold ~40% of
-  token-time. DeepSeek's equivalent steps move only 211 → 227 ms.
+- **The two models put the eager cost in different steps.** DeepSeek's
+  below-full-batch decode steps slow by +48 to +56% at offsets 1 and 2, in every
+  batch bin; Mixtral's are flat (150.5 → 150.6 ms at 350-480). Mixtral's cost is
+  in prefill-carrying steps instead: those holding 2500-4096 prefill tokens go
+  303.5 → 353.8 → 437.2 ms across offsets 0 / 1 / 2, the right scale to explain
+  its TPOT slope given such steps hold ~40% of token-time. DeepSeek's equivalent
+  steps move only 211 → 227 ms.
 - **Graph mode behaves differently again.** Full-batch decode steps do slow
   (DeepSeek 55.5 → 62.6, Mixtral 105.3 → 125.8 ms) while DeepSeek's small-batch
   decode steps get *faster* (33.4 → 24.0 ms). The eager small-batch blowup is
@@ -397,7 +399,8 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
    TPOT (-45% to +19%), and without ITLs there is no way to attribute a TPOT
    change to particular steps. This also closes the long-standing gap noted in
    status.md.
-3. **Why eager small-batch decode steps blow up.** +43 to +55% at offset 1-2,
+3. **Why DeepSeek's eager small-batch decode steps blow up.** +48 to +56% at
+   offsets 1-2 (Mixtral's are flat),
    absent in graph mode, with the pacing rank's device idle. Candidates: the
    instrument (item 1), host-launch boundedness of small steps, CPU contention
    from a node whose load average sits at 12-15. Host events are in
