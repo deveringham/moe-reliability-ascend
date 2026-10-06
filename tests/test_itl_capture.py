@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import types
 
 from moe_reliability.core.vllm_serving import measure_request
