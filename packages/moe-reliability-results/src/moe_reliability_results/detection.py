@@ -54,9 +54,15 @@ def request_counts(records: Iterable[Mapping], n_experts: int, include_generated
     """
     counts = []
     for r in records:
-        arrays = [np.asarray(r["prompt_routed_experts"])]
-        if include_generated and r.get("routed_experts") is not None:
-            arrays.append(np.asarray(r["routed_experts"]))
+        # Either field may be absent: a capture with max_new_tokens = 1 leaves the
+        # split undone and returns every token in routed_experts, while a capture
+        # that split them fills both.
+        keys = ("prompt_routed_experts", "routed_experts") if include_generated else ("prompt_routed_experts",)
+        arrays = [np.asarray(r[k]) for k in keys if r.get(k) is not None]
+        if not arrays and not include_generated and r.get("routed_experts") is not None:
+            arrays = [np.asarray(r["routed_experts"])]  # unsplit capture: prompt tokens are all there is
+        if not arrays:
+            raise ValueError(f"record {r.get('prompt_id')} has no routed experts")
         ids = np.concatenate([a for a in arrays if a.size])
         counts.append([np.bincount(ids[:, layer].ravel(), minlength=n_experts) for layer in range(ids.shape[1])])
     c = np.asarray(counts, dtype=float)

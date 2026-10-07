@@ -29,6 +29,18 @@
    "3.0": [
     3.956964552835723,
     16
+   ],
+   "1.25": [
+    2.66476457059197,
+    64
+   ],
+   "1.5": [
+    2.953186325009674,
+    64
+   ],
+   "1.75": [
+    3.21134289155456,
+    64
    ]
   },
   "mixtral": {
@@ -601,6 +613,1541 @@
     "four_layers": 4,
     "four_layers_tenth_of_tokens": 64
    }
+  }
+ },
+ "detection": {
+  "deepseek-v2": {
+   "n_requests": 1200,
+   "settings": [
+    {
+     "window": 1,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.3231,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.365,
+       "detection_rate": 0.948,
+       "auc": 0.9981,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.696,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.394,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.51,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.1538,
+     "alarm_at_1pct_fpr": 1.3218,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.367,
+       "detection_rate": 0.797,
+       "auc": 0.9909,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.675,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.361,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.495,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.7185,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.454,
+       "detection_rate": 0.028,
+       "auc": 0.8052,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.735,
+       "detection_rate": 0.59,
+       "auc": 0.9847,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.404,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.507,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0154,
+     "alarm_at_1pct_fpr": 1.7513,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.45,
+       "detection_rate": 0.048,
+       "auc": 0.7599,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.703,
+       "detection_rate": 0.347,
+       "auc": 0.9614,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.378,
+       "detection_rate": 1.0,
+       "auc": 0.9999,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.511,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.1531,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.349,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.712,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.419,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.525,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.1538,
+     "alarm_at_1pct_fpr": 1.2218,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.343,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.695,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.385,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.518,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.1819,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.355,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.714,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.422,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.527,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0154,
+     "alarm_at_1pct_fpr": 1.2303,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.352,
+       "detection_rate": 0.998,
+       "auc": 0.9997,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.703,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.39,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.512,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.1027,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.349,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.715,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.425,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.535,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.1538,
+     "alarm_at_1pct_fpr": 1.1392,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.344,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.701,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.394,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.516,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.1105,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.35,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.716,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.425,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.534,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0154,
+     "alarm_at_1pct_fpr": 1.1525,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.343,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.702,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.394,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.519,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.0853,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.35,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.717,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.426,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.536,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.1538,
+     "alarm_at_1pct_fpr": 1.1057,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.345,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.701,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.396,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.52,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.0864,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.35,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.717,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.426,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.536,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0154,
+     "alarm_at_1pct_fpr": 1.1084,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.35,
+       "median_estimate": 1.345,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.717,
+       "median_estimate": 1.701,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 1.0,
+       "true_load": 2.427,
+       "median_estimate": 2.396,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 3.536,
+       "median_estimate": 3.52,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    }
+   ]
+  },
+  "mixtral": {
+   "n_requests": 1200,
+   "settings": [
+    {
+     "window": 1,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.4197,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.303,
+       "detection_rate": 0.098,
+       "auc": 0.7658,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.435,
+       "detection_rate": 0.625,
+       "auc": 0.9842,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.815,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.686,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.426,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.125,
+     "alarm_at_1pct_fpr": 1.379,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.262,
+       "detection_rate": 0.045,
+       "auc": 0.6996,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.411,
+       "detection_rate": 0.615,
+       "auc": 0.9681,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.761,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.471,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.204,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 2.2797,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.556,
+       "detection_rate": 0.015,
+       "auc": 0.543,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.647,
+       "detection_rate": 0.013,
+       "auc": 0.6796,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.904,
+       "detection_rate": 0.048,
+       "auc": 0.9083,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.711,
+       "detection_rate": 1.0,
+       "auc": 0.9999,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.43,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 1,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0125,
+     "alarm_at_1pct_fpr": 2.4003,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.535,
+       "detection_rate": 0.02,
+       "auc": 0.5261,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.572,
+       "detection_rate": 0.018,
+       "auc": 0.598,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.833,
+       "detection_rate": 0.043,
+       "auc": 0.8557,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.484,
+       "detection_rate": 0.688,
+       "auc": 0.988,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.22,
+       "detection_rate": 0.998,
+       "auc": 0.9999,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.1907,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.224,
+       "detection_rate": 0.927,
+       "auc": 0.9969,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.397,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.801,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.682,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.436,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.125,
+     "alarm_at_1pct_fpr": 1.18,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.199,
+       "detection_rate": 0.67,
+       "auc": 0.9771,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.369,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.731,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.461,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.209,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.2861,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.264,
+       "detection_rate": 0.27,
+       "auc": 0.9033,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.406,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.802,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.69,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.437,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 8,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0125,
+     "alarm_at_1pct_fpr": 1.3064,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.23,
+       "detection_rate": 0.102,
+       "auc": 0.7467,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.369,
+       "detection_rate": 0.8,
+       "auc": 0.9846,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.722,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.465,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.217,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.1225,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.206,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.392,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.798,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.687,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.443,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.125,
+     "alarm_at_1pct_fpr": 1.1043,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.186,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.359,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.724,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.463,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.212,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.1438,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.211,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.391,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.799,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.689,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.442,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 64,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0125,
+     "alarm_at_1pct_fpr": 1.1383,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.19,
+       "detection_rate": 0.973,
+       "auc": 0.9989,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.36,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.721,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.462,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.212,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": null,
+     "token_fraction": 1.0,
+     "assignment_fraction": 1.0,
+     "alarm_at_1pct_fpr": 1.1009,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.205,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.391,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.798,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.688,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.444,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": 4,
+     "token_fraction": 1.0,
+     "assignment_fraction": 0.125,
+     "alarm_at_1pct_fpr": 1.0772,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.185,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.359,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.723,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.463,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.213,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": null,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.1,
+     "alarm_at_1pct_fpr": 1.1052,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.205,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.391,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.798,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.688,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.445,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    },
+    {
+     "window": 512,
+     "layers": 4,
+     "token_fraction": 0.1,
+     "assignment_fraction": 0.0125,
+     "alarm_at_1pct_fpr": 1.0884,
+     "levels": [
+      {
+       "level": 0.25,
+       "true_load": 1.205,
+       "median_estimate": 1.185,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": false
+      },
+      {
+       "level": 0.5,
+       "true_load": 1.391,
+       "median_estimate": 1.359,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 1.0,
+       "true_load": 1.798,
+       "median_estimate": 1.722,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 2.0,
+       "true_load": 2.688,
+       "median_estimate": 2.463,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      },
+      {
+       "level": 3.0,
+       "true_load": 3.444,
+       "median_estimate": 3.213,
+       "detection_rate": 1.0,
+       "auc": 1.0,
+       "costly": true
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "localisation": {
+  "20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation": {
+   "bias_target": "rank:2",
+   "bias_layers": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+   ],
+   "points": [
+    {
+     "level": 0.0,
+     "mean_load": 1.078,
+     "max_layer_load": 1.147,
+     "expected_layers": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "flagged_layers": [],
+     "recall": 0.0,
+     "precision": null,
+     "flagged_rank": null,
+     "consistent_rank_share": 0.308
+    },
+    {
+     "level": 1.0,
+     "mean_load": 1.402,
+     "max_layer_load": 2.578,
+     "expected_layers": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "flagged_layers": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "recall": 1.0,
+     "precision": 1.0,
+     "flagged_rank": 2,
+     "consistent_rank_share": 0.462
+    },
+    {
+     "level": 2.0,
+     "mean_load": 1.666,
+     "max_layer_load": 3.691,
+     "expected_layers": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "flagged_layers": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+     ],
+     "recall": 1.0,
+     "precision": 1.0,
+     "flagged_rank": 2,
+     "consistent_rank_share": 0.423
+    }
+   ]
   }
  },
  "stage2_step_time": {

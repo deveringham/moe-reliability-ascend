@@ -490,6 +490,62 @@ def fig_impact_map(out, store):
     store["impact_map"] = rows
 
 
+def fig_detection(out, store):
+    """What the screen catches, against what it costs to count."""
+    detection = json.load(open(os.path.join("docs", "detection.json")))
+    impact = {m: (r or {}).get("impact_threshold") for m, r in detection["impact"].items()}
+    fig, axes = plt.subplots(1, 2, figsize=(10.6, 4.9), facecolor=SURFACE, sharey=True)
+    rows = []
+    # Window size is ordered, so it gets the single-hue ramp; how much of each
+    # window is counted is the line style.
+    shown = [(1, None, 1.0, "-"), (1, 4, 0.1, ":"), (8, None, 1.0, "-"), (8, 4, 0.1, ":"),
+             (64, 4, 0.1, ":")]
+    ramp = {1: OFFSET_RAMP[0], 8: OFFSET_RAMP[1], 64: OFFSET_RAMP[2]}
+    for ax, model in zip(axes, ("deepseek-v2", "mixtral")):
+        row = detection["detection"].get(model) or {}
+        style(ax, "Load on the busiest rank", "Windows that raise the alarm" if ax is axes[0] else "")
+        ax.set_title(MODEL_LABEL[model], color=INK, fontsize=11, fontweight="bold", loc="left")
+        if "settings" not in row:
+            continue
+        threshold = impact.get(model)
+        if threshold:
+            ax.axvspan(threshold, 4.0, color="#f0efec", zorder=0)
+            ax.annotate("costs latency", xy=(threshold + 0.06, 0.985), xycoords=("data", "axes fraction"),
+                        ha="left", va="top", color=INK3, fontsize=8.5)
+        for window, layers, token_fraction, ls in shown:
+            match = [t for t in row["settings"] if (t["window"], t["layers"], t["token_fraction"])
+                     == (window, layers, token_fraction)]
+            if not match:
+                continue
+            setting = match[0]
+            x = [lv["true_load"] for lv in setting["levels"]]
+            y = [lv["detection_rate"] for lv in setting["levels"]]
+            counted = setting["assignment_fraction"]
+            ax.plot(x, y, ls=ls, marker="o", ms=5, lw=2, color=ramp[window], zorder=3,
+                    label=f"{window} req \u00b7 {counted:.0%} counted" if counted >= 0.995
+                          else f"{window} req \u00b7 {counted:.1%} counted")
+            rows.append({"model": model, "window": window, "counted": counted, "load": x, "detected": y})
+        ax.set_ylim(-0.05, 1.08)
+        ax.set_xlim(1.0, 3.7)
+        ax.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="lower right",
+                  borderpad=0.2, labelspacing=0.35)
+    axes[0].set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
+    fig.suptitle("A window of 8 requests catches every costly skew, counting ~1% of routing",
+                 color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    fig.text(0.008, 0.905,
+             "Alarm set at a 1% false-alarm rate on each capture's own balanced arm. 1200 prompts per "
+             "level over six workload families.",
+             color=INK2, fontsize=9.5)
+    fig.text(0.008, 0.015,
+             "Counting a tenth of the tokens in a single request is the one setting that fails: one prompt "
+             "is itself skewed, so the alarm has to sit high.\nWindow length buys more than counting more - "
+             "8 requests at 1.3% beats 1 request at 100%.",
+             color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.savefig(os.path.join(out, "detection.png"), dpi=200, facecolor=SURFACE)
+    store["detection"] = rows
+
+
 def main(out="docs/figures"):
     os.makedirs(out, exist_ok=True)
     store: dict = {}
@@ -499,8 +555,10 @@ def main(out="docs/figures"):
     fig_instrument(out, store)
     fig_steps(out, store)
     fig_calibration(out, store)
+    if os.path.exists(os.path.join("docs", "detection.json")):
+        fig_detection(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/impact_map.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/impact_map.png, detection.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

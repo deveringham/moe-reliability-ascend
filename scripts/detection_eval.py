@@ -177,6 +177,93 @@ def benign(model, counts, labels, threshold):
     return rows
 
 
+# --- B2. Positives: what a window reads at a known skew -----------------------
+
+CAPTURES = {"deepseek-v2": "*detection-capture", "mixtral": "*detection-capture"}
+SCREEN = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600)
+
+
+def capture_levels(model):
+    """{level: (requests, layers, experts) counts} from a detection capture."""
+    spec = MODELS[model]
+    out, labels = {}, None
+    for d, m in manifests(CAPTURES[model]):
+        if os.path.basename(d).split("_")[2] != model or m.get("status") not in ("completed", "running"):
+            continue
+        for p in m["points"]:
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            records = [json.loads(line) for line in gzip.open(path, "rt")]
+            out[float(p["value"])] = D.request_counts(records, spec["n_experts"])
+            labels = np.array([r.get("subject") or "unknown" for r in records])
+    return out, labels
+
+
+def detection(model, levels, threshold):
+    """Detection rate per level and sampling setting, against the capture's own balanced arm."""
+    if 0.0 not in levels or len(levels) < 2:
+        return {"skipped": "capture has no balanced arm to score against"}
+    rows, by_setting = [], []
+    for sampler in SAMPLERS:
+        benign = D.estimate_loads(levels[0.0], N_RANKS, sampler, seed=0)
+        # The alarm level is set on benign traffic, not on the impact threshold:
+        # a screen is calibrated where it runs, and the impact curve only says
+        # which levels it *should* catch.
+        alarm = D.threshold_at_fpr(benign, 0.01)
+        per_level = []
+        for level, counts in sorted(levels.items()):
+            if level == 0.0:
+                continue
+            loads = D.estimate_loads(counts, N_RANKS, sampler, seed=1)
+            truth = D.busiest_rank(counts.sum(axis=0), N_RANKS)
+            per_level.append({"level": level, "true_load": round(truth, 3),
+                              "median_estimate": round(float(np.median(loads)), 3),
+                              "detection_rate": round(float((loads >= alarm).mean()), 3),
+                              "auc": round(D.roc(loads, benign)["auc"], 4),
+                              "costly": None if threshold is None else bool(truth >= threshold)})
+        by_setting.append({"window": sampler.window, "layers": sampler.layers,
+                           "token_fraction": sampler.token_fraction,
+                           "assignment_fraction": round(sampler.cost(levels[0.0].shape[1]).assignment_fraction, 4),
+                           "alarm_at_1pct_fpr": round(alarm, 4), "levels": per_level})
+    rows = by_setting
+    return {"n_requests": int(len(levels[0.0])), "settings": rows}
+
+
+def localisation_run():
+    """A skew confined to a few layers on a rank other than 0: is it found?"""
+    out = {}
+    for d, m in manifests("*detection-localisation"):
+        cfg = m["config"]["imbalance"]
+        biased = set(cfg.get("bias_layers") or [])
+        model = os.path.basename(d).split("_")[2]
+        n_experts = MODELS[model]["n_experts"]
+        points = []
+        for p in m["points"]:
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            counts = D.request_counts([json.loads(line) for line in gzip.open(path, "rt")], n_experts)
+            # The capture's MoE-layer index differs from the model layer index the
+            # bias names; moe_layers maps one to the other.
+            moe_layers = f.get("moe_layers") or list(range(counts.shape[1]))
+            expected = {i for i, layer in enumerate(moe_layers) if layer in biased}
+            found = D.localise(counts.sum(axis=0), N_RANKS, threshold=1.3)
+            flagged = set(found["flagged_layers"])
+            points.append({"level": float(p["value"]), "mean_load": round(found["mean_load"], 3),
+                           "max_layer_load": round(found["max_layer_load"], 3),
+                           "expected_layers": sorted(expected), "flagged_layers": sorted(flagged),
+                           "recall": round(len(flagged & expected) / len(expected), 3) if expected else None,
+                           "precision": round(len(flagged & expected) / len(flagged), 3) if flagged else None,
+                           "flagged_rank": found["flagged_rank"],
+                           "consistent_rank_share": round(found["consistent_rank_share"], 3)})
+        out[os.path.basename(d)] = {"bias_target": cfg.get("bias_target"), "bias_layers": sorted(biased),
+                                    "points": points}
+    return out
+
+
 # --- D. Stage 2: step time at matched batch size ------------------------------
 
 def step_table(run_dir, label):
@@ -295,6 +382,15 @@ def main(out_dir="docs"):
             continue
         threshold = (store["impact"].get(model) or {}).get("impact_threshold")
         store["benign"][model] = benign(model, counts, labels, threshold)
+    store["detection"] = {}
+    for model in MODELS:
+        levels, _ = capture_levels(model)
+        if not levels:
+            store["detection"][model] = {"skipped": "no detection capture pulled"}
+            continue
+        store["detection"][model] = detection(model, levels,
+                                              (store["impact"].get(model) or {}).get("impact_threshold"))
+    store["localisation"] = localisation_run()
     store["stage2_step_time"] = stage2(cal)
     store["stage3_pace_setter"] = stage3()
     store["profiling_cost"] = profiling_cost()
@@ -333,6 +429,27 @@ def main(out_dir="docs"):
             print(f"   to resolve {r['resolution']:.3f}x: {r['all_layers']} requests all layers, "
                   f"{r['four_layers']} with 4 layers, {r['four_layers_tenth_of_tokens']} with 4 layers "
                   f"and a tenth of tokens")
+    print()
+    for model, row in store["detection"].items():
+        if "skipped" in row:
+            print(f"{model}: detection skipped - {row['skipped']}")
+            continue
+        print(f"{model}: detection rate at 1% FPR, {row['n_requests']} captured requests per level")
+        for s in row["settings"]:
+            if s["window"] not in (1, 8, 64):
+                continue
+            print(f"   window {s['window']:>3} layers {str(s['layers']):>4} tok {s['token_fraction']:<4} "
+                  f"counts {s['assignment_fraction']:.3f}  alarm {s['alarm_at_1pct_fpr']:.2f}  "
+                  + "  ".join(f"{lv['true_load']:.2f}x:{lv['detection_rate']:.2f}"
+                              + ("*" if lv["costly"] else "") for lv in s["levels"]))
+        print("   (* = load at or above this model's impact threshold)")
+    print()
+    for run, row in store["localisation"].items():
+        print(f"localisation, bias on {row['bias_target']} layers {row['bias_layers']}:")
+        for p in row["points"]:
+            print(f"   level {p['level']:g}: mean {p['mean_load']:.2f}x, worst layer {p['max_layer_load']:.2f}x, "
+                  f"flagged {len(p['flagged_layers'])} layers (recall {p['recall']}, precision {p['precision']}), "
+                  f"rank {p['flagged_rank']}")
     print()
     for model, row in store["stage2_step_time"].items():
         if "skipped" in row:

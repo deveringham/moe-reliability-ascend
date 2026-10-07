@@ -112,6 +112,16 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   one's spread, so do not quote a DeepSeek threshold. Natural traffic reaches 1.09-1.25x
   even per single prompt, where the null above still holds. The *mechanism* is
   not established on either model, and two accounts have already been retracted.
+- **The detection screen works at ~1% of routing counted** (2026-10-07,
+  `docs/detection-findings.md`). Busiest-rank load over a window of 8 requests,
+  counting 4 MoE layers and a tenth of their tokens, flags every skew level that
+  costs latency on both models at a 1% false-alarm rate. Window length matters
+  more than how much is counted: one request at 100% counted is worse than 8 at
+  1.3%, because a single prompt is itself skewed (benign p99 1.41-1.54x). Scoring
+  a one-request window is the mistake to avoid.
+- **Flag layers individually, not just the mean.** With a bias on 6 of 26 layers
+  the model-wide mean reads 1.40x while the biased layers read 2.58x; per-layer
+  flagging recovers exactly those 6 and names the rank. `detection.localise`.
 - **Measure natural rank load per layer.** The validation summary's
   `rank_max_over_mean` takes the busiest rank of layer-averaged shares, which
   lets the hot rank cancel across layers: 1.02x where the per-layer form

@@ -206,3 +206,15 @@ def test_a_persistent_hot_rank_is_told_apart_from_a_rotating_one():
     # experts between ranks cannot help.
     assert len(found["flagged_layers"]) == 8
     assert found["consistent_rank_share"] == pytest.approx(0.25)
+
+
+def test_request_counts_handle_a_capture_that_never_split_prompt_from_generated():
+    # max_new_tokens = 1 leaves everything in routed_experts and the prompt field None.
+    ids = np.zeros((4, 3, 2), dtype=int)
+    ids[:, 1:, :] = [[2, 5]]
+    unsplit = [{"prompt_routed_experts": None, "routed_experts": ids}]
+    c = D.request_counts(unsplit, n_experts=8)
+    assert c.shape == (1, 2, 8) and c[0, 0, 2] == 4
+
+    with pytest.raises(ValueError, match="no routed experts"):
+        D.request_counts([{"prompt_routed_experts": None, "routed_experts": None}], n_experts=8)
