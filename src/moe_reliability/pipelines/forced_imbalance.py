@@ -148,9 +148,10 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
     n = cfg.imbalance.validation_samples
     subjects: list | None = None
     if cfg.imbalance.validation_workload:
-        from ..core.data import workload_prompts
+        from ..core.data import prompt_char_budget, workload_prompts
 
-        prompts, subjects = workload_prompts(cfg.imbalance.validation_workload, n, cfg.experiment.seed)
+        prompts, subjects = workload_prompts(cfg.imbalance.validation_workload, n, cfg.experiment.seed,
+                                             max_chars=prompt_char_budget(cfg.server.max_model_len))
     elif n:
         prompts, subjects, _ = common.mmlu_prompts(n, cfg.experiment.seed)
     else:

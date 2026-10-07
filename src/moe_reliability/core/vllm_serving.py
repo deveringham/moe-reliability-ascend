@@ -9,10 +9,17 @@
 
 import time, subprocess, os, signal, asyncio
 import io, base64, json
+from collections import Counter
 import urllib.request
 import urllib.error
 import numpy as np
 from openai import AsyncOpenAI
+
+# A capture of a few hundred prompts can lose a few to a rejected request - a
+# prompt longer than max_model_len, say - without losing its meaning. Beyond
+# this it is a different workload from the one asked for, so it fails loudly.
+MAX_FAILED_REQUESTS = 5
+FAILED_REQUEST_FRACTION = 0.01
 
 # Spins up the vLLM server as a subprocess and blocks until ready.
 def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, max_num_batched_tokens=4096, enforce_eager=True, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800, extra_env=None):
@@ -126,7 +133,14 @@ def stop_vllm_server(server_process, timeout=120.0):
         return not group_alive()
 
     os.killpg(pgid, signal.SIGTERM)
-    server_process.wait()  # reap the parent so it stops counting as a group member
+    try:
+        # Reap the parent so it stops counting as a group member - but on a clock.
+        # An API server with connections still open waits for them before exiting,
+        # so an unbounded wait here would skip the SIGKILL below and hold the NPUs
+        # indefinitely.
+        server_process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Server process still running {timeout:.0f}s after SIGTERM; escalating...")
 
     if not wait_for_group(time.monotonic() + timeout):
         print(f"Server tree still alive after {timeout:.0f}s, sending SIGKILL...")
@@ -323,9 +337,28 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
             res["end_s"] = time.perf_counter() - batch_start_time
             return res
     
-    # Fire all requests
+    # Fire all requests.
+    #
+    # return_exceptions keeps one bad request from taking the batch with it. The
+    # default propagates the first exception while the other tasks keep running,
+    # and the caller then tears the server down with requests still in flight -
+    # the API server waits for those connections to close and never exits. One
+    # prompt longer than max_model_len is enough to trigger it.
     tasks = [rate_limited_measure_request(i, prompt) for i, prompt in enumerate(prompts)]
-    results = await asyncio.gather(*tasks)
+    settled = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = [r for r in settled if not isinstance(r, BaseException)]
+    failures = [r for r in settled if isinstance(r, BaseException)]
+    if failures:
+        kinds = Counter(type(f).__name__ for f in failures)
+        print(f"{len(failures)} of {len(prompts)} requests failed: "
+              + ", ".join(f"{n} x {k}" for k, n in kinds.most_common())
+              + f"; first: {failures[0]}")
+        # A handful of rejected prompts leaves a usable measurement; a batch that
+        # mostly failed does not, and must not be reported as if it had run.
+        if len(failures) > max(MAX_FAILED_REQUESTS, FAILED_REQUEST_FRACTION * len(prompts)):
+            raise RuntimeError(f"{len(failures)} of {len(prompts)} requests failed "
+                               f"(first: {failures[0]!r})")
     
     batch_end_time = time.perf_counter()
     total_batch_time = batch_end_time - batch_start_time
@@ -376,6 +409,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   port=8000, extra_env=None, collect_itl=False):
     server_process = None
     results = None
+    clients: list = []
     try:
         # Start server
         server_process = start_vllm_server(model, port=port, seed=seed,
@@ -394,6 +428,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
 
         # Start client
         client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
+        clients.append(client)
     
         # Run warmup
         await run_batch(client, model, prompts[:n_warmup_samples],
@@ -415,10 +450,18 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         if trace_dir is not None:
             stop_profiling(port=port)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - reported, and the caller sees results=None
         print(f"An error occurred during inference: {e}")
 
     finally:
+        # Close the client first: its open connections are what an API server
+        # waits for when it shuts down, so releasing them lets the server exit
+        # on its own instead of being killed.
+        for c in clients:
+            try:
+                await c.close()
+            except Exception as e:  # noqa: BLE001 - teardown must not mask the real error
+                print(f"Closing the client failed, continuing to shut the server down: {e}")
         # Tear down server
         if server_process is not None:
             stop_vllm_server(server_process)

@@ -145,3 +145,36 @@ def test_bias_layers_are_checked(workload_config):
     workload_config["imbalance"]["method"] = "checkpoint"
     with pytest.raises(ConfigError, match="router_bias"):
         ExperimentConfig.from_dict(workload_config)
+
+
+# --- Prompts the server would reject --------------------------------------
+
+def test_prompts_too_long_for_the_context_are_dropped(monkeypatch):
+    long_row = {"prompt": "x" * 100_000}
+    short_row = {"prompt": "hello"}
+    rows = [long_row if i % 2 else short_row for i in range(60)]
+    monkeypatch.setattr(data, "_stream", lambda *a, **k: [dict(rows[i]) for i in range(a[3])])
+
+    prompts, _ = data.workload_prompts("ultrachat", 10, seed=1, max_chars=1000)
+    assert len(prompts) == 10
+    assert all(len(p[-1]["content"]) <= 1000 for p in prompts)
+
+
+def test_a_workload_that_cannot_fill_the_request_fails_loudly(monkeypatch):
+    # Silently returning a short, length-biased sample would change the workload
+    # without saying so.
+    monkeypatch.setattr(data, "_stream", lambda *a, **k: [{"prompt": "x" * 5000} for _ in range(a[3])])
+    with pytest.raises(ValueError, match="only 0 of .* prompts fit"):
+        data.workload_prompts("ultrachat", 10, seed=1, max_chars=100)
+
+
+def test_char_budget_leaves_room_for_the_chat_template():
+    budget = data.prompt_char_budget(2048)
+    assert budget < 2048 * data.CHARS_PER_TOKEN       # the reserve is held back
+    assert data.prompt_char_budget(4096) > budget     # and it scales with the context
+
+
+def test_unfiltered_loading_is_unchanged(stub_stream):
+    prompts, labels = data.workload_prompts("mmlu", 3, seed=1)
+    assert len(prompts) == 3
+    assert stub_stream[0][3] == 3                      # no over-fetch when nothing is filtered
