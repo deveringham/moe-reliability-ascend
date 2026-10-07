@@ -180,12 +180,15 @@ def batch_busiest_rank(pooled: np.ndarray, n_ranks: int) -> np.ndarray:
     return (per_rank.max(axis=-1) * n_ranks).mean(axis=-1)
 
 
-def _window_loads(rows: np.ndarray, n_ranks: int, sampler: WindowSampler, layers: np.ndarray,
-                  rng) -> np.ndarray:
-    """Loads of consecutive tumbling windows over ``rows``: ``(requests, layers, experts)``."""
+def _window_loads(rows: np.ndarray, n_ranks: int, sampler: WindowSampler, rng) -> np.ndarray:
+    """Loads of consecutive tumbling windows over ``rows``: ``(requests, layers, experts)``.
+
+    ``rows`` is already restricted to the sampled layers - slicing them before the
+    requests are drawn keeps a long stream from materialising layers nobody counts.
+    """
     n_windows = len(rows) // sampler.window
-    pooled = rows[:n_windows * sampler.window][:, layers].reshape(
-        n_windows, sampler.window, len(layers), rows.shape[2]).sum(axis=1)
+    pooled = rows[:n_windows * sampler.window].reshape(
+        n_windows, sampler.window, rows.shape[1], rows.shape[2]).sum(axis=1)
     if sampler.token_fraction < 1.0:
         # Thinning the pooled window is the same multinomial as thinning per token,
         # and far cheaper.
@@ -203,8 +206,8 @@ def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler:
     implementation, and a window may straddle the join, as it would in service.
     """
     layers = sampler._layer_index(pools[0][0].shape[1])
-    rows = np.concatenate([pool[rng.choice(len(pool), n, replace=True)] for pool, n in pools])
-    return _window_loads(rows, n_ranks, sampler, layers, rng) >= alarm
+    rows = np.concatenate([pool[:, layers][rng.choice(len(pool), n, replace=True)] for pool, n in pools])
+    return _window_loads(rows, n_ranks, sampler, rng) >= alarm
 
 
 def _first_run(flags: np.ndarray, consecutive: int) -> int | None:
@@ -229,10 +232,14 @@ def onset_delay(balanced: np.ndarray, skewed: np.ndarray, n_ranks: int, sampler:
     """
     rng = np.random.default_rng(seed)
     pre_requests = pre_windows * sampler.window
+    layers = sampler._layer_index(balanced.shape[1])
+    # Restrict to the counted layers once; the draws then copy only what is counted.
+    pre, post = balanced[:, layers], skewed[:, layers]
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
     delays, false_starts, misses = [], 0, 0
     for _ in range(draws):
-        flags = alarm_stream([(balanced, pre_requests), (skewed, post_windows * sampler.window)],
-                             n_ranks, sampler, alarm, rng)
+        flags = alarm_stream([(pre, pre_requests), (post, post_windows * sampler.window)],
+                             n_ranks, flat, alarm, rng)
         first = _first_run(flags, consecutive)
         if first is None:
             misses += 1
@@ -260,9 +267,11 @@ def mean_windows_to_false_alarm(balanced: np.ndarray, n_ranks: int, sampler: Win
     tuning knob an operator actually has.
     """
     rng = np.random.default_rng(seed)
+    pre = balanced[:, sampler._layer_index(balanced.shape[1])]
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
     runs, survived = [], 0
     for _ in range(draws):
-        flags = alarm_stream([(balanced, horizon * sampler.window)], n_ranks, sampler, alarm, rng)
+        flags = alarm_stream([(pre, horizon * sampler.window)], n_ranks, flat, alarm, rng)
         first = _first_run(flags, consecutive)
         if first is None:
             survived += 1
@@ -292,7 +301,7 @@ def estimate_loads(counts: np.ndarray, n_ranks: int, sampler: WindowSampler,
     chosen = np.concatenate([rng.choice(len(counts), window, replace=False)
                              for _ in range(sampler.draws)])
     drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
-    return _window_loads(counts[chosen], n_ranks, drawn, layers, rng)
+    return _window_loads(counts[:, layers][chosen], n_ranks, drawn, rng)
 
 
 def threshold_at_fpr(benign: Sequence[float], fpr: float) -> float:

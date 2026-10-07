@@ -125,6 +125,10 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   0.5 / 1 / 2) while the pooled form reads 1.05-1.08x, i.e. benign. It is the
   matched pair for every fixed-target sweep, and the case where EPLB's
   balancedness would report a perfectly balanced server.
+- **One alarming window is not an alarm.** At a 1% per-window false-alarm rate
+  the screen trips on benign traffic every 324-656 requests. Requiring two
+  consecutive alarming windows gives 98-100% detection, 0-1% early firing and one
+  false alarm per 1200-1750 requests, for 16 requests of delay.
 - **Flag layers individually, not just the mean.** With a bias on 6 of 26 layers
   the model-wide mean reads 1.40x while the biased layers read 2.58x; per-layer
   flagging recovers exactly those 6 and names the rank. `detection.localise`.

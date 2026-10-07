@@ -30,6 +30,7 @@ per level, and no ROC is claimed.
 from __future__ import annotations
 
 import csv
+import functools
 import glob
 import gzip
 import json
@@ -183,8 +184,13 @@ CAPTURES = {"deepseek-v2": "*detection-capture", "mixtral": "*detection-capture"
 SCREEN = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600)
 
 
+@functools.lru_cache(maxsize=None)
 def capture_levels(model):
-    """{level: (requests, layers, experts) counts} from a detection capture."""
+    """{level: (requests, layers, experts) counts} from a detection capture.
+
+    Cached: a capture is ~1200 records per level of nested routing arrays, so
+    parsing it twice costs minutes.
+    """
     spec = MODELS[model]
     out, labels = {}, None
     for d, m in manifests(CAPTURES[model]):

@@ -42,9 +42,15 @@ the ~25% a purely rotating rank gives and the ~100% an injected rank bias gives.
 There is no persistent hot rank in natural traffic, which is a second,
 independent reason EPLB-style rank rebalancing has nothing to win here.
 
-**What is still unmeasured:** the screen's own cost on the device, detection
-*delay* (every capture is a server whose skew is fixed for its lifetime), and
-stage 3's ability to attribute (the balanced case already has a pace setter).
+**One alarming window is not an alarm.** At a 1% per-window false-alarm rate the
+screen fires during benign traffic every few hundred requests. Requiring two
+consecutive alarming windows fixes it - 98-100% detection, 0-1% early firing,
+one false alarm per 1200-1750 requests - and costs 16 requests of delay (C4).
+
+**What is still unmeasured:** the screen's own cost on the device, behaviour
+under a skew that ramps or flickers rather than switching on (every capture is a
+server whose bias is fixed for its lifetime), and stage 3's ability to attribute
+(the balanced case already has a pace setter).
 
 ## A. Where a cost begins
 
@@ -184,6 +190,44 @@ Whether it *costs* anything is a separate question, and the one the
   does not matter - which would contradict the straggler picture and make the
   per-layer statistic mandatory.
 
+## C4. How fast it fires, and how often it cries wolf
+
+A per-window false-alarm rate of 1% sounds small and is not: over a run of 40
+benign windows it is a one-in-three chance of firing before anything happens.
+Requiring *k* consecutive alarming windows before raising one is the knob that
+fixes it, and it costs delay. Measured by running a balanced stretch into a
+skewed one, at the cheapest setting (8-request windows, 4 layers, a tenth of the
+tokens), with the onset at each model's lowest costly level:
+
+| Window | k | Detected | Fired early | Delay (requests) | Quiet for |
+|---|---|---|---|---|---|
+| 8 | 1 | 0.50 / 0.76 | **0.50 / 0.24** | 8 | 324 / 656 reqs |
+| **8** | **2** | **0.98 / 1.00** | **0.01 / 0.00** | **16** | **1204 / 1752 reqs** |
+| 8 | 3 | 1.00 / 1.00 | 0.00 / 0.00 | 24 / 40 | beyond horizon |
+| 32 | 2 | 1.00 / 0.99 | 0.00 / 0.01 | 64 | 6016 / 8192 reqs |
+| 128 | 2 | 0.95 / 0.96 | 0.05 / 0.04 | 256 | 16896 / 31744 reqs |
+
+(DeepSeek / Mixtral. "Quiet for" is the median number of requests benign traffic
+runs before a false alarm.)
+
+- **A single alarming window is not an alarm.** At k = 1 the screen fires during
+  the balanced stretch in 24-75% of runs, and benign traffic trips it every
+  324-656 requests. Any deployment would turn it off within a day.
+- **Two consecutive windows is the setting to use.** Detection goes to 98-100%,
+  early firing to 0-1%, and the wait between false alarms to 1200-1750 requests,
+  for 16 requests of delay - two windows, which is the minimum k = 2 can cost.
+- **Longer windows buy quiet and pay for it in delay, linearly.** 128-request
+  windows at k = 2 run 17-32k requests between false alarms but take 256
+  requests to notice. Since the skew being detected is a standing condition
+  rather than a transient, that trade is available but rarely worth it.
+- **The delay distribution is tight** (p50 = p90 at most settings): once the skew
+  starts, the next window sees it. The variance is in whether the *alarm* was
+  already tripped, not in how long detection takes.
+
+This is a steady-state result. The onset is instantaneous and the skew then
+persists, because every capture is a server whose bias is fixed for its lifetime;
+a skew that ramps or flickers is not represented.
+
 ## D. Stage 2: step time at matched batch size
 
 Slope of median step wall against busiest-rank load, within a batch bin, from
@@ -261,10 +305,10 @@ corpus does not transfer exactly to another.
    `scatter_add_` into a resident counter inside the expert-selection wrapper is
    the implementation to time, against the same unprofiled twin the profiler
    overhead will use.
-2. **Detection delay.** Every capture here is a server whose skew is fixed for
-   its lifetime, so the screen has only been scored on steady state. The plugin
-   would have to read its bias from a tensor updated in place - which also keeps
-   graph mode working - to script an onset.
+2. **A skew that ramps or flickers.** C4 measures an instantaneous onset into a
+   standing skew, which is the easy case. The plugin would have to read its bias
+   from a tensor updated in place - which also keeps graph mode working, since
+   the vector is allocated once and never replaced - to script a ramp.
 3. **Localisation under rotating skew.** The 6-layer test is a persistent skew.
    `rotating-skew` captures per-request routing at each rotating level, so the
    screen can be scored on it: the per-layer form should catch it and the pooled
