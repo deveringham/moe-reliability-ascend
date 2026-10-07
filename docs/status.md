@@ -30,14 +30,15 @@ cannot surface.
 **Update 2026-10-06/07: it does surface once the skew is strong enough.** A
 graded, injected router bias that keeps every expert live raises 100-token TPOT
 on 4 NPUs, measured with the instrument in every arm. Mixtral is linear from the
-first offset, +12% per +1x of busiest-rank load (t = 52). DeepSeek has a
-threshold instead: flat to 2.34x, +22% at 3.45x. Graph mode shows the cost too,
-though its balanced points are not yet controlled. **The mechanism is not
-established on either model**: a saturated decode step is the same length at
-every eager offset, which withdrew the GEMM account, and step wall still misses
-TPOT by -45% to +19%. Natural traffic reaches 1.09-1.25x even for a single
-prompt, below the lowest skew that costs anything (Mixtral, +3.3% at 1.38x), so
-the null above is a statement about realistic skew, not a property of the stack.
+first offset, +12% per +1x of busiest-rank load (t = 52), and reproduces in graph
+mode. DeepSeek's cost is large and real by 3.2-3.5x but its shape below that is
+unresolved: two eager sweeps disagree at 2.34x (+1.0% against +6.5%), by more
+than either one's repeat spread. **The mechanism is not established on either
+model**: a saturated decode step is the same length at every eager offset, which
+withdrew the GEMM account, and step wall still misses TPOT by -45% to +19%.
+Natural traffic reaches 1.09-1.25x even for a single prompt, below the lowest
+skew that costs anything (Mixtral, +3.3% at 1.38x), so the null above is a
+statement about realistic skew, not a property of the stack.
 `docs/figures/impact_map.png` puts both on one axis.
 
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
@@ -142,6 +143,11 @@ touches hardware, which goes through `./nrun`.
 - **Window-averaged trace figures.** A profiled window's step mix moves with the
   swept parameter, so averages over it compare different workloads. Split steps
   and match them on batch and prefill content (`scripts/step_profile.py`).
+- **Graph-mode per-level numbers below ~2x busiest-rank load.** Their repeat
+  spread is largest at the *low* levels (Mixtral balanced sd 10.3 ms against 0.4
+  at its most skewed), which fits frontend starvation rather than contention: a
+  fast engine the client cannot feed measures the client. The slopes and the
+  high-skew points are sound.
 - **An instrument that is absent in the control arm.** The router-bias plugin is
   not installed at strength 0, so its own cost rides on every effect measured
   against a balanced point: 10.0 ms per token on eager DeepSeek, nothing on

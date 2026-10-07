@@ -17,13 +17,17 @@ regime, with the instrument present in every arm (the controlled sweep,
 
 - **Mixtral:** +12.0% per +1x of busiest-rank load (+19.9 ms, t = 52), linear
   from the first offset: 165.5 ms balanced to 209.8 ms at 3.36x.
-- **DeepSeek: a threshold, not a slope.** Flat to 2.34x (174.0, 173.9, 171.8,
-  175.8 ms; +1.4 ms per +1x, t = 0.7), then +22% at 3.45x (212.6 ms). The
-  gradual rise first reported below 2.34x was the instrument.
+- **DeepSeek: rising somewhere between 2.3x and 3.4x, shape unresolved.** The
+  controlled sweep reads flat to 2.34x (174.0, 173.9, 171.8, 175.8 ms; +1.4 ms
+  per +1x, t = 0.7) and +22% at 3.45x. A second sweep filling that gap
+  (2026-10-07, below) reads +6.5% already at 2.34x and is non-monotone above it.
+  The two disagree by more than either one's spread, so "a threshold, not a
+  slope" is withdrawn pending replication. The gradual rise first reported
+  *below* 2.34x was the instrument, and that still stands.
 
 Natural traffic reaches 1.09-1.25x on the same load measure, even for a single
 prompt (`docs/figures/impact_map.png`). Mixtral's first cost beyond run-to-run
-drift is +3.3% at 1.38x; DeepSeek's is at 3.45x.
+drift is +3.3% at 1.38x; DeepSeek's lies somewhere in 2.3-3.4x.
 
 **Graph mode also shows the cost** (+13.5 ms per +1x on DeepSeek, +18.1 on
 Mixtral, against superseded eager fits of +13.0 and +19.2). Graph mode is how a
@@ -424,6 +428,67 @@ point, and the two agree at every biased level. The figures use the per-layer
 form throughout. Calibration routed prompt tokens only (`max_new_tokens = 1`);
 the natural captures include 100 generated tokens.
 
+## Graph mode, controlled, and the threshold sweep (2026-10-07)
+
+`rbias-graph-threshold` repeats the graph-mode sweeps with
+`bias_plugin_at_zero` - the graph runs in the Graph mode section above measured
+against a plugin-free balanced point - and adds a third run filling the gap in
+DeepSeek's eager curve. TPOT mean, ms (± sd over 3 repeats):
+
+| Busiest rank | DeepSeek graph | Mixtral graph |
+|---|---|---|
+| balanced | 142.3 ± 8.0 | 146.1 ± 10.3 |
+| 1.24-1.30x | 140.5 ± 3.8 | 143.5 ± 7.2 |
+| 1.38-1.66x | 140.1 ± 4.2 | 157.4 ± 7.4 |
+| 1.76-2.34x | 160.3 ± 18.7 | 152.1 ± 10.7 |
+| 2.62-3.45x | 191.2 ± 13.1 | 187.7 ± 1.9 |
+| 3.36x | | 208.9 ± 0.4 |
+
+- **The cost survives the control on both models**, +22.6 ms per +1x of
+  busiest-rank load on DeepSeek (t = 6.7, and +22.2 with execution order as a
+  covariate).
+- **The noise sits at the *low* levels, not the high ones.** Mixtral's balanced
+  point has sd 10.3 ms while its two most-skewed points have sd 1.9 and 0.4, and
+  its low end is non-monotone (143.5 -> 157.4 -> 152.1). That is the opposite of
+  a contention story, which would scale with the work, and it fits the frontend
+  starvation already recorded for graph mode: when the engine serves faster than
+  the client feeds it, TPOT partly measures the client. **Per-level graph-mode
+  numbers below ~2x should not be quoted**; the slope and the high-skew points
+  are what this run supports.
+- **DeepSeek's graph run also drifted.** TPOT rose with execution order
+  (+1.2 ms per position, t = 2.1), and order correlates 0.68 with the host load
+  average, which climbed from ~23 to ~29 as the neighbouring job got busier. The
+  shuffled rounds kept it off the slope but not out of the variance.
+
+### The eager threshold sweep
+
+`rbias-graph-threshold-002`, eager, offsets 0 / 1 / 1.25 / 1.5 / 1.75 / 2, on a
+**quiet node** - zero foreign NPU processes in all 36 snapshots. The new offsets
+calibrate to 2.67x, 2.95x and 3.21x, inside the gap the controlled sweep left:
+
+| Busiest rank | TPOT (ms) | vs balanced | controlled sweep |
+|---|---|---|---|
+| 1.14x | 176.1 ± 13.7 | - | - |
+| 2.35x | 187.5 ± 9.0 | +6.5% | **+1.0%** |
+| 2.67x | 194.8 ± 2.3 | +10.6% | not swept |
+| 2.95x | 184.8 ± 12.4 | +4.9% | not swept |
+| 3.21x | 205.3 ± 4.8 | +16.6% | not swept |
+| 3.45x | 209.3 ± 2.3 | +18.9% | +22.2% |
+
+- **The two sweeps disagree at 2.34x**, +6.5% against +1.0%, by more than either
+  one's repeat spread. The endpoints agree (+18.9% against +22.2%).
+- **Execution order explains none of it** (-0.01 ms per position, t = 0.0), so
+  the balanced point's wide spread (188.3, 178.7, 161.3) is noise rather than
+  drift, and the quiet node did not make this run tighter than the contended one.
+- **A straight fit gives +13.1 ms per +1x (t = 4.2) with a residual sd of
+  9.9 ms**, and the sequence is non-monotone (2.95x reads below 2.67x). Three
+  repeats are not enough to resolve the shape at this noise level.
+- **What is settled:** DeepSeek's cost is real and large by 3.2-3.5x, and absent
+  at natural load. **What is not:** whether it begins near 2.3x or only above
+  3x, and therefore whether it is a threshold or a slope. Resolving it needs more
+  repeats in 2.3-3.5x, and an explanation for why eager DeepSeek's repeat spread
+  is 2-5 ms in one run and 9-14 ms in another of the same configuration.
+
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
 `benchmark.save_itl` records the gap between consecutive streamed chunks of each
@@ -502,6 +567,9 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261006-135100` itl-smoke | ITL capture and zero-bias control, 60 prompts |
 | `20261006-135720` ... `-150633` rbias-zero-control-000..003 | Zero-bias control: 2 models x plugin on/off x levels 0 / 2 x 3 |
 | `20261006-155755`, `-165818` rbias-controlled-000, -001 | Controlled eager sweep: plugin at level 0, DeepSeek 5 / Mixtral 6 offsets x 3 |
+| `20261007-100316` rbias-calibration | Offsets 1.25 / 1.5 / 1.75 on DeepSeek |
+| `20261007-101356`, `-112132` rbias-graph-threshold-000, -001 | Controlled graph sweep, DeepSeek and Mixtral |
+| `20261007-123441` rbias-graph-threshold-002 | Eager DeepSeek threshold sweep, quiet node |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
@@ -516,9 +584,10 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
-1. **Re-run the graph-mode sweeps with `bias_plugin_at_zero`.** The eager
-   sweeps are done (the controlled sweep). Graph mode captures the plugin's add
-   into the graph, so its cost there may be small, but it is unmeasured.
+1. **Replicate DeepSeek's eager curve between 2.3x and 3.5x.** Two sweeps
+   disagree there and neither resolves the shape. The prior question is why the
+   same configuration gives a repeat spread of 2-5 ms in one run and 9-14 ms in
+   another; without that, more repeats may not converge.
 2. **Scrape `vllm:inter_token_latency_seconds` per point.** Client-side ITLs are
    sound in the mean but their distribution is client delivery at this
    concurrency, so within-request spikes are still unmeasured. The server-side

@@ -117,7 +117,13 @@ def natural_load(pattern, n_experts, seed=0, draws=1000):
 # rbias-deepseek-001 / rbias-mixtral-001 runs they replace measured against a
 # plugin-free balanced point, which overstated DeepSeek's cost.
 EAGER = ("*rbias-controlled-000", "*rbias-controlled-001")
-GRAPH = ("*rbias-graph-000", "*rbias-graph-001")
+# The graph sweeps re-run with the plugin at level 0 too; rbias-graph-000/001,
+# which they replace, measured against a plugin-free balanced point.
+GRAPH = ("*rbias-graph-threshold-000", "*rbias-graph-threshold-001")
+# A second eager DeepSeek sweep, filling the 2.3-3.4x gap the controlled sweep
+# left. It is a separate run, so it carries its own balanced baseline and its own
+# drift; the two are drawn together rather than pooled.
+EAGER_SECOND = {"deepseek-v2": "*rbias-graph-threshold-002"}
 DRIFT_PCT = 2.2  # largest run-to-run drift between identical points (zero-control level-2 arms)
 
 
@@ -408,7 +414,7 @@ def fig_impact_map(out, store):
         top.errorbar(x, y, yerr=e, ls="-", marker="o", ms=6, lw=2, capsize=3, elinewidth=1,
                      color=MODEL_COLOUR[model], mec=SURFACE, mew=1.5, zorder=3, label=MODEL_LABEL[model])
         first = next((i for i, v in enumerate(y) if v > DRIFT_PCT), None)
-        if first is not None:
+        if first is not None and model not in EAGER_SECOND:
             # Placed in the clear space beside each curve, with a leader to the point.
             spot = {"mixtral": (1.42, 12.5, "bottom"), "deepseek-v2": (2.9, 9.5, "top")}[model]
             top.annotate(f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
@@ -419,6 +425,39 @@ def fig_impact_map(out, store):
         rows.append({"model": model, "levels": levels, "load": [round(v, 3) for v in x],
                      "tpot_pct": [round(v, 2) for v in y], "sd_pct": [round(v, 2) for v in e],
                      "balanced_ms": round(base, 1)})
+    # The second DeepSeek sweep, drawn hollow: same instrument, different run, and
+    # it does not reproduce the first one's flat stretch below 2.4x.
+    for model, pattern in EAGER_SECOND.items():
+        if not list(manifests(pattern)):
+            continue
+        _, by = sweep(pattern)
+        levels = sorted(by)
+        base = float(np.mean(by[levels[0]]))
+        x = [cal[model][lv][0] for lv in levels]
+        y = [100 * (float(np.mean(by[lv])) / base - 1) for lv in levels]
+        e = [100 * float(np.std(by[lv], ddof=1)) / base for lv in levels]
+        top.errorbar(x, y, yerr=e, ls=":", marker="o", ms=6, lw=1.6, capsize=3, elinewidth=1,
+                     color=MODEL_COLOUR[model], mfc=SURFACE, mew=1.6, zorder=2,
+                     label=f"{MODEL_LABEL[model]}, second sweep")
+        rows.append({"model": model, "run": "second", "levels": levels, "load": [round(v, 3) for v in x],
+                     "tpot_pct": [round(v, 2) for v in y], "sd_pct": [round(v, 2) for v in e],
+                     "balanced_ms": round(base, 1)})
+
+    # Where the two sweeps of one model first leave the drift band, as a range.
+    for model in EAGER_SECOND:
+        crossings = [r["load"][next(i for i, v in enumerate(r["tpot_pct"]) if v > DRIFT_PCT)]
+                     for r in rows if r["model"] == model
+                     and any(v > DRIFT_PCT for v in r["tpot_pct"])]
+        if len(crossings) < 2:
+            continue
+        lo_x, hi_x = min(crossings), max(crossings)
+        top.annotate(f"{MODEL_LABEL[model].split('-')[0]}: cost begins somewhere in\n"
+                     f"{lo_x:.1f}x-{hi_x:.1f}x; the two sweeps disagree",
+                     xy=(lo_x - 0.05, 27.2), ha="left", va="bottom",
+                     color=INK2, fontsize=8.5, linespacing=1.3)
+        top.annotate("", xy=(lo_x, 26.4), xytext=(hi_x, 26.4),
+                     arrowprops={"arrowstyle": "|-|,widthA=0.4,widthB=0.4", "color": INK3, "lw": 0.9})
+
     top.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.12, 0.98))
     top.set_ylim(-6, 32)
 
@@ -442,8 +481,8 @@ def fig_impact_map(out, store):
              "Load: the busiest rank's share of token-expert assignments in each MoE layer, averaged over layers; "
              "4-way contiguous placement.\nNatural ranges: single prompts and random 200-prompt mixes p1-p99, "
              "one-subject windows min-max; dot = median. Levels that collapse routing are excluded.\n"
-             "A neighbouring job ran on NPUs 4-7 during the sweep; its endpoints match a quiet-node control "
-             "within 1.5%.",
+             "DeepSeek's two eager sweeps disagree between 2.3x and 3.4x: the filled one reads +1% at 2.35x, "
+             "the hollow one +7%.\nWhere its cost begins is unresolved; Mixtral's rise from 1.3x reproduces.",
              color=INK3, fontsize=7.5, va="bottom", linespacing=1.4)
     # Explicit margins: tight_layout cannot place shared axes with long tick labels.
     fig.subplots_adjust(left=0.215, right=0.975, top=0.875, bottom=0.165)

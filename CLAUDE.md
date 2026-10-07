@@ -106,8 +106,10 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 - **Strong injected skew does cost latency** (2026-10-06/07,
   `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
   4 NPUs and the plugin in every arm, 100-token TPOT on Mixtral rises linearly,
-  +19.9 ms (+12%) per +1x busiest-rank load. DeepSeek is flat to 2.34x and +22%
-  at 3.45x, a threshold rather than a slope. Natural traffic reaches 1.09-1.25x
+  +19.9 ms (+12%) per +1x busiest-rank load, in eager and graph mode alike.
+  DeepSeek's cost is large by 3.2-3.5x but its shape below that is unresolved:
+  two eager sweeps disagree at 2.34x (+1.0% against +6.5%), by more than either
+  one's spread, so do not quote a DeepSeek threshold. Natural traffic reaches 1.09-1.25x
   even per single prompt, where the null above still holds. The *mechanism* is
   not established on either model, and two accounts have already been retracted.
 - **Measure natural rank load per layer.** The validation summary's
