@@ -1,0 +1,59 @@
+# A skew confined to a few layers, on a rank other than 0: can the screen say
+# *where* it is, not only that it is there?
+#
+# The router-bias sweeps put one rank at the top of every layer, which is the
+# easiest case for a per-layer screen and not what natural imbalance looks like.
+# Here the bias applies to 6 of DeepSeek's 26 MoE layers, so the mean over layers
+# dilutes it by roughly four and localisation has to do the work. Rank 2 rather
+# than rank 0 checks that nothing in the analysis assumes the first rank.
+#
+# Reading it: localise() should flag layers 10-15 and name rank 2, while the
+# mean load stays near the benign floor.
+#
+#   ./nrun -t dloc 'uv run moe-reliability run configs/examples/detection_localisation.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "detection-localisation"
+description = "Per-request routing with the skew confined to a few layers on rank 2, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:2"
+# The levels that keep every expert live, matching the controlled sweep.
+imbalance_levels = [0, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 800
+validation_workload = "mixed:mmlu,gsm8k,dolly"
+# Six of 26 MoE layers, in the middle of the stack.
+bias_layers = [10, 11, 12, 13, 14, 15]
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

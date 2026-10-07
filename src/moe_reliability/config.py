@@ -201,6 +201,17 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
            "and record per-expert and per-rank load."),
     Option("validation_samples", "int", 0, "Prompts for validation: 0 uses six fixed prompts, N > 0 the first "
            "N MMLU prompts. Rank shares need a few hundred to be stable."),
+    Option("bias_layers", "list[int]", [], "router_bias only: model layer indices (as in model.layers.<i>) "
+           "the bias applies to; empty biases every MoE layer. A few layers hold a skew the way natural "
+           "imbalance does, and test whether a detector localises it. The zero-bias control uses the same "
+           "layers."),
+    Option("validation_workload", "str", "", "Prompts for validation: empty keeps the first "
+           "validation_samples MMLU prompts in the order every earlier run used; a workload spec draws them "
+           "shuffled from one family or several: mmlu, gsm8k, mbpp, mmmlu:<LANG> (e.g. mmmlu:ZH_CN), dolly, "
+           "ultrachat, or mixed:<a>,<b>,... (interleaved, equal shares)."),
+    Option("validation_save_records", "bool", False, "Also write every validation request's routed experts "
+           "(validation/<label>.records.jsonl), for detection analyses that need per-request or per-token "
+           "routing rather than the pooled counts."),
     Option("bias_plugin_at_zero", "bool", False, "router_bias only: install the plugin at level 0 as well, with "
            "an all-zero bias vector. The plugin adds a tensor to the router logits on every expert-selection "
            "call of every rank, so a level-0 point without it is cheaper for a reason unrelated to skew, and "
@@ -549,12 +560,26 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                                   f"{cfg['hardware']['n_npus']}")
             except ValueError as e:
                 errors.append(f"imbalance.bias_target: {e}")
+            if any(i < 0 for i in cfg["imbalance"]["bias_layers"]):
+                errors.append("imbalance.bias_layers must be layer indices >= 0")
+            if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):
+                errors.append("imbalance.bias_layers contains duplicates")
             if cfg["server"]["enable_eplb"]:
                 errors.append("imbalance.method = 'router_bias' assumes contiguous expert placement; "
                               "EPLB moves experts between ranks, so a rank target would not stay on one rank")
             if probe_family is None:
                 errors.append("imbalance.method = 'router_bias' needs the expert count: set model.probe "
                               f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
+        if cfg["imbalance"]["bias_layers"] and cfg["imbalance"]["method"] != "router_bias":
+            errors.append("imbalance.bias_layers applies to method = 'router_bias' only")
+        if cfg["imbalance"]["validation_workload"]:
+            from .core.data import parse_workload
+            try:
+                parse_workload(cfg["imbalance"]["validation_workload"])
+            except ValueError as e:
+                errors.append(f"imbalance.validation_workload: {e}")
+            if cfg["imbalance"]["validation_samples"] == 0:
+                errors.append("imbalance.validation_workload needs validation_samples > 0")
         if cfg["imbalance"]["validate_imbalance"] and probe_family is None:
             errors.append("imbalance.validate_imbalance requires model.probe to be set explicitly "
                           f"(one of {list(PROBE_CHOICES[1:])}) for this model_id")

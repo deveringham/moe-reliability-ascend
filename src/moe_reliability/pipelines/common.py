@@ -258,16 +258,25 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             continue
 
         profiling_error = None
+        profiled_summary = None
         if separate:
             log(f"{label}: profiling pass")
-            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
-                                 eplb_record_path=eplb_path, server_env=server_env) is None:
+            profiled = serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
+                                         eplb_record_path=eplb_path, server_env=server_env)
+            if profiled is None:
                 # The measurements stand on their own; only the traces are lost.
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
+            else:
+                # The two passes are the same configuration on the same point, so their
+                # difference is what the profiler costs - the only twinned measurement
+                # of it available, and it costs nothing extra to keep.
+                profiled_summary = summarize_requests(profiled)
 
         fields: dict[str, Any] = {"request_summary": summarize_requests(results),
                                   "host_after": host_snapshot(cfg.hardware.visible_devices)}
+        if profiled_summary is not None:
+            fields["profiled_request_summary"] = profiled_summary
         if eplb_rel:
             # Absent means EPLB never completed a cycle, which is a result in
             # itself rather than a failure, so it is recorded either way.
@@ -286,8 +295,12 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             })
         ctx.update_point(label, status=schema.STATUS_COMPLETED, finished_at=utcnow(), **fields)
         s = fields["request_summary"]
+        cost = ""
+        if profiled_summary and s.get("tpot_ms_mean") and profiled_summary.get("tpot_ms_mean"):
+            cost = (f", profiled pass {_fmt(profiled_summary['tpot_ms_mean'])} ms "
+                    f"({100 * (profiled_summary['tpot_ms_mean'] / s['tpot_ms_mean'] - 1):+.1f}%)")
         log(f"{label}: completed ({s.get('n_requests')} requests, "
-            f"mean TTFT {_fmt(s.get('ttft_ms_mean'))} ms, mean TPOT {_fmt(s.get('tpot_ms_mean'))} ms)")
+            f"mean TTFT {_fmt(s.get('ttft_ms_mean'))} ms, mean TPOT {_fmt(s.get('tpot_ms_mean'))} ms{cost})")
 
 
 def _fmt(value: float | None) -> str:

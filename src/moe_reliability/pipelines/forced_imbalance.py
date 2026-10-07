@@ -57,12 +57,14 @@ def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
 
     n_experts, n_ranks = _expert_count(cfg), cfg.hardware.n_npus
     targeted = target_experts(cfg.imbalance.bias_target, n_experts, n_ranks)
-    log(f"router bias on {cfg.imbalance.bias_target}: experts {targeted} of {n_experts}, {n_ranks} ranks"
+    layers = f", layers {cfg.imbalance.bias_layers}" if cfg.imbalance.bias_layers else ""
+    log(f"router bias on {cfg.imbalance.bias_target}: experts {targeted} of {n_experts}, {n_ranks} ranks{layers}"
         + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else ""))
     for p in ctx.points:
         ctx.update_point(p["label"], model_path=cfg.model.model_id, checkpoint_created=False,
                          server_env=server_env(cfg.imbalance.bias_target, p["value"], n_experts, n_ranks,
-                                               at_zero=cfg.imbalance.bias_plugin_at_zero),
+                                               at_zero=cfg.imbalance.bias_plugin_at_zero,
+                                               layers=cfg.imbalance.bias_layers),
                          bias_experts=targeted)
 
 
@@ -144,7 +146,15 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
     a forward hook on the gate never fires.
     """
     n = cfg.imbalance.validation_samples
-    prompts = common.mmlu_prompts(n, cfg.experiment.seed)[0] if n else VALIDATION_PROMPTS
+    subjects: list | None = None
+    if cfg.imbalance.validation_workload:
+        from ..core.data import workload_prompts
+
+        prompts, subjects = workload_prompts(cfg.imbalance.validation_workload, n, cfg.experiment.seed)
+    elif n:
+        prompts, subjects, _ = common.mmlu_prompts(n, cfg.experiment.seed)
+    else:
+        prompts = VALIDATION_PROMPTS
     validated: set = set()
     for p in ctx.points:
         label, level = p["label"], p["value"]
@@ -175,6 +185,11 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
         per_layer = [_expert_load(records, n_experts, layer=i)["frequencies"] for i in layers]
         n_ranks = cfg.hardware.n_npus
         ranks = rank_load(per_layer, n_ranks) if n_experts % n_ranks == 0 else {}
+        records_rel = None
+        if cfg.imbalance.validation_save_records:
+            records_rel, _ = ctx.write_jsonl(
+                schema.validation_records_file(label),
+                ({**r, "subject": subjects[r["prompt_id"]] if subjects else None} for r in records))
         rel = ctx.write_json(schema.validation_file(label), {
             "run_id": ctx.run_id,
             "label": label,
@@ -187,6 +202,9 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
             "k": k,
             "n_ranks": n_ranks,
             "server_env": p.get("server_env") or {},
+            "bias_layers": list(cfg.imbalance.bias_layers),
+            "validation_workload": cfg.imbalance.validation_workload or "mmlu (legacy order)",
+            "records_file": records_rel,
             **layer0,
             "per_router_frequencies": per_layer,
             **ranks,
@@ -256,13 +274,17 @@ def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> N
 def plan(cfg: ExperimentConfig) -> list[str]:
     levels = cfg.imbalance.imbalance_levels
     if cfg.imbalance.method == "router_bias":
-        lines = [f"router bias on {cfg.imbalance.bias_target} at logit offsets {levels}, serving "
+        where = f", layers {cfg.imbalance.bias_layers}" if cfg.imbalance.bias_layers else ""
+        lines = [f"router bias on {cfg.imbalance.bias_target}{where} at logit offsets {levels}, serving "
                  f"{cfg.model.model_id} unmodified (no checkpoints)"]
     else:
         lines = [f"checkpoints: {checkpoint_path(cfg, level)}" for level in levels]
     if cfg.imbalance.validate_imbalance:
         n = cfg.imbalance.validation_samples
-        lines.append(f"validate router load of every level ({n or 'six fixed'} prompts, routed-expert capture)")
+        source = cfg.imbalance.validation_workload or ("MMLU" if n else "")
+        records = ", per-request records kept" if cfg.imbalance.validation_save_records else ""
+        lines.append(f"validate router load of every level ({n or 'six fixed'} {source} prompts, routed-expert "
+                     f"capture{records})".replace("  ", " "))
     lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} MMLU prompts"
                  f"{common.profiling_note(cfg.benchmark)}")
     return lines

@@ -87,9 +87,12 @@ class FakeDeployment:
         self.calls.append({"model_path": model_path, "n_prompts": len(prompts), "trace_dir": trace_dir,
                            "capture": enable_expert_capture, "batch_size": cfg.server.batch_size,
                            "eplb": eplb_settings(cfg, eplb_record_path), "server_env": server_env})
-        bias = np.zeros(N_EXPERTS)
-        if server_env and "MOE_ROUTER_BIAS" in server_env:
-            bias = np.asarray(json.loads(server_env["MOE_ROUTER_BIAS"]), dtype=float)
+        from moe_reliability.router_bias import ENV_VAR, parse_env
+
+        bias, bias_layers = np.zeros(N_EXPERTS), None
+        if server_env and ENV_VAR in server_env:
+            vector, bias_layers = parse_env(server_env[ENV_VAR])
+            bias = np.asarray(vector, dtype=float)
         if model_path in self.fail_models:
             return None  # measure_vllm_throughput returns None when inference fails
         slowdown = 1.0 + (3.0 if "imbalance" in str(model_path) else 0.0)
@@ -101,14 +104,19 @@ class FakeDeployment:
             if enable_expert_capture:
                 # routing skewed towards an expert that depends on the prompt
                 hot = i % N_EXPERTS
-                probs = np.full(N_EXPERTS, 1.0)
-                probs[hot] = 6.0
-                probs = probs * np.exp(bias)  # a logit offset scales the selection odds
-                probs /= probs.sum()
+                base = np.full(N_EXPERTS, 1.0)
+                base[hot] = 6.0
+                # A logit offset scales the selection odds, and only on the layers the
+                # bias targets (bias_layers None means every layer).
+                per_layer = []
+                for layer in range(N_LAYERS):
+                    probs = base * (np.exp(bias) if bias_layers is None or layer in bias_layers else 1.0)
+                    per_layer.append(probs / probs.sum())
 
-                def draw(n_tokens, probs=probs):
-                    return np.stack([np.stack([rng.choice(N_EXPERTS, TOP_K, replace=False, p=probs)
-                                               for _ in range(N_LAYERS)]) for _ in range(n_tokens)]).astype(np.int16)
+                def draw(n_tokens, per_layer=per_layer):
+                    return np.stack([np.stack([rng.choice(N_EXPERTS, TOP_K, replace=False, p=per_layer[layer])
+                                               for layer in range(N_LAYERS)])
+                                     for _ in range(n_tokens)]).astype(np.int16)
 
                 record.update(ttft=None, tpot=None, routed_experts=draw(n_out), prompt_routed_experts=draw(n_in))
             else:

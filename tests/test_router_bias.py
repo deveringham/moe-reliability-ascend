@@ -173,3 +173,115 @@ def test_moe_layers_skip_dense_placeholders():
     assert _moe_layers([{"routed_experts": ids, "prompt_routed_experts": None}]) == [1, 2]
     r = rank_load([[0.5, 0.5, 0.0, 0.0], [0.25, 0.25, 0.25, 0.25]], n_ranks=2)
     assert r["rank_share_mean"] == [0.75, 0.25] and r["rank_max_over_mean"] == 1.5
+
+
+# --- Layer-targeted bias -----------------------------------------------------
+
+def test_layer_target_travels_as_vector_and_layers():
+    plain = RB.server_env("rank:1", 2.5, 8, 4)
+    assert RB.parse_env(plain[RB.ENV_VAR]) == ([0, 0, 2.5, 2.5, 0, 0, 0, 0], None)
+
+    env = RB.server_env("rank:1", 2.5, 8, 4, layers=[5, 1, 1])
+    assert RB.parse_env(env[RB.ENV_VAR]) == ([0, 0, 2.5, 2.5, 0, 0, 0, 0], {1, 5})
+
+    # The control pays the same per-call cost on the same layers.
+    zero = RB.server_env("rank:1", 0, 8, 4, at_zero=True, layers=[1, 5])
+    assert RB.parse_env(zero[RB.ENV_VAR]) == ([0.0] * 8, {1, 5})
+    assert RB.server_env("rank:1", 0, 8, 4, layers=[1, 5]) == {}  # still no plugin without at_zero
+
+
+def test_layer_index_is_read_from_the_layer_name():
+    assert RB.layer_index("model.layers.3.mlp.experts") == 3
+    assert RB.layer_index("model.layers.27.mlp") == 27
+    assert RB.layer_index("model.embed_tokens") is None
+
+
+def test_biased_layers_get_the_offset_and_the_others_are_untouched(monkeypatch):
+    torch = pytest.importorskip("torch")
+    seen = []
+
+    def select(hidden_states, router_logits, top_k):
+        seen.append(router_logits)
+        return router_logits.topk(top_k, dim=-1).indices
+
+    biased = RB._wrap(select, [0.0, 0.0, 5.0, 5.0], layers={1})
+    logits = torch.tensor([[1.0, 2.0, 0.0, -1.0]])
+
+    monkeypatch.setattr(RB, "_current_layer", [1])
+    ids = biased(hidden_states=None, router_logits=logits, top_k=2)
+    assert sorted(ids[0].tolist()) == [2, 3]  # the bias won
+
+    monkeypatch.setattr(RB, "_current_layer", [0])
+    ids = biased(hidden_states=None, router_logits=logits, top_k=2)
+    assert sorted(ids[0].tolist()) == [0, 1]  # untouched layer routes as it would unbiased
+    assert seen[-1] is logits  # and pays nothing: no add ran
+
+
+def test_layer_targeting_refuses_to_guess_when_the_layer_is_unknown(monkeypatch):
+    torch = pytest.importorskip("torch")
+    biased = RB._wrap(lambda **kw: None, [0.0, 5.0], layers={1})
+    monkeypatch.setattr(RB, "_current_layer", [None])
+    with pytest.raises(RuntimeError, match="outside a tracked MoE layer"):
+        biased(hidden_states=None, router_logits=torch.zeros(1, 2), top_k=1)
+
+
+def test_tracker_records_the_layer_in_progress_and_restores_it():
+    layers = []
+
+    class Runner:
+        def forward_impl(self, layer, hidden_states):
+            layers.append(RB._current_layer[0])
+            return hidden_states
+
+    class Layer:
+        def __init__(self, name):
+            self.layer_name = name
+
+    Runner.forward_impl = RB._track_layer(Runner.forward_impl)
+    runner = Runner()
+    runner.forward_impl(Layer("model.layers.2.mlp.experts"), "x")
+    runner.forward_impl(Layer("model.layers.7.mlp.experts"), "x")
+    assert layers == [2, 7]
+    assert RB._current_layer[0] is None  # restored, so a failed forward cannot leak a layer
+
+
+def test_register_patches_the_runner_only_for_a_layer_target(fake_selector, monkeypatch):
+    runner = types.SimpleNamespace(forward_impl=lambda self, layer: None)
+    module = types.ModuleType("vllm_ascend.ops.fused_moe.fused_moe")
+    module.AscendMoERunner = runner
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.fused_moe.fused_moe", module)
+
+    monkeypatch.setenv(RB.ENV_VAR, json.dumps([0.0, 1.0]))
+    RB.register()
+    assert getattr(runner.forward_impl, "__wrapped__", None) is None  # whole-model bias needs no tracking
+
+    monkeypatch.setitem(sys.modules, "vllm_ascend.ops.fused_moe.experts_selector", fake_selector)
+    fake_selector._select_experts_with_fusion_ops = lambda **kw: "fused"
+    fake_selector._native_select_experts = lambda **kw: "native"
+    monkeypatch.setenv(RB.ENV_VAR, json.dumps({"vector": [0.0, 1.0], "layers": [3]}))
+    RB.register()
+    RB.register()  # idempotent
+    assert runner.forward_impl.__wrapped__ is not None
+    assert getattr(runner.forward_impl.__wrapped__, "__wrapped__", None) is None
+
+
+def test_layer_targeted_sweep_skews_only_the_named_layers(deployment, router_bias_config, tmp_path):
+    router_bias_config["imbalance"]["bias_layers"] = [1, 2]
+    router_bias_config["imbalance"]["imbalance_levels"] = [0, 4]
+    cfg = ExperimentConfig.from_dict(router_bias_config)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    by_level = {p["value"]: p for p in ctx.points}
+    assert RB.parse_env(by_level[4]["server_env"][RB.ENV_VAR])[1] == {1, 2}
+
+    import gzip as _gzip
+
+    load = {}
+    for value, point in by_level.items():
+        f = json.load(_gzip.open(ctx.abspath(point["validation_file"])))
+        load[value] = f["rank_max_over_mean_per_layer"]
+    # Layers 1 and 2 carry the skew; the layers either side of them do not.
+    assert load[4][1] > load[0][1] * 1.3 and load[4][2] > load[0][2] * 1.3
+    assert load[4][0] == pytest.approx(load[0][0], rel=0.25)
+    assert load[4][3] == pytest.approx(load[0][3], rel=0.25)

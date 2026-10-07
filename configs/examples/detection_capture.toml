@@ -1,0 +1,64 @@
+# Per-request routing at every skew level, across workload families: the input
+# the detection screen is evaluated on.
+#
+# The calibration runs recorded pooled expert counts per level, which give one
+# load per level and so no distribution. A screen's detection rate is a property
+# of the distribution over windows, so it needs per-request routing - the same
+# thing the natural-traffic captures hold for unbiased traffic.
+#
+# max_new_tokens = 1, so this captures prompt-token routing only. Decode routing
+# on identical prompts diverges (docs/drift-findings.md), and a screen sees
+# whatever the batch is routing, but prompt tokens are the part that is
+# comparable across levels here. The benchmark stage still serves 20 prompts per
+# level; the capture is the validation stage.
+#
+# mixed: interleaves the families, so a window of consecutive prompts holds all
+# of them - the benign floor a detector faces in traffic that is not one dataset.
+#
+#   ./nrun -t dcap 'uv run moe-reliability run configs/examples/detection_capture.toml'
+#   (Mixtral: --set 'model.model_id="mistralai/Mixtral-8x7B-Instruct-v0.1"' \
+#             --set 'model.model_name="mixtral"' --set 'imbalance.imbalance_levels=[0, 0.25, 0.5, 1, 2, 3]')
+
+[experiment]
+type = "forced_imbalance"
+name = "detection-capture"
+description = "Per-request routing at offsets 0-2 over six workload families, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+# The levels that keep every expert live, matching the controlled sweep.
+imbalance_levels = [0, 0.25, 0.5, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 1200
+validation_workload = "mixed:mmlu,gsm8k,mbpp,mmmlu:DE_DE,dolly,ultrachat"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false
