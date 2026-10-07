@@ -185,9 +185,9 @@ def fig_dose_response(out, store):
     ax.set_xlim(1.0, 3.7)
     ax.set_ylim(132, 232)
     fig.text(0.012, 0.015,
-             "Eager points carry the measurement plugin at every level, the balanced one included. Graph-mode "
-             "balanced points ran without it;\nits cost there is unmeasured. Levels that collapse routing onto "
-             "fewer live experts are excluded.",
+             "Every point carries the measurement plugin, the balanced one included. Levels that collapse "
+             "routing onto fewer live experts are excluded.\nGraph mode's repeat spread is widest at its "
+             "lowest levels, where a fast engine outruns the client: read its slope, not its per-level values.",
              color=INK3, fontsize=8, va="bottom")
     fig.tight_layout(rect=(0, 0.075, 1, 1))
     fig.savefig(os.path.join(out, "dose_response.png"), dpi=200, facecolor=SURFACE)

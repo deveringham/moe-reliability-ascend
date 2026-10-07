@@ -188,7 +188,9 @@ def capture_levels(model):
     spec = MODELS[model]
     out, labels = {}, None
     for d, m in manifests(CAPTURES[model]):
-        if os.path.basename(d).split("_")[2] != model or m.get("status") not in ("completed", "running"):
+        # Completed only: a run still in flight, or one that failed partway, would
+        # contribute a few levels and silently change what the rates are over.
+        if os.path.basename(d).split("_")[2] != model or m.get("status") != "completed":
             continue
         for p in m["points"]:
             f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
