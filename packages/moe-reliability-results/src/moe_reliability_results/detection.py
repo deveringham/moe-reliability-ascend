@@ -39,7 +39,8 @@ import numpy as np
 
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
-           "roc", "screen_scores"]
+           "roc", "screen_scores", "alarm_stream", "onset_delay", "mean_windows_to_false_alarm",
+           "batch_busiest_rank"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -171,6 +172,109 @@ class WindowSampler:
         return np.unique(np.linspace(0, n_layers - 1, self.layers).round().astype(int))
 
 
+def batch_busiest_rank(pooled: np.ndarray, n_ranks: int) -> np.ndarray:
+    """:func:`busiest_rank` over a stack of windows: ``(windows, layers, experts)`` -> ``(windows,)``."""
+    totals = pooled.sum(axis=-1, keepdims=True)
+    shares = np.divide(pooled, totals, out=np.zeros_like(pooled, dtype=float), where=totals > 0)
+    per_rank = shares.reshape(*shares.shape[:-1], n_ranks, -1).sum(axis=-1)
+    return (per_rank.max(axis=-1) * n_ranks).mean(axis=-1)
+
+
+def _window_loads(rows: np.ndarray, n_ranks: int, sampler: WindowSampler, layers: np.ndarray,
+                  rng) -> np.ndarray:
+    """Loads of consecutive tumbling windows over ``rows``: ``(requests, layers, experts)``."""
+    n_windows = len(rows) // sampler.window
+    pooled = rows[:n_windows * sampler.window][:, layers].reshape(
+        n_windows, sampler.window, len(layers), rows.shape[2]).sum(axis=1)
+    if sampler.token_fraction < 1.0:
+        # Thinning the pooled window is the same multinomial as thinning per token,
+        # and far cheaper.
+        pooled = rng.binomial(pooled.astype(np.int64), sampler.token_fraction).astype(float)
+    return batch_busiest_rank(pooled, n_ranks)
+
+
+def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
+                 alarm: float, rng) -> np.ndarray:
+    """Per-window alarm decisions for a stream built from successive pools.
+
+    ``pools`` is [(per-request counts, how many requests to draw from it)], in
+    order, so a skew that begins partway through the stream is one call. Windows
+    tumble: a monitor that accumulates counts and resets is the cheap
+    implementation, and a window may straddle the join, as it would in service.
+    """
+    layers = sampler._layer_index(pools[0][0].shape[1])
+    rows = np.concatenate([pool[rng.choice(len(pool), n, replace=True)] for pool, n in pools])
+    return _window_loads(rows, n_ranks, sampler, layers, rng) >= alarm
+
+
+def _first_run(flags: np.ndarray, consecutive: int) -> int | None:
+    """Index of the first window completing ``consecutive`` alarms in a row."""
+    run = 0
+    for i, flag in enumerate(flags):
+        run = run + 1 if flag else 0
+        if run >= consecutive:
+            return i
+    return None
+
+
+def onset_delay(balanced: np.ndarray, skewed: np.ndarray, n_ranks: int, sampler: WindowSampler,
+                alarm: float, consecutive: int = 1, pre_windows: int = 40, post_windows: int = 60,
+                draws: int = 300, seed: int = 0) -> dict:
+    """How long after a skew begins the screen raises it, in requests.
+
+    The stream runs balanced for ``pre_windows`` windows and skewed thereafter.
+    Delay is counted from the onset request, so it includes the wait for the
+    window the onset lands in to complete. An alarm raised before the onset is a
+    false start, not a detection, and is counted separately.
+    """
+    rng = np.random.default_rng(seed)
+    pre_requests = pre_windows * sampler.window
+    delays, false_starts, misses = [], 0, 0
+    for _ in range(draws):
+        flags = alarm_stream([(balanced, pre_requests), (skewed, post_windows * sampler.window)],
+                             n_ranks, sampler, alarm, rng)
+        first = _first_run(flags, consecutive)
+        if first is None:
+            misses += 1
+        elif (first + 1) * sampler.window <= pre_requests:
+            false_starts += 1          # fired entirely within the balanced stretch
+        else:
+            delays.append((first + 1) * sampler.window - pre_requests)
+    detected = np.array(delays, dtype=float)
+    return {"window": sampler.window, "consecutive": consecutive,
+            "detected_fraction": round(len(delays) / draws, 3),
+            "false_start_fraction": round(false_starts / draws, 3),
+            "missed_fraction": round(misses / draws, 3),
+            "delay_requests_p50": float(np.median(detected)) if len(detected) else None,
+            "delay_requests_p90": float(np.quantile(detected, 0.9)) if len(detected) else None}
+
+
+def mean_windows_to_false_alarm(balanced: np.ndarray, n_ranks: int, sampler: WindowSampler,
+                                alarm: float, consecutive: int = 1, horizon: int = 400,
+                                draws: int = 300, seed: int = 0) -> dict:
+    """How long benign traffic runs before the screen cries wolf.
+
+    A 1% per-window false-alarm rate sounds small and is not: at one window per
+    8 requests it is an alarm every few hundred requests. Requiring several
+    consecutive alarming windows trades detection delay for quiet, which is the
+    tuning knob an operator actually has.
+    """
+    rng = np.random.default_rng(seed)
+    runs, survived = [], 0
+    for _ in range(draws):
+        flags = alarm_stream([(balanced, horizon * sampler.window)], n_ranks, sampler, alarm, rng)
+        first = _first_run(flags, consecutive)
+        if first is None:
+            survived += 1
+        else:
+            runs.append(first + 1)
+    return {"window": sampler.window, "consecutive": consecutive,
+            "windows_to_false_alarm_p50": float(np.median(runs)) if runs else None,
+            "requests_to_false_alarm_p50": float(np.median(runs)) * sampler.window if runs else None,
+            "quiet_over_horizon": round(survived / draws, 3),
+            "horizon_windows": horizon}
+
+
 def estimate_loads(counts: np.ndarray, n_ranks: int, sampler: WindowSampler,
                    seed: int = 0) -> np.ndarray:
     """Busiest-rank load as a monitor with this sampling would estimate it, one value per draw.
@@ -183,14 +287,12 @@ def estimate_loads(counts: np.ndarray, n_ranks: int, sampler: WindowSampler,
     rng = np.random.default_rng(seed)
     layers = sampler._layer_index(counts.shape[1])
     window = min(sampler.window, len(counts))
-    out = np.empty(sampler.draws)
-    for i in range(sampler.draws):
-        chosen = rng.choice(len(counts), window, replace=False)
-        pooled = counts[np.ix_(chosen, layers)].sum(axis=0)
-        if sampler.token_fraction < 1.0:
-            pooled = rng.binomial(pooled.astype(int), sampler.token_fraction).astype(float)
-        out[i] = busiest_rank(pooled, n_ranks)
-    return out
+    # Windows are drawn without replacement within themselves but independently of
+    # each other, so they are laid end to end and reduced in one pass.
+    chosen = np.concatenate([rng.choice(len(counts), window, replace=False)
+                             for _ in range(sampler.draws)])
+    drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
+    return _window_loads(counts[chosen], n_ranks, drawn, layers, rng)
 
 
 def threshold_at_fpr(benign: Sequence[float], fpr: float) -> float:

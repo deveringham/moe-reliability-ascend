@@ -152,6 +152,38 @@ The caveat: this is a *persistent* per-layer skew, the same 6 layers for the
 server's lifetime. Natural imbalance rotates between layers (34-35% rank
 consistency), and whether localisation helps there is untested.
 
+## C3. A rotating skew: where the pooled statistic fails completely
+
+`rotate-calibration` biases rank *(layer mod 4)*, so every layer is skewed as
+hard as a fixed rank target makes it but no rank is hot throughout. It is the
+matched pair for the fixed-target sweeps, and the two statistics part company:
+
+| Injected offset | Fixed target, per layer | Rotating, per layer | **Rotating, pooled** |
+|---|---|---|---|
+| 0 | 1.14x | 1.14x | 1.02x |
+| 0.5 | 1.66x | 1.71x | **1.05x** |
+| 1 | 2.35x | 2.40x | **1.07x** |
+| 2 | 3.45x | 3.53x | **1.08x** |
+
+The per-layer loads match the fixed target to within 3%, so the skew really is
+the same size. The pooled form - the one vLLM's EPLB balancedness computes -
+reads **1.05-1.08x, which is indistinguishable from benign traffic at 1.10x**.
+
+This is the sharp version of the warning in section B. There, pooling understated
+natural traffic (1.04x against 1.10x) and a rank hot in every layer was the one
+case the two agreed on. Here is the opposite extreme, constructed: a skew as
+strong as anything we have injected, which a pooled monitor cannot see at all.
+
+Whether it *costs* anything is a separate question, and the one the
+`rotating-skew` grid answers. Either answer is useful:
+
+- If a rotating skew is cheap while a fixed one is expensive, then natural
+  imbalance is free partly **because** it rotates, not only because it is small -
+  and a screen can safely use the cheaper pooled statistic after all.
+- If it costs the same, the cost is per layer and the identity of the hot rank
+  does not matter - which would contradict the straggler picture and make the
+  per-layer statistic mandatory.
+
 ## D. Stage 2: step time at matched batch size
 
 Slope of median step wall against busiest-rank load, within a batch bin, from
@@ -233,9 +265,10 @@ corpus does not transfer exactly to another.
    its lifetime, so the screen has only been scored on steady state. The plugin
    would have to read its bias from a tensor updated in place - which also keeps
    graph mode working - to script an onset.
-3. **Localisation under rotating skew.** The 6-layer test is a persistent skew;
-   natural imbalance moves between layers, and whether per-layer flagging helps
-   there is untested.
+3. **Localisation under rotating skew.** The 6-layer test is a persistent skew.
+   `rotating-skew` captures per-request routing at each rotating level, so the
+   screen can be scored on it: the per-layer form should catch it and the pooled
+   form should miss it entirely (C3).
 4. **A balanced baseline per profiled run**, so stage 3 can attribute rather
    than coincide.
 5. **Time-varying skew.** Every measurement here is a server whose bias is fixed

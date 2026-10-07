@@ -218,3 +218,80 @@ def test_request_counts_handle_a_capture_that_never_split_prompt_from_generated(
 
     with pytest.raises(ValueError, match="no routed experts"):
         D.request_counts([{"prompt_routed_experts": None, "routed_experts": None}], n_experts=8)
+
+
+# --- Detection delay, and how often the screen cries wolf --------------------
+
+def _pool(hot_share, n=400, n_layers=6, n_experts=8, seed=0):
+    """Requests routing with a given share on rank 0's experts (0 and 1 of 8)."""
+    rng = np.random.default_rng(seed)
+    probs = np.full(n_experts, (1 - hot_share) / (n_experts - 2))
+    probs[:2] = hot_share / 2
+    return np.stack([rng.multinomial(200, probs, size=n_layers) for _ in range(n)]).astype(float)
+
+
+def test_the_alarm_fires_promptly_once_the_skew_begins():
+    balanced, skewed = _pool(0.25), _pool(0.55, seed=1)
+    sampler = D.WindowSampler(window=8)
+    alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, sampler), 0.01)
+
+    found = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, pre_windows=5, draws=200)
+    assert found["detected_fraction"] > 0.9
+    assert found["missed_fraction"] == 0        # a skew this large is never missed
+    # The window the onset lands in has to finish first, so a delay below one
+    # window would mean the clock is wrong.
+    assert found["delay_requests_p50"] >= sampler.window
+
+
+def test_a_long_benign_stretch_fires_before_the_skew_arrives():
+    # A 1% per-window alarm rate is not small over many windows: 40 windows carry
+    # a 1 - 0.99^40 = 33% chance of firing first. This is why the screen needs
+    # either consecutive-window confirmation or stage 2 behind it.
+    balanced, skewed = _pool(0.25), _pool(0.55, seed=1)
+    sampler = D.WindowSampler(window=8)
+    alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, sampler), 0.01)
+
+    short = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, pre_windows=5, draws=200)
+    long = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, pre_windows=40, draws=200)
+    assert long["false_start_fraction"] > short["false_start_fraction"] + 0.1
+
+
+def test_a_skew_that_never_comes_is_never_detected():
+    balanced = _pool(0.25)
+    sampler = D.WindowSampler(window=8)
+    alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, sampler), 0.01)
+    # "Skewed" is the same distribution: anything reported is a false start.
+    found = D.onset_delay(balanced, _pool(0.25, seed=9), N_RANKS, sampler, alarm, draws=100)
+    assert found["detected_fraction"] < 0.5
+
+
+def test_requiring_consecutive_alarms_trades_delay_for_quiet():
+    balanced, skewed = _pool(0.25), _pool(0.45, seed=2)
+    sampler = D.WindowSampler(window=8)
+    alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, sampler), 0.01)
+
+    one = D.mean_windows_to_false_alarm(balanced, N_RANKS, sampler, alarm, consecutive=1, draws=80)
+    three = D.mean_windows_to_false_alarm(balanced, N_RANKS, sampler, alarm, consecutive=3, draws=80)
+    # Three in a row is far rarer by chance...
+    assert three["quiet_over_horizon"] > one["quiet_over_horizon"]
+
+    fast = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, consecutive=1, draws=80)
+    slow = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, consecutive=3, draws=80)
+    # ...and costs delay when the skew is real.
+    assert slow["delay_requests_p50"] >= fast["delay_requests_p50"]
+
+
+def test_alarm_stream_windows_tumble_over_the_whole_stream():
+    pool = _pool(0.25, n=50)
+    sampler = D.WindowSampler(window=8)
+    flags = D.alarm_stream([(pool, 40), (pool, 40)], N_RANKS, sampler, alarm=0.0,
+                           rng=np.random.default_rng(0))
+    assert len(flags) == 80 // 8        # one decision per tumbling window
+    assert flags.all()                  # an alarm at 0.0 fires on every window
+
+
+def test_batch_reduction_matches_the_single_window_form():
+    rng = np.random.default_rng(11)
+    windows = rng.integers(1, 500, size=(7, 5, 8)).astype(float)
+    one_at_a_time = np.array([D.busiest_rank(w, N_RANKS) for w in windows])
+    assert np.allclose(D.batch_busiest_rank(windows, N_RANKS), one_at_a_time)

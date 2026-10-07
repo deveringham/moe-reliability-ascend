@@ -89,10 +89,7 @@ class FakeDeployment:
                            "eplb": eplb_settings(cfg, eplb_record_path), "server_env": server_env})
         from moe_reliability.router_bias import ENV_VAR, parse_env
 
-        bias, bias_layers = np.zeros(N_EXPERTS), None
-        if server_env and ENV_VAR in server_env:
-            vector, bias_layers = parse_env(server_env[ENV_VAR])
-            bias = np.asarray(vector, dtype=float)
+        spec = parse_env(server_env[ENV_VAR]) if server_env and ENV_VAR in server_env else None
         if model_path in self.fail_models:
             return None  # measure_vllm_throughput returns None when inference fails
         slowdown = 1.0 + (3.0 if "imbalance" in str(model_path) else 0.0)
@@ -106,11 +103,15 @@ class FakeDeployment:
                 hot = i % N_EXPERTS
                 base = np.full(N_EXPERTS, 1.0)
                 base[hot] = 6.0
-                # A logit offset scales the selection odds, and only on the layers the
-                # bias targets (bias_layers None means every layer).
+                # A logit offset scales the selection odds, on the layers the bias
+                # targets and with that layer's own vector (a rotating bias differs
+                # per layer).
                 per_layer = []
                 for layer in range(N_LAYERS):
-                    probs = base * (np.exp(bias) if bias_layers is None or layer in bias_layers else 1.0)
+                    scale = 1.0
+                    if spec is not None and spec.applies_to(layer):
+                        scale = np.exp(np.asarray(spec.vector(layer, N_EXPERTS), dtype=float))
+                    probs = base * scale
                     per_layer.append(probs / probs.sum())
 
                 def draw(n_tokens, per_layer=per_layer):

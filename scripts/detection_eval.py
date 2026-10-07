@@ -266,6 +266,36 @@ def localisation_run():
     return out
 
 
+# --- B3. How quickly, and how often it cries wolf -----------------------------
+
+DELAY_SETTINGS = [D.WindowSampler(window=w, layers=4, token_fraction=0.1) for w in (8, 32, 128)]
+
+
+def timing(model, levels, threshold):
+    """Detection delay and time to a false alarm, for the cheap screen settings."""
+    if 0.0 not in levels:
+        return {"skipped": "capture has no balanced arm"}
+    # The onset to detect is the lowest level that actually costs latency.
+    costly = [lv for lv, c in sorted(levels.items())
+              if lv != 0.0 and threshold and D.busiest_rank(c.sum(axis=0), N_RANKS) >= threshold]
+    if not costly:
+        return {"skipped": "no captured level reaches the impact threshold"}
+    onset = levels[costly[0]]
+    rows = []
+    for sampler in DELAY_SETTINGS:
+        alarm = D.threshold_at_fpr(D.estimate_loads(levels[0.0], N_RANKS, sampler, seed=0), 0.01)
+        for consecutive in (1, 2, 3):
+            delay = D.onset_delay(levels[0.0], onset, N_RANKS, sampler, alarm,
+                                  consecutive=consecutive, draws=200, seed=2)
+            quiet = D.mean_windows_to_false_alarm(levels[0.0], N_RANKS, sampler, alarm,
+                                                  consecutive=consecutive, draws=200, seed=3)
+            rows.append({**delay, "alarm": round(alarm, 3),
+                         "requests_to_false_alarm_p50": quiet["requests_to_false_alarm_p50"],
+                         "quiet_over_horizon": quiet["quiet_over_horizon"]})
+    return {"onset_level": costly[0], "onset_load": round(float(D.busiest_rank(onset.sum(axis=0), N_RANKS)), 3),
+            "settings": rows}
+
+
 # --- D. Stage 2: step time at matched batch size ------------------------------
 
 def step_table(run_dir, label):
@@ -392,6 +422,11 @@ def main(out_dir="docs"):
             continue
         store["detection"][model] = detection(model, levels,
                                               (store["impact"].get(model) or {}).get("impact_threshold"))
+    store["timing"] = {}
+    for model in MODELS:
+        lv, _ = capture_levels(model)
+        store["timing"][model] = (timing(model, lv, (store["impact"].get(model) or {}).get("impact_threshold"))
+                                  if lv else {"skipped": "no detection capture pulled"})
     store["localisation"] = localisation_run()
     store["stage2_step_time"] = stage2(cal)
     store["stage3_pace_setter"] = stage3()
@@ -445,6 +480,22 @@ def main(out_dir="docs"):
                   + "  ".join(f"{lv['true_load']:.2f}x:{lv['detection_rate']:.2f}"
                               + ("*" if lv["costly"] else "") for lv in s["levels"]))
         print("   (* = load at or above this model's impact threshold)")
+    print()
+    for model, row in store["timing"].items():
+        if "skipped" in row:
+            print(f"{model}: timing skipped - {row['skipped']}")
+            continue
+        print(f"{model}: onset at {row['onset_load']:.2f}x (the lowest costly level), "
+              f"4 layers and a tenth of tokens")
+        print(f"   {'window':>6} {'k':>2} {'detected':>9} {'false start':>12} {'delay p50':>10} "
+              f"{'delay p90':>10} {'quiet for':>10}")
+        for r in row["settings"]:
+            quiet = r["requests_to_false_alarm_p50"]
+            print(f"   {r['window']:>6} {r['consecutive']:>2} {r['detected_fraction']:>9.2f} "
+                  f"{r['false_start_fraction']:>12.2f} "
+                  f"{(r['delay_requests_p50'] or float('nan')):>10.0f} "
+                  f"{(r['delay_requests_p90'] or float('nan')):>10.0f} "
+                  f"{(f'{quiet:.0f} reqs' if quiet else '>horizon'):>10}")
     print()
     for run, row in store["localisation"].items():
         print(f"localisation, bias on {row['bias_target']} layers {row['bias_layers']}:")

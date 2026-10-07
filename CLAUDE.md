@@ -119,6 +119,12 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   more than how much is counted: one request at 100% counted is worse than 8 at
   1.3%, because a single prompt is itself skewed (benign p99 1.41-1.54x). Scoring
   a one-request window is the mistake to avoid.
+- **A rotating skew is invisible to the pooled statistic** (2026-10-08).
+  `imbalance.bias_target = "rotate"` biases rank (layer mod n_npus): the per-layer
+  load matches a fixed rank target to within 3% (1.71 / 2.40 / 3.53x at offsets
+  0.5 / 1 / 2) while the pooled form reads 1.05-1.08x, i.e. benign. It is the
+  matched pair for every fixed-target sweep, and the case where EPLB's
+  balancedness would report a perfectly balanced server.
 - **Flag layers individually, not just the mean.** With a bias on 6 of 26 layers
   the model-wide mean reads 1.40x while the biased layers read 2.58x; per-layer
   flagging recovers exactly those 6 and names the rank. `detection.localise`.

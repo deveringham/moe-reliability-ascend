@@ -194,7 +194,9 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
            "router_bias: logit offset added to the targeted experts. 0 serves the unmodified model."),
     Option("bias_target", "str", "rank:0", "router_bias only: 'rank:<r>' biases every expert placed on "
            "expert-parallel rank r (contiguous placement, hardware.n_npus ranks); 'experts:<i>,<j>' biases "
-           "those experts."),
+           "those experts; 'rotate' biases rank (layer mod n_npus), so every layer is skewed as strongly as "
+           "a fixed rank target would make it but no rank is hot throughout - the shape natural imbalance "
+           "has, and the case where per-rank totals cancel."),
     Option("model_dir", "str", "models", "Directory for generated imbalanced checkpoints "
            "(reused across runs when present)."),
     Option("validate_imbalance", "bool", False, "Capture routed experts at every level before benchmarking "
@@ -560,6 +562,9 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                                   f"{cfg['hardware']['n_npus']}")
             except ValueError as e:
                 errors.append(f"imbalance.bias_target: {e}")
+            # 'rotate' needs the experts to divide over the ranks, like a rank target;
+            # the expert count is not known until the model is read, so
+            # target_experts raises for it at run time.
             if any(i < 0 for i in cfg["imbalance"]["bias_layers"]):
                 errors.append("imbalance.bias_layers must be layer indices >= 0")
             if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):

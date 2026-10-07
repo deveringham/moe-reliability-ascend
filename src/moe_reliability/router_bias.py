@@ -58,8 +58,11 @@ import logging
 import os
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 ENV_VAR = "MOE_ROUTER_BIAS"
+#: bias_target value that biases a different rank in each layer.
+ROTATE = "rotate"
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +73,11 @@ def parse_target(spec: str) -> tuple[str, list[int]]:
     """``"rank:0"`` -> ``("rank", [0])``; ``"experts:0,1"`` -> ``("experts", [0, 1])``."""
     kind, _, rest = spec.partition(":")
     kind = kind.strip()
+    if kind == ROTATE and not rest.strip():
+        return ROTATE, []
     if kind not in ("rank", "experts") or not rest.strip():
-        raise ValueError(f"bias target {spec!r}: expected 'rank:<r>' or 'experts:<i>,<j>,...'")
+        raise ValueError(f"bias target {spec!r}: expected 'rank:<r>', 'experts:<i>,<j>,...' or "
+                         f"'{ROTATE}'")
     try:
         ids = [int(x) for x in rest.split(",") if x.strip()]
     except ValueError:
@@ -86,6 +92,10 @@ def parse_target(spec: str) -> tuple[str, list[int]]:
 def target_experts(spec: str, n_experts: int, n_ranks: int) -> list[int]:
     """The experts a target spec biases, under contiguous expert placement."""
     kind, ids = parse_target(spec)
+    if kind == ROTATE:
+        # Which experts a rotating bias touches depends on the layer, so there is
+        # no single answer; the per-layer vectors come from Bias.vector.
+        raise ValueError(f"bias target {spec!r} is per layer; ask Bias.vector(layer, n_experts)")
     if kind == "rank":
         if n_experts % n_ranks:
             raise ValueError(f"{n_experts} experts do not divide evenly over {n_ranks} ranks")
@@ -105,6 +115,36 @@ def bias_vector(spec: str, strength: float, n_experts: int, n_ranks: int) -> lis
     return [float(strength) if e in targeted else 0.0 for e in range(n_experts)]
 
 
+@dataclass(frozen=True)
+class Bias:
+    """What the plugin applies, decoded from the environment.
+
+    ``rotate`` biases a different rank in each layer - layer i gets rank
+    i mod n_ranks - so every layer is skewed by the same amount but no rank is
+    hot throughout. That is the shape natural imbalance has (the busiest rank
+    leads 34-35% of layers, against ~100% for a fixed rank target), and it is the
+    case where per-rank totals cancel: summed over layers the ranks come out
+    even, while each layer is as skewed as a fixed target would make it.
+    """
+
+    strength: float
+    n_ranks: int
+    target: str | None = None          # a fixed target spec, or None when rotating
+    layers: frozenset[int] | None = None   # None: every layer
+
+    def applies_to(self, layer: int | None) -> bool:
+        return self.layers is None or (layer is not None and layer in self.layers)
+
+    def vector(self, layer: int | None, n_experts: int) -> list[float]:
+        """Per-expert logit offsets for one layer."""
+        target = self.target if self.target is not None else f"rank:{(layer or 0) % self.n_ranks}"
+        return bias_vector(target, self.strength, n_experts, self.n_ranks)
+
+    @property
+    def rotating(self) -> bool:
+        return self.target is None
+
+
 def server_env(spec: str, strength: float, n_experts: int, n_ranks: int,
                at_zero: bool = False, layers: Sequence[int] | None = None) -> dict[str, str]:
     """Environment for a server that should route with this bias.
@@ -117,18 +157,29 @@ def server_env(spec: str, strength: float, n_experts: int, n_ranks: int,
     """
     if strength == 0 and not at_zero:
         return {}
-    vector = bias_vector(spec, strength, n_experts, n_ranks)
-    if not layers:
-        return {ENV_VAR: json.dumps(vector)}
-    return {ENV_VAR: json.dumps({"vector": vector, "layers": sorted({int(i) for i in layers})})}
+    payload: dict = {"strength": float(strength), "n_ranks": int(n_ranks)}
+    if spec != ROTATE:
+        payload["target"] = spec
+    if layers:
+        payload["layers"] = sorted({int(i) for i in layers})
+    return {ENV_VAR: json.dumps(payload)}
 
 
-def parse_env(raw: str) -> tuple[list[float], set[int] | None]:
-    """The bias vector and targeted layers (None: every layer) from the variable's value."""
+def parse_env(raw: str) -> Bias:
+    """Decode the variable's value. A bare list is the pre-2026-10-08 form."""
     value = json.loads(raw)
     if isinstance(value, list):
-        return [float(x) for x in value], None
-    return [float(x) for x in value["vector"]], {int(i) for i in value["layers"]}
+        # A literal per-expert vector, from before the policy moved into the payload.
+        nonzero = {v for v in value if v}
+        strength = nonzero.pop() if len(nonzero) == 1 else 0.0
+        experts = [i for i, v in enumerate(value) if v]
+        return Bias(strength=strength, n_ranks=1,
+                    target=f"experts:{','.join(map(str, experts))}" if experts else "experts:0",
+                    layers=None)
+    layers = value.get("layers")
+    return Bias(strength=float(value["strength"]), n_ranks=int(value["n_ranks"]),
+                target=value.get("target"),
+                layers=frozenset(int(i) for i in layers) if layers is not None else None)
 
 
 # --- inside the vLLM server -------------------------------------------------
@@ -157,37 +208,41 @@ def _track_layer(forward_impl):
     return tracked
 
 
-def _wrap(fn, bias: Sequence[float], layers: set[int] | None = None):
+def _wrap(fn, bias: Bias):
     cache: dict = {}
-    seen: set[int] = set()
+    seen: set = set()
 
     def biased(*args, **kwargs):
-        if layers is not None:
-            layer = _current_layer[0]
+        layer = _current_layer[0]
+        if bias.layers is not None or bias.rotating:
             if layer is None:
-                # A layer-targeted bias that cannot tell layers apart would silently
-                # bias all of them or none; either is a different experiment.
-                raise RuntimeError("layer-targeted router bias: expert selection ran outside a tracked MoE "
+                # Guessing here would bias every layer or none, or every layer the
+                # same way; each is a different experiment.
+                raise RuntimeError("per-layer router bias: expert selection ran outside a tracked MoE "
                                    "layer; the forward_impl patch does not match this vllm-ascend version")
-            if layer not in seen:
-                seen.add(layer)
-                logger.info("router bias (pid %d): layer %d %s", os.getpid(), layer,
-                            "biased" if layer in layers else "untouched")
-            if layer not in layers:
+            if not bias.applies_to(layer):
+                if layer not in seen:
+                    seen.add(layer)
+                    logger.info("router bias (pid %d): layer %d untouched", os.getpid(), layer)
                 return fn(*args, **kwargs)
         logits = kwargs.get("router_logits")
         if logits is None:
             raise TypeError(f"{fn.__name__} called without router_logits as a keyword; "
                             "the router-bias patch does not match this vllm-ascend version")
-        if logits.shape[-1] != len(bias):
-            raise ValueError(f"router-bias vector has {len(bias)} entries but the router scores "
-                             f"{logits.shape[-1]} experts")
-        key = (logits.device, logits.dtype)
+        n_experts = logits.shape[-1]
+        # n_experts belongs in the key: a cached vector is only valid for the router
+        # width it was built for.
+        key = (logits.device, logits.dtype, n_experts, layer if bias.rotating else None)
         b = cache.get(key)
         if b is None:
             import torch
 
-            b = cache[key] = torch.tensor(bias, dtype=logits.dtype, device=logits.device)
+            values = bias.vector(layer, n_experts)
+            if layer not in seen:
+                seen.add(layer)
+                logger.info("router bias (pid %d): layer %s biases experts %s of %d", os.getpid(), layer,
+                            [i for i, v in enumerate(values) if v] or "none", n_experts)
+            b = cache[key] = torch.tensor(values, dtype=logits.dtype, device=logits.device)
         kwargs["router_logits"] = logits + b
         return fn(*args, **kwargs)
 
@@ -200,7 +255,7 @@ def register() -> None:
     raw = os.environ.get(ENV_VAR)
     if not raw:
         return
-    bias, layers = parse_env(raw)
+    bias = parse_env(raw)
     from vllm_ascend.ops.fused_moe import experts_selector as sel
 
     names = ("_select_experts_with_fusion_ops", "_native_select_experts")
@@ -208,18 +263,16 @@ def register() -> None:
         fn = getattr(sel, name)
         if getattr(fn, "__wrapped__", None) is not None:
             continue  # plugins can load more than once per process
-        setattr(sel, name, _wrap(fn, bias, layers))
-    if layers is not None:
+        setattr(sel, name, _wrap(fn, bias))
+    if bias.layers is not None or bias.rotating:
         from vllm_ascend.ops.fused_moe.fused_moe import AscendMoERunner
 
         if getattr(AscendMoERunner.forward_impl, "__wrapped__", None) is None:
             AscendMoERunner.forward_impl = _track_layer(AscendMoERunner.forward_impl)
-    targeted = [i for i, v in enumerate(bias) if v]
-    where = "every layer" if layers is None else f"layers {sorted(layers)}"
-    if not targeted:
-        logger.warning("router bias active (pid %d): all-zero vector over %d experts on %s, the zero-bias "
-                       "control - routing is unchanged and the wrapper's cost is paid", os.getpid(), len(bias),
-                       where)
+    where = "every layer" if bias.layers is None else f"layers {sorted(bias.layers)}"
+    how = f"rotating over {bias.n_ranks} ranks" if bias.rotating else bias.target
+    if not bias.strength:
+        logger.warning("router bias active (pid %d): strength 0 on %s, the zero-bias control - routing is "
+                       "unchanged and the wrapper's cost is paid", os.getpid(), where)
     else:
-        logger.warning("router bias active (pid %d): +%s on experts %s of %d, %s", os.getpid(),
-                       sorted({v for v in bias if v}), targeted, len(bias), where)
+        logger.warning("router bias active (pid %d): +%s, %s, on %s", os.getpid(), bias.strength, how, where)

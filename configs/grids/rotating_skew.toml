@@ -1,0 +1,48 @@
+# Does a skew that rotates between layers cost what a persistent one costs?
+#
+#   2 runs; DeepSeek and Mixtral, 4 offsets x 3 repeats = 24 points
+#
+# Every sweep so far biases one rank in every layer, which is the easiest shape
+# for a straggler to survive: the same rank is late at every layer, so the delays
+# add up over the stack. Natural imbalance does not look like that - the busiest
+# rank leads only 34-35% of layers (docs/detection-findings.md), close to the 25%
+# of a rank chosen at random.
+#
+# 'rotate' biases rank (layer mod n_npus). Each layer is skewed exactly as hard
+# as a fixed rank target would make it, but no rank is hot throughout. The
+# prediction worth testing is that this costs *less*, because the late rank
+# changes from layer to layer and the per-layer delays no longer fall on one
+# rank - which is the same cancellation that makes per-rank totals read 1.004x
+# where paired calls read 1.088x.
+#
+# If rotating skew is cheap while persistent skew is not, then natural imbalance
+# is free partly *because* it rotates, and not only because it is small. If it
+# costs the same, the cost is per layer and the identity of the hot rank does not
+# matter - which would also say the straggler picture is wrong.
+#
+# The levels match the controlled sweeps so the two are directly comparable, and
+# every arm carries the plugin. Validation records per-request routing, so the
+# detector can be scored on a rotating skew too (its localisation has only been
+# tested on a persistent one).
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/rotating_skew.toml --dry-run'
+#   ./nrun -t rot 'uv run moe-reliability grid configs/grids/rotating_skew.toml'
+
+[grid]
+name = "rotating-skew"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"client.max_new_tokens" = 100
+"imbalance.bias_target" = "rotate"
+"imbalance.bias_plugin_at_zero" = true
+"imbalance.validate_imbalance" = true
+"imbalance.validation_samples" = 400
+"imbalance.validation_workload" = "mixed:mmlu,gsm8k,dolly"
+"imbalance.validation_save_records" = true
+
+[matrix]
+"model.model_id,model.model_name,benchmark.n_samples,imbalance.imbalance_levels" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", 3000, [0, 0.5, 1, 2]],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", 2000, [0, 0.5, 1, 2]],
+]
