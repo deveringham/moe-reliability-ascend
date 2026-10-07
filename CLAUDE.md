@@ -103,13 +103,19 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   8x7B at 8-way (one expert per rank, MoE 70% of compute) over alpha 0.78–1.43.
   Stragglers do form, but concentrating tokens makes the fused-MoE GEMM enough
   cheaper per call to cancel them. Do not re-run that ground without a reason.
-- **Strong injected skew does cost latency** (2026-10-06,
+- **Strong injected skew does cost latency** (2026-10-06/07,
   `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
-  4 NPUs, 100-token TPOT rises ~13-19 ms per +1x busiest-rank load on both
-  models, in eager and graph mode alike. It needs a busiest rank of 1.8x or more;
-  natural traffic sits near 1.1x, where the null above still holds. The
-  *mechanism* is not established on either model, and two accounts have already
-  been retracted.
+  4 NPUs and the plugin in every arm, 100-token TPOT on Mixtral rises linearly,
+  +19.9 ms (+12%) per +1x busiest-rank load. DeepSeek is flat to 2.34x and +22%
+  at 3.45x, a threshold rather than a slope. Natural traffic reaches 1.09-1.25x
+  even per single prompt, where the null above still holds. The *mechanism* is
+  not established on either model, and two accounts have already been retracted.
+- **Measure natural rank load per layer.** The validation summary's
+  `rank_max_over_mean` takes the busiest rank of layer-averaged shares, which
+  lets the hot rank cancel across layers: 1.02x where the per-layer form
+  (`rank_max_over_mean_per_layer`, averaged) reads 1.14x. They agree under router
+  bias, where one rank is hot in every layer. `scripts/plot_findings.py` uses the
+  per-layer form.
 - **Set `imbalance.bias_plugin_at_zero` on every router-bias sweep.** Without it
   `server_env` returns `{}` at level 0, so the balanced arm runs without the
   plugin while every other point pays its per-call tensor add. Measured: 10.0 ms

@@ -1,0 +1,31 @@
+# The eager sweep, re-measured with the instrument present in every arm.
+#
+#   2 runs; DeepSeek 5 offsets x 3, Mixtral 6 offsets x 3 = 33 points
+#
+# The published eager slopes (docs/router-bias-findings.md, Latency) were
+# measured against a level-0 point that ran without the router-bias plugin,
+# which costs 10.0 ms per token on DeepSeek and nothing on Mixtral. The
+# plugin's offset is collinear with "level > 0", so those sweeps cannot be
+# corrected by refitting - only re-run. bias_plugin_at_zero puts the plugin in
+# the balanced arm too.
+#
+# Levels are per model, dropping the ones where routing also collapses onto
+# fewer live experts: DeepSeek from offset 3 (16 of 64), Mixtral from offset 4
+# (3 of 8). Everything else matches rbias-deepseek-001 / rbias-mixtral-001.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/router_bias_controlled.toml --dry-run'
+#   ./nrun -t rbctl 'uv run moe-reliability grid configs/grids/router_bias_controlled.toml'
+
+[grid]
+name = "rbias-controlled"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"client.max_new_tokens" = 100
+"imbalance.bias_plugin_at_zero" = true
+
+[matrix]
+"model.model_id,model.model_name,benchmark.n_samples,imbalance.imbalance_levels" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", 3000, [0, 0.25, 0.5, 1, 2]],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", 2000, [0, 0.25, 0.5, 1, 2, 3]],
+]

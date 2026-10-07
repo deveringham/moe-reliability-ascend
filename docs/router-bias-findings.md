@@ -12,16 +12,25 @@ checkpoint recipe could not do.
 
 **Strong rank skew costs measurable latency on this stack. That is the first
 positive result in the project, and it holds on both models.** In the 100-token
-regime TPOT rises with the busiest rank's load:
+regime, with the instrument present in every arm (the controlled sweep,
+2026-10-06, below), TPOT rises with the busiest rank's load:
 
-- **Mixtral:** +11.8% per +1x of busiest-rank load (t = 36), monotone from
-  163.5 ms balanced to 208.7 ms at 3.36x.
-- **DeepSeek:** +7.2% per +1x (t = 7.4), 179.1 ms to 213.1 ms at 3.45x.
+- **Mixtral:** +12.0% per +1x of busiest-rank load (+19.9 ms, t = 52), linear
+  from the first offset: 165.5 ms balanced to 209.8 ms at 3.36x.
+- **DeepSeek: a threshold, not a slope.** Flat to 2.34x (174.0, 173.9, 171.8,
+  175.8 ms; +1.4 ms per +1x, t = 0.7), then +22% at 3.45x (212.6 ms). The
+  gradual rise first reported below 2.34x was the instrument.
 
-**Graph mode leaves the cost unchanged in milliseconds** (+13.5 against +13.0 ms
-per +1x on DeepSeek, +18.1 against +19.2 on Mixtral). Graph mode is how a
+Natural traffic reaches 1.09-1.25x on the same load measure, even for a single
+prompt (`docs/figures/impact_map.png`). Mixtral's first cost beyond run-to-run
+drift is +3.3% at 1.38x; DeepSeek's is at 3.45x.
+
+**Graph mode also shows the cost** (+13.5 ms per +1x on DeepSeek, +18.1 on
+Mixtral, against superseded eager fits of +13.0 and +19.2). Graph mode is how a
 production deployment would run, so the result does not depend on eager mode's
-launch overhead.
+launch overhead. Its balanced points ran without the plugin, so the graph-mode
+figures are not yet controlled, and the DeepSeek comparison was made against
+the eager slope the controlled sweep withdrew.
 
 **Mechanism: not established on either model.** Step-resolved analysis
 (2026-10-06, below) withdrew the per-step accounts this document first recorded.
@@ -32,20 +41,16 @@ in. The eager cost sits in below-full-batch decode steps and in
 prefill-carrying steps; in graph mode it sits in full-batch decode steps
 instead. Token-weighted step wall still misses TPOT by -45% to +19%.
 
-**The instrument inflated the eager DeepSeek figures.** A balanced point ran
-without the router-bias plugin installed at all. Measured against a control that
-installs it with an all-zero vector (below), the plugin costs 10.0 ms per token
-on DeepSeek and nothing on Mixtral, so the level-0-to-2 comparison overstates
-DeepSeek's cost by 43% and Mixtral's by 9%. Its offset is collinear with "level
-> 0", so the published sweeps cannot be corrected post hoc: every eager DeepSeek
-number here is an upper bound until the sweep is re-run with
-`imbalance.bias_plugin_at_zero`. Graph mode also serves fast enough that the
-engine starts to starve.
+**The instrument inflated the first eager DeepSeek figures.** Their balanced
+point ran without the router-bias plugin installed, and the plugin costs
+10.0 ms per token on DeepSeek and nothing on Mixtral. The controlled sweep
+re-measured both models with `imbalance.bias_plugin_at_zero`; the Latency
+section's first table is the superseded form, kept for the record. The graph-mode
+sweeps were not re-run, so their balanced points still lack the plugin.
 
-**The 2026-10-02 null still holds where it was measured.** Natural traffic
-gives a busiest rank of about 1.1x. The lowest offset (1.18-1.30x) costs 1-4%,
-within a repeat's spread. The cost needs a busiest rank at 1.8x or more, which
-only an injected skew has produced.
+**The 2026-10-02 null still holds where it was measured.** Natural traffic gives
+a busiest rank of 1.09-1.25x (below). The lowest offsets (1.24-1.30x) cost
+0-1%, within run-to-run drift. Only an injected skew has produced a cost.
 
 **Prefill-only serving measured the frontend, not the model.** In the DeepSeek
 prefill-only runs the engine's queue was empty for 83-90% of the time: requests
@@ -73,6 +78,10 @@ with fewer live experts, as in the 2026-10-02 forced-imbalance runs.
 dropping out.
 
 ## Latency
+
+**Superseded for eager mode by the controlled sweep below**: these runs'
+balanced points lacked the plugin. Mixtral's figures agree with the controlled
+ones within drift; DeepSeek's do not.
 
 6 offsets x 3 repeats per run, served in shuffled rounds. Effect per +1x of
 busiest-rank load from a fit with execution order as a covariate (order was
@@ -367,6 +376,54 @@ refit can separate a constant instrument cost from a genuine jump at the first
 nonzero level. Every eager DeepSeek figure in this document is an upper bound
 until the sweep is re-run with the flag on. Mixtral's figures stand.
 
+## The controlled sweep (2026-10-06)
+
+`rbias-controlled-000/001` (`configs/grids/router_bias_controlled.toml`) repeat
+the eager sweeps with `bias_plugin_at_zero`, dropping the levels that collapse
+routing. 3 repeats in shuffled rounds. TPOT mean, ms (± sd):
+
+| Offset | 0 | 0.25 | 0.5 | 1 | 2 | 3 |
+|---|---|---|---|---|---|---|
+| DeepSeek | 174.0±4.2 | 173.9±4.4 | 171.8±1.6 | 175.8±2.3 | 212.6±3.7 | |
+| Mixtral | 165.5±1.3 | 167.1±1.4 | 171.0±2.0 | 176.6±0.5 | 193.9±1.1 | 209.8±0.8 |
+
+- **Mixtral is linear from the first offset:** +19.9 ms (+12.0%) per +1x of
+  busiest-rank load, t = 52, and +18.7 ms per +1x on offsets 0-1 alone. Its
+  earlier figures stand.
+- **DeepSeek is flat until somewhere between 2.34x and 3.45x.** Offsets 0-1 fit
+  +1.4 ms per +1x (t = 0.7); offset 2 is +38.6 ms. A linear fit over all
+  levels (+16.4 ms, t = 6.5) is the wrong model for it. The +7.2% per +1x and
+  the gradual rise in the superseded table were the plugin's cost riding on
+  every nonzero level.
+- **A neighbouring job ran throughout** (an unrelated vLLM server on NPUs 4-7,
+  load average 21-28; 25 of 30 and 31 of 36 snapshots flag it), and no point ran
+  without it. It is not aliased onto level: within-level residuals do not differ
+  between points with the neighbour at both snapshots and at one (-1.0 against
+  +2.0 ms on DeepSeek, -0.1 against +0.2 on Mixtral), and the level-0 and
+  level-2 means match the quiet-node zero-control within 1.5% (DeepSeek 174.0 /
+  212.6 against 175.1 / 209.5; Mixtral 165.5 / 193.9 against 165.9 / 191.3).
+
+**Where natural traffic sits.** Busiest-rank load of unbiased MMLU traffic, from
+the routed-expert captures of `alpha-sweep` (DeepSeek, 3000 prompts) and
+`mixtral-alpha` (1500), prompt and generated tokens pooled, 4-way contiguous
+placement:
+
+| Window | DeepSeek | Mixtral |
+|---|---|---|
+| Single prompt (p1 / median / p99) | 1.107 / 1.142 / 1.174 | 1.140 / 1.182 / 1.249 |
+| One MMLU subject (min / median / max) | 1.097 / 1.119 / 1.134 | 1.101 / 1.125 / 1.156 |
+| Random 200-prompt mix (p1 / median / p99) | 1.093 / 1.097 / 1.101 | 1.110 / 1.117 / 1.122 |
+
+A single prompt is the most coherent window natural traffic offers, roughly a
+prefill chunk of one long prompt, and it stays below the lowest offset either
+model was swept at. Load here is the busiest rank per MoE layer, averaged over
+layers. The calibration table above takes the busiest rank of the
+layer-averaged shares instead, which lets the hot rank cancel across layers in
+natural traffic: it reads 1.02x where this reads 1.14x on DeepSeek's balanced
+point, and the two agree at every biased level. The figures use the per-layer
+form throughout. Calibration routed prompt tokens only (`max_new_tokens = 1`);
+the natural captures include 100 generated tokens.
+
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
 `benchmark.save_itl` records the gap between consecutive streamed chunks of each
@@ -444,9 +501,11 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261006-112553`, `-115820` rbias-graph-profiled-* | Graph-mode traces at offsets 0 / 2 |
 | `20261006-135100` itl-smoke | ITL capture and zero-bias control, 60 prompts |
 | `20261006-135720` ... `-150633` rbias-zero-control-000..003 | Zero-bias control: 2 models x plugin on/off x levels 0 / 2 x 3 |
+| `20261006-155755`, `-165818` rbias-controlled-000, -001 | Controlled eager sweep: plugin at level 0, DeepSeek 5 / Mixtral 6 offsets x 3 |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
-fits. On the node, where the raw traces live: `scripts/step_profile.py <run_dir>`
+fits; `scripts/plot_findings.py` for the figures, which needs the two
+routed-expert captures pulled with `npull -a` or copied directly. On the node, where the raw traces live: `scripts/step_profile.py <run_dir>`
 writes per-step tables (small enough to pull), `scripts/kernel_gaps.py
 <trace_dir>` attributes idle time to kernel transitions, and
 `scripts/host_ops.py <trace_dir> <rank> <first> <last>` reports host time per
@@ -457,10 +516,9 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
-1. **Re-run the eager sweeps with `bias_plugin_at_zero`.** Done for level 0
-   against 2; the slopes in the Latency section are still measured against a
-   plugin-free baseline and overstate DeepSeek by ~43%. Six levels x 3 repeats x
-   2 models, about 2 hours, and it replaces the headline numbers.
+1. **Re-run the graph-mode sweeps with `bias_plugin_at_zero`.** The eager
+   sweeps are done (the controlled sweep). Graph mode captures the plugin's add
+   into the graph, so its cost there may be small, but it is unmeasured.
 2. **Scrape `vllm:inter_token_latency_seconds` per point.** Client-side ITLs are
    sound in the mean but their distribution is client delivery at this
    concurrency, so within-request spikes are still unmeasured. The server-side
@@ -481,7 +539,7 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
    host preparing the next step. Async scheduling, if vllm-ascend supports it
    here, is the biggest available win on this deployment, independent of
    imbalance.
-6. **Where natural traffic sits.** The cost scale is ~12-19 ms TPOT per +1x
-   busiest-rank load, pending item 1. A workload shift that pushed a rank to
-   1.5x would cost a few percent, so detection needs to resolve rank load near
-   that point, not the 1.1x natural level.
+6. **Where DeepSeek's threshold sits.** Between 2.34x and 3.45x; no level was
+   swept in that interval, and above 3.45x routing collapses onto rank 0's
+   experts. Offsets 1.25 and 1.5 would locate it. Whatever sets it is also the
+   mechanism question, since Mixtral shows no threshold.

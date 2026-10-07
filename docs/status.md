@@ -1,6 +1,6 @@
 # Where this project stands
 
-Orientation document, 2026-10-02, updated 2026-10-06. One pass, no detail: the
+Orientation document, 2026-10-02, updated 2026-10-07. One pass, no detail: the
 numbers and their derivations are in [imbalance-findings.md](imbalance-findings.md),
 [regime-findings.md](regime-findings.md) and
 [router-bias-findings.md](router-bias-findings.md).
@@ -27,18 +27,18 @@ Two independent mechanisms make imbalance invisible, and they compose:
 So imbalance is not merely hard to see here; there are two separate reasons it
 cannot surface.
 
-**Update 2026-10-06: it does surface once the skew is strong enough.** A graded,
-injected router bias that keeps every expert live raises 100-token TPOT by ~12%
-per +1x of busiest-rank load on Mixtral (t = 36, monotone over six levels) and
-~7% on DeepSeek (t = 7) on 4 NPUs, and graph mode leaves it unchanged in
-milliseconds on both. **The mechanism is not established on either model**: a
-saturated decode step is the same length at every eager offset, which withdrew
-the GEMM account, and step wall still misses TPOT by -45% to +19%. A zero-bias
-control has since shown the instrument itself cost 10.0 ms per token on DeepSeek
-and nothing on Mixtral, so the eager DeepSeek figures are inflated by ~43% and
-have to be re-measured. The cost needs a
-busiest rank of 1.8x or more. Natural traffic reaches ~1.1x, so the null above is
-a statement about realistic skew, not a property of the stack.
+**Update 2026-10-06/07: it does surface once the skew is strong enough.** A
+graded, injected router bias that keeps every expert live raises 100-token TPOT
+on 4 NPUs, measured with the instrument in every arm. Mixtral is linear from the
+first offset, +12% per +1x of busiest-rank load (t = 52). DeepSeek has a
+threshold instead: flat to 2.34x, +22% at 3.45x. Graph mode shows the cost too,
+though its balanced points are not yet controlled. **The mechanism is not
+established on either model**: a saturated decode step is the same length at
+every eager offset, which withdrew the GEMM account, and step wall still misses
+TPOT by -45% to +19%. Natural traffic reaches 1.09-1.25x even for a single
+prompt, below the lowest skew that costs anything (Mixtral, +3.3% at 1.38x), so
+the null above is a statement about realistic skew, not a property of the stack.
+`docs/figures/impact_map.png` puts both on one axis.
 
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
 expert parallelism, and Mixtral 8x7B (8 experts, top-2) at 8-way, over router

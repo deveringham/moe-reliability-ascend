@@ -42,8 +42,19 @@ def manifests(pattern):
         yield d, json.load(open(os.path.join(d, "manifest.json")))
 
 
+N_RANKS = 4
+
+
 def calibration():
-    """{model: {level: (busiest rank load, live experts)}} from the calibration runs."""
+    """{model: {level: (busiest rank load, live experts)}} from the calibration runs.
+
+    Load is the busiest rank's share in each MoE layer, averaged over layers
+    (see ``busiest_rank``), read from the validation file rather than the
+    manifest summary, which takes the busiest rank of the layer-averaged shares.
+    The two agree whenever one rank is hot in every layer, as under router bias,
+    but the summary form lets the hot rank cancel across layers in natural
+    traffic (1.02x where the per-layer form reads 1.14x on DeepSeek).
+    """
     out: dict[str, dict[float, tuple[float, int]]] = {}
     for d, m in manifests("*rbias-calibration"):
         if m.get("status") != "completed":
@@ -52,8 +63,62 @@ def calibration():
         for p in m["points"]:
             v = p.get("validation_summary") or {}
             if v.get("rank_max_over_mean") is not None:
-                out.setdefault(model, {})[float(p["value"])] = (v["rank_max_over_mean"], v["active_experts"])
+                f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+                load = float(np.mean(f["rank_max_over_mean_per_layer"]))
+                out.setdefault(model, {})[float(p["value"])] = (load, v["active_experts"])
     return out
+
+
+def busiest_rank(counts):
+    """Busiest rank's load over the mean, per layer, averaged over layers.
+
+    ``counts`` is (layers, experts) token-expert assignments; experts are placed
+    on ranks contiguously, as vLLM does under expert parallelism.
+    """
+    f = counts / counts.sum(1, keepdims=True)
+    per_rank = f.reshape(f.shape[0], N_RANKS, -1).sum(2)
+    return float((per_rank.max(1) * N_RANKS).mean())
+
+
+def routing_counts(pattern, n_experts):
+    """Per-request (layers, experts) counts and MMLU subjects from a routed-expert capture.
+
+    Prompt and generated tokens are pooled, as the 100-token serving regime
+    routes both. Layers that never route (DeepSeek's dense first layer) drop out.
+    Captures are not pulled by default: ``npull`` excludes ``activations/``.
+    """
+    (path,) = glob.glob(os.path.join(RESULTS, pattern, "activations", "records.jsonl.gz"))
+    counts, subjects = [], []
+    for line in gzip.open(path, "rt"):
+        r = json.loads(line)
+        a = np.concatenate([np.asarray(r["prompt_routed_experts"]), np.asarray(r["routed_experts"])])
+        counts.append([np.bincount(a[:, layer].ravel(), minlength=n_experts) for layer in range(a.shape[1])])
+        subjects.append(r["subject"])
+    c = np.asarray(counts, float)
+    return c[:, c[:, :, 1:].sum(axis=(0, 2)) > 0], np.array(subjects)
+
+
+def natural_load(pattern, n_experts, seed=0, draws=1000):
+    """Busiest-rank load that unbiased traffic produces, for windows of increasing coherence.
+
+    A single prompt is the most skewed window natural traffic offers (a prefill
+    chunk of one long prompt); a one-subject window is a topic shift; a random
+    200-prompt window is ordinary mixed traffic.
+    """
+    c, subjects = routing_counts(pattern, n_experts)
+    rng = np.random.default_rng(seed)
+    single = [busiest_rank(x) for x in c]
+    subject = [busiest_rank(c[subjects == s].sum(0)) for s in np.unique(subjects) if (subjects == s).sum() >= 30]
+    mixed = [busiest_rank(c[rng.choice(len(c), 200, replace=False)].sum(0)) for _ in range(draws)]
+    return {"single prompt": single, "one MMLU subject": subject, "200-prompt mix": mixed}
+
+
+# The eager sweeps re-run with the plugin installed at level 0 too. The
+# rbias-deepseek-001 / rbias-mixtral-001 runs they replace measured against a
+# plugin-free balanced point, which overstated DeepSeek's cost.
+EAGER = ("*rbias-controlled-000", "*rbias-controlled-001")
+GRAPH = ("*rbias-graph-000", "*rbias-graph-001")
+DRIFT_PCT = 2.2  # largest run-to-run drift between identical points (zero-control level-2 arms)
 
 
 def sweep(pattern, metric="tpot_ms_mean"):
@@ -92,14 +157,13 @@ def fig_dose_response(out, store):
           "Time per output token (ms)",
           "Strong rank imbalance costs latency; realistic imbalance does not",
           "4 NPUs, 100-token requests, 3 repeats per point. Error bars are the spread over repeats.")
-    ax.axvspan(1.0, 1.15, color="#f0efec", zorder=0)
-    ax.annotate("where natural\ntraffic sits", xy=(1.075, 0.995), xycoords=("data", "axes fraction"),
+    lo, hi = store["natural_band"]
+    ax.axvspan(lo, hi, color="#f0efec", zorder=0)
+    ax.annotate("where natural\ntraffic sits", xy=((lo + hi) / 2, 0.995), xycoords=("data", "axes fraction"),
                 ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
     rows = []
-    for pattern, mode, ls, marker in (("*rbias-deepseek-001", "eager", "-", "o"),
-                                      ("*rbias-mixtral-001", "eager", "-", "o"),
-                                      ("*rbias-graph-000", "graph", "--", "s"),
-                                      ("*rbias-graph-001", "graph", "--", "s")):
+    for pattern, mode, ls, marker in ((EAGER[0], "eager", "-", "o"), (EAGER[1], "eager", "-", "o"),
+                                      (GRAPH[0], "graph", "--", "s"), (GRAPH[1], "graph", "--", "s")):
         model, by = sweep(pattern)
         # Levels where experts drop out vary the live expert count as well as the
         # skew, so they are a different experiment and are left off.
@@ -112,11 +176,12 @@ def fig_dose_response(out, store):
                     label=f"{MODEL_LABEL[model]}, {mode}")
         rows.append({"model": model, "mode": mode, "levels": levels, "load": x, "tpot_ms": y, "sd": e})
     ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.14, 1.0))
-    ax.set_xlim(0.9, 3.7)
+    ax.set_xlim(1.0, 3.7)
     ax.set_ylim(132, 232)
     fig.text(0.012, 0.015,
-             "Eager DeepSeek is an upper bound: its balanced point ran without the measurement plugin "
-             "(see the instrument figure).\nLevels that collapse routing onto fewer live experts are excluded.",
+             "Eager points carry the measurement plugin at every level, the balanced one included. Graph-mode "
+             "balanced points ran without it;\nits cost there is unmeasured. Levels that collapse routing onto "
+             "fewer live experts are excluded.",
              color=INK3, fontsize=8, va="bottom")
     fig.tight_layout(rect=(0, 0.075, 1, 1))
     fig.savefig(os.path.join(out, "dose_response.png"), dpi=200, facecolor=SURFACE)
@@ -171,7 +236,7 @@ def fig_instrument(out, store):
         ax.annotate(MODEL_LABEL[model], xy=(mi * (2 * outer + 0.55) + outer / 2, -0.155),
                     xycoords=("data", "axes fraction"), ha="center", color=INK, fontsize=11,
                     fontweight="bold")
-    ax.set_ylim(0, 265)
+    ax.set_ylim(0, 300)
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, ncol=2, loc="lower center",
               bbox_to_anchor=(0.5, -0.36), columnspacing=2.2)
     d = {(r["model"], r["method"]): r["delta_ms"] for r in rows}
@@ -282,8 +347,9 @@ def fig_calibration(out, store):
                 collapsed.append(f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]} "
                                  f"from offset {x:g} ({live} of {full})")
             rows.append({"model": model, "offset": x, "load": round(load, 3), "live_experts": live})
-    ax.axhspan(1.0, 1.15, color="#f0efec", zorder=0)
-    ax.annotate("natural traffic sits here", xy=(4.05, 1.08), ha="right", va="center",
+    lo, hi = store["natural_band"]
+    ax.axhspan(lo, hi, color="#f0efec", zorder=0)
+    ax.annotate("natural traffic sits here", xy=(4.05, (lo + hi) / 2), ha="right", va="center",
                 color=INK3, fontsize=8.5)
     ax.set_ylim(0.85, 4.45)
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.03, 0.99))
@@ -296,15 +362,106 @@ def fig_calibration(out, store):
     store["calibration"] = rows
 
 
+def natural(store):
+    """Natural-traffic load per model and window, and the band it spans."""
+    nat = {"deepseek-v2": natural_load("*alpha-sweep", 64), "mixtral": natural_load("*mixtral-alpha", 8)}
+    rows = []
+    for model, windows in nat.items():
+        for window, v in windows.items():
+            # Subjects are few (11-19), so their full range; sampled windows show p1-p99.
+            lo, hi = (min(v), max(v)) if window == "one MMLU subject" else np.quantile(v, [0.01, 0.99])
+            rows.append({"model": model, "window": window, "n": len(v), "lo": round(float(lo), 3),
+                         "median": round(float(np.median(v)), 3), "hi": round(float(hi), 3)})
+    store["natural"] = rows
+    store["natural_band"] = (min(r["lo"] for r in rows), max(r["hi"] for r in rows))
+
+
+def fig_impact_map(out, store):
+    """What it costs, against where natural traffic falls, on one load axis."""
+    cal = calibration()
+    fig, (top, bot) = plt.subplots(2, 1, figsize=(9.4, 7.0), facecolor=SURFACE, sharex=True,
+                                   gridspec_kw={"height_ratios": [3, 1.45], "hspace": 0.1})
+    style(top, "", "TPOT increase over balanced (%)",
+          "Natural traffic stays far below the imbalance that costs latency",
+          "Top: injected rank skew, 4 NPUs, eager, 100-token requests, 3 repeats. "
+          "Bottom: unbiased MMLU traffic.")
+    style(bot, "Load on the busiest expert-parallel rank (1.0 = perfectly balanced)", "")
+    lo, hi = store["natural_band"]
+    for ax in (top, bot):
+        ax.axvspan(lo, hi, color="#f0efec", zorder=0)
+    top.axhspan(-DRIFT_PCT, DRIFT_PCT, color="#f0efec", zorder=0)
+    top.axhline(0, color=GRID, lw=1, zorder=1)
+    top.annotate(f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(3.68, DRIFT_PCT), xytext=(0, 4),
+                 textcoords="offset points", ha="right", va="bottom", color=INK3, fontsize=8.5)
+    top.annotate("natural\ntraffic", xy=((lo + hi) / 2, 0.98), xycoords=("data", "axes fraction"),
+                 ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
+
+    rows = []
+    for pattern in EAGER:
+        model, by = sweep(pattern)
+        full = max(n for _, n in cal[model].values())
+        levels = [lv for lv in sorted(by) if cal[model][lv][1] == full]
+        base = float(np.mean(by[0.0]))
+        x = [cal[model][lv][0] for lv in levels]
+        y = [100 * (float(np.mean(by[lv])) / base - 1) for lv in levels]
+        e = [100 * float(np.std(by[lv], ddof=1)) / base for lv in levels]
+        top.errorbar(x, y, yerr=e, ls="-", marker="o", ms=6, lw=2, capsize=3, elinewidth=1,
+                     color=MODEL_COLOUR[model], mec=SURFACE, mew=1.5, zorder=3, label=MODEL_LABEL[model])
+        first = next((i for i, v in enumerate(y) if v > DRIFT_PCT), None)
+        if first is not None:
+            # Placed in the clear space beside each curve, with a leader to the point.
+            spot = {"mixtral": (1.42, 12.5, "bottom"), "deepseek-v2": (2.9, 9.5, "top")}[model]
+            top.annotate(f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
+                         f"{y[first]:+.1f}% at {x[first]:.2f}x",
+                         xy=(x[first], y[first]), xytext=spot[:2], ha="left", va=spot[2],
+                         color=INK2, fontsize=8.5, linespacing=1.3,
+                         arrowprops={"arrowstyle": "-", "color": INK3, "lw": 0.8, "shrinkB": 5})
+        rows.append({"model": model, "levels": levels, "load": [round(v, 3) for v in x],
+                     "tpot_pct": [round(v, 2) for v in y], "sd_pct": [round(v, 2) for v in e],
+                     "balanced_ms": round(base, 1)})
+    top.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.12, 0.98))
+    top.set_ylim(-6, 32)
+
+    # One row per model and window: a p1-p99 (or min-max) range with the median.
+    nat = store["natural"]
+    ticks, labels = [], []
+    for i, r in enumerate(nat):
+        yv = len(nat) - 1 - i + (0.6 if r["model"] == "deepseek-v2" else 0)
+        bot.plot([r["lo"], r["hi"]], [yv, yv], lw=2, color=MODEL_COLOUR[r["model"]], solid_capstyle="round", zorder=3)
+        bot.plot([r["median"]], [yv], "o", ms=6, color=MODEL_COLOUR[r["model"]], mec=SURFACE, mew=1.5, zorder=4)
+        ticks.append(yv)
+        labels.append(f"{MODEL_LABEL[r['model']].split('-')[0].split(' ')[0]} \u00b7 {r['window']}")
+    bot.set_yticks(ticks, labels, fontsize=8.5)
+    bot.tick_params(axis="y", labelcolor=INK2)
+    bot.grid(False)
+    bot.set_ylim(-0.7, len(nat) + 0.2)
+    bot.annotate(f"natural traffic peaks at {hi:.2f}x", xy=(hi, len(nat) - 0.4),
+                 xytext=(10, 0), textcoords="offset points", ha="left", va="center", color=INK2, fontsize=8.5)
+    bot.set_xlim(1.0, 3.7)
+    fig.text(0.012, 0.012,
+             "Load: the busiest rank's share of token-expert assignments in each MoE layer, averaged over layers; "
+             "4-way contiguous placement.\nNatural ranges: single prompts and random 200-prompt mixes p1-p99, "
+             "one-subject windows min-max; dot = median. Levels that collapse routing are excluded.\n"
+             "A neighbouring job ran on NPUs 4-7 during the sweep; its endpoints match a quiet-node control "
+             "within 1.5%.",
+             color=INK3, fontsize=7.5, va="bottom", linespacing=1.4)
+    # Explicit margins: tight_layout cannot place shared axes with long tick labels.
+    fig.subplots_adjust(left=0.215, right=0.975, top=0.875, bottom=0.165)
+    fig.savefig(os.path.join(out, "impact_map.png"), dpi=200, facecolor=SURFACE)
+    store["impact_map"] = rows
+
+
 def main(out="docs/figures"):
     os.makedirs(out, exist_ok=True)
     store: dict = {}
+    natural(store)
+    fig_impact_map(out, store)
     fig_dose_response(out, store)
     fig_instrument(out, store)
     fig_steps(out, store)
     fig_calibration(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/impact_map.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":
