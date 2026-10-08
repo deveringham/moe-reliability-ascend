@@ -1119,6 +1119,129 @@ def fig_batch(out, store):
     store["batch_size"] = points
 
 
+NATURAL_BATCH = "*natural-batch-*"
+#: Realised busiest-rank load of the three levels the natural-range sweep uses.
+NATURAL_LEVELS = {0.0: 1.178, 0.25: 1.241, 0.5: 1.380}
+LANGUAGE_RUNS = "*language-latency-*"
+#: Per-layer busiest-rank load measured for each locale's own routing.
+LOCALE_LOAD = {"mmlu": 1.149, "mmmlu:DE_DE": 1.136, "mmmlu:ZH_CN": 1.210, "mmmlu:JA_JP": 1.225,
+               "mmmlu:AR_XY": 1.261, "mmmlu:HI_IN": 1.309, "mmmlu:SW_KE": 1.346, "mmmlu:YO_NG": 1.469}
+LOCALE_NAME = {"mmlu": "English", "mmmlu:DE_DE": "German", "mmmlu:ZH_CN": "Chinese",
+               "mmmlu:JA_JP": "Japanese", "mmmlu:AR_XY": "Arabic", "mmmlu:HI_IN": "Hindi",
+               "mmmlu:SW_KE": "Swahili", "mmmlu:YO_NG": "Yoruba"}
+
+
+def fig_natural_batch(out, store):
+    """Does imbalance at natural strength cost anything, and does batch size decide?"""
+    rows = []
+    for d, m in manifests(NATURAL_BATCH):
+        by: dict[float, list[float]] = {}
+        for p in m["points"]:
+            if p.get("request_summary"):
+                by.setdefault(float(p["value"]), []).append(p["request_summary"]["tpot_ms_mean"])
+        if len(by) < len(NATURAL_LEVELS) or any(len(v) < 2 for v in by.values()):
+            continue                       # a partial point cannot carry a slope
+        reached = achieved_batch(d) or m["config"]["server"]["batch_size"]
+        if reached < m["config"]["server"]["batch_size"] * 0.9:
+            continue                       # never got to the operating point it claims
+        levels = sorted(by)
+        x = np.array([NATURAL_LEVELS[lv] for lv in levels])
+        y = np.array([float(np.mean(by[lv])) for lv in levels])
+        design = np.c_[np.ones_like(x), x]
+        coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+        resid = y - design @ coef
+        se = np.sqrt(np.diag((resid @ resid / max(len(y) - 2, 1)) * np.linalg.inv(design.T @ design)))[1]
+        rows.append({"batch": reached, "slope_ms_per_load": round(float(coef[1]), 1),
+                     "se": round(float(se), 1), "tpot_ms": [round(float(v), 1) for v in y]})
+    if len(rows) < 2:
+        return
+    rows.sort(key=lambda r: r["batch"])
+
+    fig, ax = plt.subplots(figsize=(10.2, 5.0), facecolor=SURFACE)
+    style(ax, "Decode batch (sequences in flight)",
+          "Change in TPOT per +1x of busiest-rank load (ms)",
+          "At natural strength, imbalance costs nothing until the batch is large",
+          "Mixtral 8x7B, 4 NPUs. Slope fitted across 1.18x, 1.24x and 1.38x busiest rank, the range "
+          "ordinary traffic reaches; 3 repeats each.")
+    x = [r["batch"] for r in rows]
+    y = [r["slope_ms_per_load"] for r in rows]
+    e = [r["se"] for r in rows]
+    ax.axhline(0, color=INK3, lw=1.2, zorder=2)
+    ax.errorbar(x, y, yerr=e, ls="-", marker="o", ms=7, lw=2, capsize=4, elinewidth=1,
+                color=MODEL_COLOUR["mixtral"], mec=SURFACE, mew=1.5, zorder=3)
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(x, [str(v) for v in x])
+    ax.minorticks_off()
+    explain(ax, "imbalance costs time", xy=(0.02, 0.96), xycoords="axes fraction", ha="left", va="top",
+            color=INK2, fontsize=9)
+    explain(ax, "concentrating tokens still pays for itself", xy=(0.30, 0.04), xycoords="axes fraction",
+            ha="left", va="bottom", color=INK2, fontsize=9)
+    caption(fig, 0.012, 0.015,
+            "The sign changes between 256 and 512 sequences, so the null this project reported is a "
+            "property of the operating point as well as of the stack.\nLarger batches are missing because "
+            "the benchmark client fails above ~1000 concurrent requests - 418 of 8192 timed out at 1024 - "
+            "not because the engine does.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "natural_batch.png"), dpi=200, facecolor=SURFACE)
+    store["natural_batch"] = rows
+
+
+def fig_language(out, store):
+    """How much of a locale's latency is its prompts, and how much is its routing?"""
+    rows = []
+    for d, m in manifests(LANGUAGE_RUNS):
+        w = m["config"]["benchmark"]["workload"]
+        t = [p["request_summary"]["tpot_ms_mean"] for p in m["points"] if p.get("request_summary")]
+        inp = [p["request_summary"]["input_tokens_mean"] for p in m["points"] if p.get("request_summary")]
+        if t and w in LOCALE_LOAD:
+            rows.append({"locale": w, "tpot_ms": float(np.mean(t)), "sd": float(np.std(t, ddof=1)),
+                         "input_tokens": float(np.mean(inp)), "load": LOCALE_LOAD[w]})
+    if len(rows) < 4:
+        return
+    y = np.array([r["tpot_ms"] for r in rows])
+    tok = np.array([r["input_tokens"] for r in rows])
+    load = np.array([r["load"] for r in rows])
+    design = np.c_[np.ones_like(y), tok, load]
+    coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+    resid = y - design @ coef
+    se = np.sqrt(np.diag((resid @ resid / (len(y) - 3)) * np.linalg.inv(design.T @ design)))
+    base = min(rows, key=lambda r: r["tpot_ms"])
+    for r in rows:
+        r["from_length"] = (r["input_tokens"] - base["input_tokens"]) * coef[1]
+        r["from_routing"] = (r["load"] - base["load"]) * coef[2]
+    rows.sort(key=lambda r: r["tpot_ms"])
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.0), facecolor=SURFACE)
+    style(ax, "", f"Time per output token above {LOCALE_NAME[base['locale']]} (ms)",
+          "Non-English traffic is slower, and routing is a real but minor part of why",
+          "Mixtral 8x7B, 4 NPUs, no injected skew: the same translated questions in eight locales, "
+          "3 repeats each.")
+    idx = np.arange(len(rows))
+    length = [r["from_length"] for r in rows]
+    routing = [r["from_routing"] for r in rows]
+    ax.bar(idx, length, 0.62, color=GRID, zorder=3, label="longer prompts")
+    ax.bar(idx, routing, 0.62, bottom=length, color=MODEL_COLOUR["mixtral"], zorder=3,
+           label="more concentrated routing")
+    ax.plot(idx, [r["tpot_ms"] - base["tpot_ms"] for r in rows], "o", ms=7, color=INK, mec=SURFACE,
+            mew=1.5, zorder=5, label="measured")
+    ax.set_xticks(idx, [f"{LOCALE_NAME[r['locale']]}\n{r['load']:.2f}x" for r in rows], fontsize=8.5)
+    ax.tick_params(axis="x", labelcolor=INK2)
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
+    caption(fig, 0.012, 0.015,
+            f"Split by a fit of TPOT on both: {coef[1]:+.2f} ms per input token (t={coef[1]/se[1]:.0f}) and "
+            f"{coef[2]:+.1f} ms per +1x busiest-rank load (t={coef[2]/se[2]:.1f}), residual {np.std(resid, ddof=3):.1f} ms.\n"
+            "Routing is significant but the minority: of Yoruba's "
+            f"{[r for r in rows if 'YO' in r['locale']][0]['tpot_ms'] - base['tpot_ms']:.0f} ms over English, "
+            f"about {[r for r in rows if 'YO' in r['locale']][0]['from_routing']:.0f} ms is routing. "
+            "Observational across 8 locales, not a controlled experiment.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "language.png"), dpi=200, facecolor=SURFACE)
+    store["language"] = {"rows": rows, "ms_per_token": round(float(coef[1]), 3),
+                         "ms_per_load": round(float(coef[2]), 2)}
+
+
 def fig_timeline(out, store):
     """One run through the screen: what it reads, when it alarms, when it decides.
 
@@ -1222,6 +1345,8 @@ def main(out="docs/figures", also_bare=True):
         fig_rotating(out, store)
     fig_regimes(out, store)
     fig_batch(out, store)
+    fig_natural_batch(out, store)
+    fig_language(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
         fig_detection_cost(out, store)
@@ -1234,7 +1359,7 @@ def main(out="docs/figures", also_bare=True):
             main(os.path.join(out, "bare"), also_bare=False)
         finally:
             BARE = False
-    print(f"wrote {out}/regimes.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/regimes.png, natural_batch.png, language.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

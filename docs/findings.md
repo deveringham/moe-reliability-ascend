@@ -208,6 +208,60 @@ workload, or wider expert parallelism.
 
 ---
 
+## 4b. Batch size decides whether ordinary imbalance costs anything
+
+Everything above measures a *fixed* skew. A separate question is whether the
+operating point changes the answer — and it does, more than anything else we
+varied.
+
+![At natural strength, imbalance costs nothing until the batch is large](figures/natural_batch.png)
+
+Holding the imbalance at the level ordinary traffic reaches (1.18x to 1.38x) and
+varying only how many requests are in flight:
+
+| Sequences in flight | Change in TPOT per +1x of load |
+|---|---|
+| 64 | −9.5 ± 14.6 ms |
+| **128** | **−10.3 ± 2.8 ms** |
+| 256 | +11.0 ± 13.4 ms |
+| **512** | **+22.7 ± 3.2 ms** |
+
+**The sign flips.** At 128 sequences more imbalance makes serving slightly
+*faster* — the cancellation from section 2 still winning. At 512 it makes it
+slower. So the headline null is a property of the operating point as well as of
+the stack: a small-batch deployment can ignore imbalance that a large-batch one
+cannot.
+
+With a *strong* skew (2.62x) the same pattern appears as a growing penalty
+rather than a sign change: +8.1% at 256 sequences against +14.8% at 512.
+
+Two limits on this. Only the 128 and 512 points are individually resolved; 64
+and 256 have error bars wider than their slopes. And larger batches are missing
+because **our benchmark client fails above ~1000 concurrent requests** — 418 of
+8192 timed out at 1024 — not because the engine does; KV memory would allow
+about 4700. Going higher needs a different client, not a different config.
+
+## 4c. Language concentrates routing, and it costs a little
+
+![Non-English traffic is slower, and routing is a real but minor part of why](figures/language.png)
+
+MMMLU is MMLU translated, so serving the same questions in eight locales varies
+the language and nothing else. Routing concentration varies a lot with it —
+Yoruba reaches 1.47x busiest rank where English sits at 1.15x — and so does
+latency, from 159 ms to 221 ms.
+
+Most of that is not routing. Low-resource languages tokenise into more tokens,
+and a fit on both terms separates them: **+0.22 ms per input token** (t = 24) and
+**+34.9 ms per +1x of busiest-rank load** (t = 4.8), with a 1.7 ms residual
+across eight locales. Of Yoruba's 51 ms over English, about **39 ms is prompt
+length and 11 ms is routing**.
+
+So routing concentration is a real, significant and *minor* contributor. The
+practical reading is that a multilingual deployment pays mostly for tokenisation,
+and a little for the imbalance that language-specialised experts create. This is
+observational across eight locales with the two predictors correlated +0.62, not
+a controlled experiment.
+
 ## 5. It matters *which* chip is hot, and the models disagree
 
 Every experiment so far made one chip hot in *every* layer. Real imbalance does
