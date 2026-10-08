@@ -152,10 +152,11 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
     n = cfg.imbalance.validation_samples
     subjects: list | None = None
     if cfg.imbalance.validation_workload:
-        from ..core.data import prompt_char_budget, workload_prompts
+        from ..core.data import prompt_token_budget, workload_prompts
 
-        prompts, subjects = workload_prompts(cfg.imbalance.validation_workload, n, cfg.experiment.seed,
-                                             max_chars=prompt_char_budget(cfg.server.max_model_len))
+        prompts, subjects = workload_prompts(
+            cfg.imbalance.validation_workload, n, cfg.experiment.seed,
+            max_tokens=prompt_token_budget(cfg.server.max_model_len, cfg.client.max_new_tokens))
     elif n:
         prompts, subjects, _ = common.mmlu_prompts(n, cfg.experiment.seed)
     else:
@@ -269,11 +270,12 @@ def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> N
                 # Loaded once, and only if a point still needs benchmarking.
                 if "prompts" not in cache:
                     if cfg.benchmark.workload:
-                        from ..core.data import prompt_char_budget, workload_prompts
+                        from ..core.data import prompt_token_budget, workload_prompts
 
                         cache["prompts"], _ = workload_prompts(
                             cfg.benchmark.workload, cfg.benchmark.n_samples, cfg.experiment.seed,
-                            max_chars=prompt_char_budget(cfg.server.max_model_len))
+                            max_tokens=prompt_token_budget(cfg.server.max_model_len,
+                                                            cfg.client.max_new_tokens))
                     else:
                         cache["prompts"], _, _ = common.mmlu_prompts(cfg.benchmark.n_samples,
                                                                      cfg.experiment.seed)

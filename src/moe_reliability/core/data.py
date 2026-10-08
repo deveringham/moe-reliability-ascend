@@ -95,17 +95,32 @@ _SYSTEM = {"role": "system", "content": "You are a helpful assistant."}
 
 # A prompt the server rejects for exceeding max_model_len fails its request, and
 # the families here are not all short: Dolly carries a context passage and
-# UltraChat an arbitrary user turn, where MMLU is a few hundred characters. The
-# budget is in characters because the loaders have no tokenizer; 2.5 characters
-# per token is conservative for English prose and for code, which is denser.
-CHARS_PER_TOKEN = 2.5
+# UltraChat an arbitrary user turn, where MMLU is a few hundred characters.
+#
+# Characters are a poor proxy for tokens across scripts, and assuming one ratio
+# for all of them is what let a Hindi sweep through: at ~2.5 characters per token
+# its prompts looked short, where Devanagari tokenises closer to one token per
+# character and some reached 1900 tokens. So the estimate is per character -
+# non-ASCII characters count as a whole token, ASCII at 2.5 to the token - which
+# is conservative for dense scripts and roughly right for English.
+ASCII_CHARS_PER_TOKEN = 2.5
 # Rows are fetched with this much slack so filtering still leaves n prompts.
 OVERSAMPLE = 3
 
 
-def prompt_char_budget(max_model_len, reserve_tokens=128):
-    """Characters a prompt may hold to fit, leaving room for the chat template."""
-    return int(max(1, max_model_len - reserve_tokens) * CHARS_PER_TOKEN)
+def estimate_tokens(text):
+    """A deliberately pessimistic token count, good across scripts."""
+    ascii_chars = sum(1 for c in text if c.isascii())
+    return (len(text) - ascii_chars) + ascii_chars / ASCII_CHARS_PER_TOKEN
+
+
+def prompt_token_budget(max_model_len, max_new_tokens=0, template_tokens=64):
+    """Tokens a prompt may hold and still leave room to answer.
+
+    The generation length belongs in the reserve: a prompt that fits a capture
+    with max_new_tokens = 1 can still overflow a benchmark that generates 100.
+    """
+    return max(1, max_model_len - max_new_tokens - template_tokens)
 
 
 def _stream(dataset_id, config, split, n, seed):
@@ -119,20 +134,20 @@ def _mmlu_style(question, choices):
             + "\nThink step-by-step, explaining your reasoning before giving the final answer.")
 
 
-def _family_prompts(family, arg, n, seed, max_chars=None):
-    """[(messages, category)] for one family, dropping prompts over ``max_chars``.
+def _family_prompts(family, arg, n, seed, max_tokens=None):
+    """[(messages, category)] for one family, dropping prompts over ``max_tokens``.
 
     Over-fetches so the filter still leaves n, and raises rather than quietly
     returning a short, length-biased sample.
     """
-    if max_chars is None:
+    if max_tokens is None:
         return _family_rows(family, arg, n, seed)
     rows = _family_rows(family, arg, n * OVERSAMPLE, seed)
-    kept = [(m, c) for m, c in rows if len(m[-1]["content"]) <= max_chars]
+    kept = [(m, c) for m, c in rows if estimate_tokens(m[-1]["content"]) <= max_tokens]
     if len(kept) < n:
         raise ValueError(f"workload family {family!r}: only {len(kept)} of {len(rows)} prompts fit in "
-                         f"{max_chars} characters, needed {n}. Raise server.max_model_len or ask for "
-                         f"fewer prompts.")
+                         f"{max_tokens} tokens, needed {n}. Raise server.max_model_len, lower "
+                         f"client.max_new_tokens, or ask for fewer prompts.")
     return kept[:n]
 
 
@@ -185,19 +200,19 @@ def parse_workload(spec):
     return out
 
 
-def workload_prompts(spec, n, seed, max_chars=None):
+def workload_prompts(spec, n, seed, max_tokens=None):
     """Prompts and their "<family>/<category>" labels for a workload spec.
 
     A mixed spec splits n as evenly as possible between its families and
     interleaves them, so a window of consecutive prompts holds every family.
-    ``max_chars`` drops prompts too long for the server's context.
+    ``max_tokens`` drops prompts too long for the server's context.
     """
     families = parse_workload(spec)
     per = [n // len(families) + (i < n % len(families)) for i in range(len(families))]
     blocks = []
     for (family, arg), k in zip(families, per):
         name = family if arg is None else f"{family}:{arg}"
-        blocks.append([(m, f"{name}/{c}") for m, c in _family_prompts(family, arg, k, seed, max_chars)])
+        blocks.append([(m, f"{name}/{c}") for m, c in _family_prompts(family, arg, k, seed, max_tokens)])
     mixed = [item for group in zip(*blocks) for item in group]
     longest = max(len(b) for b in blocks)
     mixed += [b[i] for i in range(min(len(b) for b in blocks), longest) for b in blocks if i < len(b)]
