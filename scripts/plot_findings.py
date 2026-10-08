@@ -737,9 +737,23 @@ def fig_regimes(out, store):
                          "balanced_ms": round(result[3], 1), "skewed_ms": round(result[4], 1),
                          "note": note})
 
-    # Natural traffic is the null: the same measurement with nothing injected.
-    add("Natural traffic", "English, 4 ranks", "mixtral", (1.15, 0.0, 0.6, 165.5, 165.5),
-        "the 2026-10-02 null")
+    # Natural traffic is the null, and the content of the row is its error bar:
+    # the balanced arm of each sweep, repeated three times, is the noise floor
+    # that any claimed cost has to clear. The two models differ threefold here,
+    # so one shared bar would misreport both.
+    for pattern, model in ((EAGER[0], "deepseek-v2"), (EAGER[1], "mixtral")):
+        runs = list(manifests(pattern))
+        if not runs:
+            continue
+        _, by = sweep(pattern)
+        arm = by.get(0.0)
+        if not arm or len(arm) < 2:
+            continue
+        mean = float(np.mean(arm))
+        add("Natural traffic (the noise floor)",
+            f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}, English, 4 ranks", model,
+            (1.15, 0.0, 100 * float(np.std(arm, ddof=1)) / mean, mean, mean),
+            "balanced arm, 3 repeats")
     for pattern, model in (("*language-latency-007", "mixtral"),):
         r = top_level_cost(pattern, loads={0.0: 1.47})  # unbiased; load is the corpus's own
         add("Natural traffic", "Yoruba, 4 ranks", model, r)
@@ -789,6 +803,8 @@ def fig_regimes(out, store):
         detail = f"  at {r['load']:.2f}x" if r["load"] > 1.2 else ""
         if r["balanced_ms"] != r["skewed_ms"]:
             detail += f"   {r['balanced_ms']:.0f}\u2192{r['skewed_ms']:.0f} ms"
+        elif r["sd"]:
+            detail = f"  \u00b1{r['sd']:.1f}% over repeats"
         ax.annotate(f"{r['pct']:+.1f}%" + detail,
                     xy=(r["pct"] + (r["sd"] if r["pct"] >= 0 else -r["sd"]), y),
                     xytext=(8 if r["pct"] >= 0 else -8, 0), textcoords="offset points",

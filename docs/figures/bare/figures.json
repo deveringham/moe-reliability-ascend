@@ -799,15 +799,26 @@
  ],
  "regimes": [
   {
-   "group": "Natural traffic",
-   "label": "English, 4 ranks",
+   "group": "Natural traffic (the noise floor)",
+   "label": "DeepSeek, English, 4 ranks",
+   "model": "deepseek-v2",
+   "load": 1.15,
+   "pct": 0.0,
+   "sd": 2.4,
+   "balanced_ms": 174.0,
+   "skewed_ms": 174.0,
+   "note": "balanced arm, 3 repeats"
+  },
+  {
+   "group": "Natural traffic (the noise floor)",
+   "label": "Mixtral, English, 4 ranks",
    "model": "mixtral",
    "load": 1.15,
    "pct": 0.0,
-   "sd": 0.6,
+   "sd": 0.8,
    "balanced_ms": 165.5,
    "skewed_ms": 165.5,
-   "note": "the 2026-10-02 null"
+   "note": "balanced arm, 3 repeats"
   },
   {
    "group": "Injected skew, eager",

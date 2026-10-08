@@ -377,6 +377,13 @@ jump at the first non-zero level. The affected runs had to be repeated.
 looked like thresholds and turned out to be the machine. Repeating each
 measurement is the only noise floor available.
 
+**And that floor is not the same for both models.** The balanced arm of the same
+sweep, repeated three times, spreads ±2.4% on DeepSeek and ±0.8% on Mixtral. The
+±2.2% drift band used as the threshold throughout is therefore about right for
+Mixtral and slightly optimistic for DeepSeek - which is consistent with DeepSeek
+being the model whose curve shape we could not resolve. A single shared noise
+floor quoted for both models would misreport one of them.
+
 **Statistical significance from the wrong unit.** Comparing thousands of
 individual requests gave p-values below 1e-90 for differences that repetition
 showed to be noise. All requests in one measurement share a server, a warm-up and
