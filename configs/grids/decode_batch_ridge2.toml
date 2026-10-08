@@ -1,0 +1,56 @@
+# Does the cost of skew track tokens per expert in a decode step?
+#
+#   Mixtral, achieved decode batch 256 / 512 / ~1000, levels 0 and 2,
+#   3 repeats = 18 points
+#
+# Supersedes decode_batch_ridge.toml, which did not answer the question for two
+# reasons the run itself exposed:
+#
+#   - Its 2048 setting never reached 2048. The engine logs "Running: N reqs", and
+#     both the 1024 and the 2048 configuration equilibrated at ~1000: sequences
+#     enter only as fast as prefill admits them and leave after 100 decode steps,
+#     so the batch settles well below max_num_seqs whatever it is set to. The two
+#     highest points were therefore the same operating point.
+#   - At one repeat the two of them read +19.1% and +10.6% - an 8.5-point spread
+#     at identical settings, larger than any difference being looked for.
+#
+# So this sweeps *downward* instead, where the setting is actually reached, and
+# with three repeats. Achieved batch and tokens per expert per decode call:
+#
+#   max_num_seqs  256 ->  256 achieved ->   64 tokens/expert
+#                 512 ->  512           ->  128
+#                1024 -> ~1000          -> ~250   (the ridge is ~200)
+#
+# max_num_batched_tokens stays at 4096 throughout, deliberately. Raising it would
+# admit sequences faster and reach a larger decode batch, but it would also
+# change the size of a prefill-carrying step - and that is exactly where
+# Mixtral's skew cost was measured to live, so it would move two things at once.
+# Holding it fixed makes the decode batch the only thing that varies.
+#
+# Unprofiled: the readout is TPOT at three operating points, and the profiler
+# costs 2-19% while it runs.
+#
+# **Verify the achieved batch before reading any point**:
+#   grep -o "Running: [0-9]* reqs" <run>/logs/run.log | sort -n -k2 | tail -1
+#
+#   ./nrun -t ridge2 'uv run moe-reliability grid configs/grids/decode_batch_ridge2.toml'
+
+[grid]
+name = "decode-ridge2"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"model.probe" = "mistral"
+"client.max_new_tokens" = 100
+"client.concurrency_limit" = 1400
+"server.gpu_memory_utilization" = 0.85
+"server.max_num_batched_tokens" = 4096
+"benchmark.n_samples" = 3000
+"benchmark.repeats" = 3
+"imbalance.imbalance_levels" = [0, 2]
+"imbalance.bias_plugin_at_zero" = true
+
+[matrix]
+"server.batch_size" = [256, 512, 1024]
