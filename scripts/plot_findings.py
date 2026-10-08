@@ -37,6 +37,36 @@ COND = ("#2a78d6", "#eb6834", "#1baf7a")
 OFFSET_RAMP = ("#86b6ef", "#2a78d6", "#104281")  # ordinal, light -> dark
 RESULTS = "results"
 
+#: Bare mode draws the data and the axes and nothing that argues: no titles, no
+#: captions, no callouts. Series identity (legends, direct labels where a legend
+#: was dropped) and numeric value labels stay, because without them a reader
+#: cannot tell what a mark is or read it. Set by main(); figures/bare/ holds the
+#: result, for slides where the speaker does the explaining.
+BARE = False
+
+
+def explain(target, *args, **kwargs):
+    """An annotation that argues rather than labels: suppressed in bare mode."""
+    if not BARE:
+        target.annotate(*args, **kwargs)
+
+
+def caption(fig, *args, **kwargs):
+    """A figure-level note: suppressed in bare mode."""
+    if not BARE:
+        fig.text(*args, **kwargs)
+
+
+def frame(rect):
+    """Layout margins, reclaimed in bare mode where the title and caption are gone."""
+    return (0.0, 0.0, 1.0, 1.0) if BARE else rect
+
+
+def heading(fig, *args, **kwargs):
+    """A figure title: suppressed in bare mode."""
+    if not BARE:
+        fig.suptitle(*args, **kwargs)
+
 
 def manifests(pattern):
     for d in sorted(glob.glob(os.path.join(RESULTS, pattern))):
@@ -149,9 +179,9 @@ def style(ax, xlabel, ylabel, title=None, subtitle=None):
     ax.tick_params(colors=INK2, labelsize=9, length=0)
     ax.set_xlabel(xlabel, color=INK2, fontsize=9.5)
     ax.set_ylabel(ylabel, color=INK2, fontsize=9.5)
-    if title:
+    if title and not BARE:
         ax.set_title(title, color=INK, fontsize=12, fontweight="bold", loc="left", pad=30 if subtitle else 8)
-    if subtitle:
+    if subtitle and not BARE:
         ax.annotate(subtitle, xy=(0, 1.0), xytext=(0, 7), xycoords="axes fraction",
                     textcoords="offset points", color=INK2, fontsize=9.5, va="bottom")
 
@@ -166,7 +196,7 @@ def fig_dose_response(out, store):
           "4 NPUs, 100-token requests, 3 repeats per point. Error bars are the spread over repeats.")
     lo, hi = store["natural_band"]
     ax.axvspan(lo, hi, color="#f0efec", zorder=0)
-    ax.annotate("where natural\ntraffic sits", xy=((lo + hi) / 2, 0.995), xycoords=("data", "axes fraction"),
+    explain(ax, "where natural\ntraffic sits", xy=((lo + hi) / 2, 0.995), xycoords=("data", "axes fraction"),
                 ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
     rows = []
     for pattern, mode, ls, marker in ((EAGER[0], "eager", "-", "o"), (EAGER[1], "eager", "-", "o"),
@@ -185,12 +215,12 @@ def fig_dose_response(out, store):
     ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.14, 1.0))
     ax.set_xlim(1.0, 3.7)
     ax.set_ylim(132, 232)
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Every point carries the measurement plugin, the balanced one included. Levels that collapse "
              "routing onto fewer live experts are excluded.\nGraph mode's repeat spread is widest at its "
              "lowest levels, where a fast engine outruns the client: read its slope, not its per-level values.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.075, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.075, 1, 1)))
     fig.savefig(os.path.join(out, "dose_response.png"), dpi=200, facecolor=SURFACE)
     store["dose_response"] = rows
 
@@ -247,14 +277,14 @@ def fig_instrument(out, store):
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, ncol=2, loc="lower center",
               bbox_to_anchor=(0.5, -0.36), columnspacing=2.2)
     d = {(r["model"], r["method"]): r["delta_ms"] for r in rows}
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Installing the plugin at the balanced point too cuts DeepSeek's measured cost from "
              f"{d[('deepseek-v2', 'as first measured')]:+.1f} to {d[('deepseek-v2', 'with the control')]:+.1f} ms; "
              f"Mixtral moves from {d[('mixtral', 'as first measured')]:+.1f} to "
              f"{d[('mixtral', 'with the control')]:+.1f},\nwhich is within the 1.5-2.2% drift between runs "
              "that the repeated identical points measure. So the plugin costs DeepSeek time and Mixtral none.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.1, 1, 1)))
     fig.savefig(os.path.join(out, "instrument_cost.png"), dpi=200, facecolor=SURFACE)
     store["instrument"] = rows
 
@@ -308,23 +338,23 @@ def fig_steps(out, store):
                       [b[2] for b in BINS] + ["2500+\nprefill"], fontsize=8.5)
         ax.tick_params(axis="x", labelcolor=INK2)
         ax.axvline(3.6, color=GRID, lw=1)
-        ax.annotate("decode-only steps, by batch size", xy=(1.5, 0.96), xycoords=("data", "axes fraction"),
+        explain(ax, "decode-only steps, by batch size", xy=(1.5, 0.96), xycoords=("data", "axes fraction"),
                     ha="center", color=INK3, fontsize=8.5)
-        ax.annotate("steps carrying\nprefill", xy=(4.22, 0.99), xycoords=("data", "axes fraction"),
+        explain(ax, "steps carrying\nprefill", xy=(4.22, 0.99), xycoords=("data", "axes fraction"),
                     ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
     axes[0].legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
-    fig.suptitle("A saturated decode step does not lengthen under imbalance",
+    heading(fig, "A saturated decode step does not lengthen under imbalance",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.915,
+    caption(fig, 0.008, 0.915,
              "Eager mode, 100-token requests. Small numbers above each bar are the steps it averages; "
              "cells with fewer than 8 steps are omitted.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "At full batch (480-512) the step is the same length at every offset on both models - so the "
              "hot rank's extra work is absorbed, not passed on.\nThe cost appears elsewhere: in "
              "below-full-batch decode steps on DeepSeek, and in prefill-carrying steps on Mixtral.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.07, 1, 0.9))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.9)))
     fig.savefig(os.path.join(out, "step_level.png"), dpi=200, facecolor=SURFACE)
     store["steps"] = rows
 
@@ -356,15 +386,15 @@ def fig_calibration(out, store):
             rows.append({"model": model, "offset": x, "load": round(load, 3), "live_experts": live})
     lo, hi = store["natural_band"]
     ax.axhspan(lo, hi, color="#f0efec", zorder=0)
-    ax.annotate("natural traffic sits here", xy=(4.05, (lo + hi) / 2), ha="right", va="center",
+    explain(ax, "natural traffic sits here", xy=(4.05, (lo + hi) / 2), ha="right", va="center",
                 color=INK3, fontsize=8.5)
     ax.set_ylim(0.85, 4.45)
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.03, 0.99))
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Hollow points also collapse routing onto fewer live experts, so they vary the expert\n"
              "count as well as the skew: " + "; ".join(collapsed) + ".",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.1, 1, 1)))
     fig.savefig(os.path.join(out, "calibration.png"), dpi=200, facecolor=SURFACE)
     store["calibration"] = rows
 
@@ -407,9 +437,9 @@ def fig_impact_map(out, store):
         ax.axvspan(lo, hi, color="#f0efec", zorder=0)
     top.axhspan(-DRIFT_PCT, DRIFT_PCT, color="#f0efec", zorder=0)
     top.axhline(0, color=GRID, lw=1, zorder=1)
-    top.annotate(f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(3.68, DRIFT_PCT), xytext=(0, 4),
+    explain(top, f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(3.68, DRIFT_PCT), xytext=(0, 4),
                  textcoords="offset points", ha="right", va="bottom", color=INK3, fontsize=8.5)
-    top.annotate("natural\ntraffic", xy=((lo + hi) / 2, 0.98), xycoords=("data", "axes fraction"),
+    explain(top, "natural\ntraffic", xy=((lo + hi) / 2, 0.98), xycoords=("data", "axes fraction"),
                  ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
 
     rows = []
@@ -427,7 +457,7 @@ def fig_impact_map(out, store):
         if first is not None and model not in EAGER_SECOND:
             # Placed in the clear space beside each curve, with a leader to the point.
             spot = {"mixtral": (1.42, 12.5, "bottom"), "deepseek-v2": (2.9, 9.5, "top")}[model]
-            top.annotate(f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
+            explain(top, f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
                          f"{y[first]:+.1f}% at {x[first]:.2f}x",
                          xy=(x[first], y[first]), xytext=spot[:2], ha="left", va=spot[2],
                          color=INK2, fontsize=8.5, linespacing=1.3,
@@ -461,11 +491,11 @@ def fig_impact_map(out, store):
         if len(crossings) < 2:
             continue
         lo_x, hi_x = min(crossings), max(crossings)
-        top.annotate(f"{MODEL_LABEL[model].split('-')[0]}: cost begins somewhere in\n"
+        explain(top, f"{MODEL_LABEL[model].split('-')[0]}: cost begins somewhere in\n"
                      f"{lo_x:.1f}x-{hi_x:.1f}x; the two sweeps disagree",
                      xy=(lo_x - 0.05, 27.2), ha="left", va="bottom",
                      color=INK2, fontsize=8.5, linespacing=1.3)
-        top.annotate("", xy=(lo_x, 26.4), xytext=(hi_x, 26.4),
+        explain(top, "", xy=(lo_x, 26.4), xytext=(hi_x, 26.4),
                      arrowprops={"arrowstyle": "|-|,widthA=0.4,widthB=0.4", "color": INK3, "lw": 0.9})
 
     top.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.12, 0.98))
@@ -484,10 +514,10 @@ def fig_impact_map(out, store):
     bot.tick_params(axis="y", labelcolor=INK2)
     bot.grid(False)
     bot.set_ylim(-0.7, len(nat) + 0.2)
-    bot.annotate(f"natural traffic peaks at {hi:.2f}x", xy=(hi, len(nat) - 0.4),
+    explain(bot, f"natural traffic peaks at {hi:.2f}x", xy=(hi, len(nat) - 0.4),
                  xytext=(10, 0), textcoords="offset points", ha="left", va="center", color=INK2, fontsize=8.5)
     bot.set_xlim(1.0, 3.7)
-    fig.text(0.012, 0.012,
+    caption(fig, 0.012, 0.012,
              "Load: the busiest rank's share of token-expert assignments in each MoE layer, averaged over layers; "
              "4-way contiguous placement.\nNatural ranges: single prompts and random 200-prompt mixes p1-p99, "
              "one-subject windows min-max; dot = median. Levels that collapse routing are excluded.\n"
@@ -495,7 +525,8 @@ def fig_impact_map(out, store):
              "the hollow one +7%.\nWhere its cost begins is unresolved; Mixtral's rise from 1.3x reproduces.",
              color=INK3, fontsize=7.5, va="bottom", linespacing=1.4)
     # Explicit margins: tight_layout cannot place shared axes with long tick labels.
-    fig.subplots_adjust(left=0.215, right=0.975, top=0.875, bottom=0.165)
+    fig.subplots_adjust(left=0.215, right=0.975, top=0.995 if BARE else 0.875,
+                        bottom=0.075 if BARE else 0.165)
     fig.savefig(os.path.join(out, "impact_map.png"), dpi=200, facecolor=SURFACE)
     store["impact_map"] = rows
 
@@ -549,18 +580,18 @@ def fig_rotating(out, store):
                          "tpot_ms": [round(v, 1) for v in y], "sd": [round(v, 1) for v in e]})
         ax.set_xlim(1.0, 3.9)
     axes[0].set_ylim(150, 220)
-    fig.suptitle("Mixtral does not care which rank is hot; DeepSeek only pays when one always is",
+    heading(fig, "Mixtral does not care which rank is hot; DeepSeek only pays when one always is",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Rotating biases rank (layer mod 4), so each layer is skewed as hard as a fixed target makes it "
              "but no rank is hot throughout.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "At matched per-layer load Mixtral lands on the same millisecond either way (176.4 against 176.6; "
              "193.2 against 193.9), while DeepSeek\nstays flat when the skew rotates and rises 22% when it does "
              "not. Natural traffic rotates, so this is a second reason DeepSeek's null holds.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "rotating_skew.png"), dpi=200, facecolor=SURFACE)
     store["rotating"] = rows
 
@@ -644,19 +675,19 @@ def fig_statistic(out, store):
     rows["routing"] = [{"condition": c[0].replace("\n", " "), "per_layer": round(c[1], 3),
                         "pooled": round(c[2], 3)} for c in conditions]
 
-    fig.suptitle("Summing before you take the maximum hides imbalance",
+    heading(fig, "Summing before you take the maximum hides imbalance",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Both panels measure the same routing two ways. Mixtral 8x7B; the right-hand panel is the "
              "strongest injected skew that keeps every expert live.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "Left: a step runs its layers in sequence, so what it waits for is the sum over calls of the "
              "maximum over ranks. Summing each rank first lets a\nbusiest rank that changes between layers "
              "cancel. Right: the same cancellation in the router's counters - and for a skew that rotates "
              "between layers,\nthe pooled form reads 1.03x, which is what benign traffic reads.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.08, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.08, 1, 0.89)))
     fig.savefig(os.path.join(out, "statistic.png"), dpi=200, facecolor=SURFACE)
     store["statistic"] = rows
 
@@ -772,15 +803,15 @@ def fig_regimes(out, store):
     ax.grid(axis="x", color=GRID, lw=0.8)
     ax.axvline(0, color=GRID, lw=1)
     ax.set_xlim(min(-6, min(r["pct"] for r in rows) - 8), max(r["pct"] for r in rows) + 34)
-    ax.annotate(f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(DRIFT_PCT, 0.0),
+    explain(ax, f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(DRIFT_PCT, 0.0),
                 xycoords=("data", "axes fraction"), xytext=(5, 6), textcoords="offset points",
                 ha="left", va="bottom", color=INK3, fontsize=8.5)
-    fig.text(0.012, 0.012,
+    caption(fig, 0.012, 0.012,
              "Blue is DeepSeek-V2-Lite, orange Mixtral 8x7B. 4 ranks and eager mode unless the row says "
              "otherwise. Error bars carry the spread of both\narms, which is why graph mode - fast at rest, "
              "and noisiest there - is the least precise row despite the largest percentage.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.05, 1, 1)))
     fig.savefig(os.path.join(out, "regimes.png"), dpi=200, facecolor=SURFACE)
     store["regimes"] = rows
 
@@ -816,7 +847,7 @@ def fig_detection(out, store):
         threshold = impact.get(model)
         if threshold:
             ax.axvspan(threshold, 4.0, color="#f0efec", zorder=0)
-            ax.annotate("costs latency", xy=(threshold + 0.06, 0.985), xycoords=("data", "axes fraction"),
+            explain(ax, "costs latency", xy=(threshold + 0.06, 0.985), xycoords=("data", "axes fraction"),
                         ha="left", va="top", color=INK3, fontsize=8.5)
         for window, layers, token_fraction, ls in shown:
             match = [t for t in row["settings"] if (t["window"], t["layers"], t["token_fraction"])
@@ -836,18 +867,18 @@ def fig_detection(out, store):
         ax.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="lower right",
                   borderpad=0.2, labelspacing=0.35)
     axes[0].set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
-    fig.suptitle("A window of 8 requests catches every costly skew, counting ~1% of routing",
+    heading(fig, "A window of 8 requests catches every costly skew, counting ~1% of routing",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Alarm set at a 1% false-alarm rate on each capture's own balanced arm. 1200 prompts per "
              "level over six workload families.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "Counting a tenth of the tokens in a single request is the one setting that fails: one prompt "
              "is itself skewed, so the alarm has to sit high.\nWindow length buys more than counting more - "
              "8 requests at 1.3% beats 1 request at 100%.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "detection.png"), dpi=200, facecolor=SURFACE)
     store["detection"] = rows
 
@@ -900,7 +931,7 @@ def fig_detection_cost(out, store):
     left.set_ylim(0.15, 1.12)
     left.set_yticks([0.25, 0.5, 0.75, 1.0], ["25%", "50%", "75%", "100%"])
     left.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="lower left")
-    left.annotate("the solid line is an 8-request window;\nfainter lines are 32 and 128",
+    explain(left, "the solid line is an 8-request window;\nfainter lines are 32 and 128",
                   xy=(0.97, 0.10), xycoords="axes fraction", ha="right", va="bottom",
                   color=INK3, fontsize=8.5, linespacing=1.3)
 
@@ -923,12 +954,12 @@ def fig_detection_cost(out, store):
                            for i in range(len(per_layer))]
                 right.bar(range(len(per_layer)), per_layer, 0.8, color=colours, zorder=3)
                 right.axhline(hit["mean_load"], color=INK3, ls="--", lw=1.4, zorder=4)
-                right.annotate(f"model-wide average {hit['mean_load']:.2f}x\n"
+                explain(right, f"model-wide average {hit['mean_load']:.2f}x\n"
                                f"- near the benign floor",
                                xy=(len(per_layer) - 0.5, hit["mean_load"]), xytext=(-4, 8),
                                textcoords="offset points", ha="right", va="bottom", color=INK2,
                                fontsize=8.5, linespacing=1.3)
-                right.annotate(f"the {len(flagged)} biased layers, all found\n"
+                explain(right, f"the {len(flagged)} biased layers, all found\n"
                                f"(precision and recall 1.0, rank named)",
                                xy=(np.mean(sorted(flagged)), per_layer[sorted(flagged)].max()),
                                xytext=(0, 12), textcoords="offset points", ha="center", va="bottom",
@@ -938,23 +969,24 @@ def fig_detection_cost(out, store):
                              "mean_load": hit["mean_load"], "max_layer": hit["max_layer_load"]})
                 break
         right.set_ylim(0, 4.4)
-    fig.suptitle("The detector: what it catches, what it costs, and what it can point at",
+    heading(fig, "The detector: what it catches, what it costs, and what it can point at",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Left: each point is one sampling setting; k is how many consecutive alarming windows are "
              "required before raising one.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "Requiring three consecutive windows improves detection and cost at once, because a screen "
              "that cries wolf keeps paying for confirmation.\nThe screen's own cost on the device is not "
              "yet measured and is carried here as 0.2%; confirmation is priced at +12% while it runs.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "detection_cost.png"), dpi=200, facecolor=SURFACE)
     store["detection_cost"] = rows
 
 
-def main(out="docs/figures"):
+def main(out="docs/figures", also_bare=True):
+    global BARE
     os.makedirs(out, exist_ok=True)
     store: dict = {}
     natural(store)
@@ -971,6 +1003,13 @@ def main(out="docs/figures"):
         fig_detection(out, store)
         fig_detection_cost(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
+    if also_bare:
+        # The same figures with nothing that argues, for slides that are narrated.
+        BARE = True
+        try:
+            main(os.path.join(out, "bare"), also_bare=False)
+        finally:
+            BARE = False
     print(f"wrote {out}/regimes.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 

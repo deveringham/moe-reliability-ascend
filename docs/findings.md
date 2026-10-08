@@ -450,7 +450,10 @@ the other nothing — and the measurement is running now.
 
 `scripts/plot_findings.py` regenerates every figure in this document from the run
 records under `results/`, and writes `figures/figures.json` with every plotted
-number. `scripts/detection_eval.py` regenerates the detection analysis into
+number. It also writes `figures/bare/` - the same figures with the titles,
+captions and callouts removed, for slides where the speaker does the explaining.
+Series identity and numeric value labels stay, since without them a mark cannot
+be read. `scripts/detection_eval.py` regenerates the detection analysis into
 `detection.json`. Neither hard-codes a result; both name the runs they read.
 
 Two routed-expert captures are needed for the traffic figures and are excluded
