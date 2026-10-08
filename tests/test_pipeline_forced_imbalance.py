@@ -105,6 +105,28 @@ def test_separate_profiling_run_serves_each_point_twice(deployment, forced_confi
     assert [c["trace_dir"] is None for c in calls] == [True, False, True, False]
 
 
+def test_profiling_pass_timings_are_kept_so_its_overhead_is_measurable(deployment, forced_config_data):
+    """The two passes are one configuration with and without the profiler."""
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    for point in ctx.points:
+        assert point["profiled_request_summary"]["tpot_ms_mean"] > 0
+        # The recorded timings stay the unprofiled ones.
+        assert point["request_summary"]["tpot_ms_mean"] != point["profiled_request_summary"]["tpot_ms_mean"]
+
+
+def test_single_pass_leaves_no_profiled_twin(deployment, forced_config_data):
+    forced_config_data["benchmark"]["enable_profiling"] = True
+    forced_config_data["benchmark"]["separate_profiling_run"] = False
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert all(p.get("profiled_request_summary") is None for p in ctx.points)
+
+
 def test_single_pass_when_separate_profiling_run_disabled(deployment, forced_config_data):
     forced_config_data["benchmark"]["enable_profiling"] = True
     forced_config_data["benchmark"]["separate_profiling_run"] = False
@@ -296,3 +318,31 @@ def test_shuffle_can_be_turned_off(deployment, forced_config_data):
     ctx = RunContext.create(cfg)
     assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
     assert [p["value"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])] == [0, 25, 50, 100]
+
+
+def test_repeats_are_served_in_rounds_so_values_interleave(deployment, forced_config_data):
+    """A plain shuffle can serve every repeat of one value first; rounds cannot."""
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 100]
+    forced_config_data["benchmark"]["repeats"] = 5
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    served = sorted(ctx.points, key=lambda p: p["exec_order"])
+    for r in range(5):
+        # each consecutive pair is one round holding both values once
+        assert sorted(p["value"] for p in served[2 * r:2 * r + 2]) == [0, 100]
+        assert {p["repeat"] for p in served[2 * r:2 * r + 2]} == {r + 1}
+
+
+def test_runs_differing_only_in_name_are_ordered_independently(deployment, forced_config_data):
+    """Grid runs share a seed; folding in the name keeps them from sharing an order."""
+    forced_config_data["imbalance"]["imbalance_levels"] = [0, 25, 50, 100]
+    forced_config_data["benchmark"]["repeats"] = 3
+    orders = set()
+    for name in ("grid-000", "grid-001", "grid-002", "grid-003"):
+        forced_config_data["experiment"]["name"] = name
+        cfg = ExperimentConfig.from_dict(forced_config_data)
+        ctx = RunContext.create(cfg)
+        assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+        orders.add(tuple(p["label"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])))
+    assert len(orders) > 1

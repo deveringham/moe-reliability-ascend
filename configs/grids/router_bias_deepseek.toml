@@ -1,0 +1,8 @@
+# Graded rank skew on DeepSeek-V2-Lite: prefill-only and 100-token regimes.
+#   2 runs x 6 offsets x 3 repeats = 36 points
+[grid]
+name = "rbias-deepseek"
+base = "../examples/router_bias_sweep.toml"
+
+[matrix]
+"client.max_new_tokens" = [1, 100]

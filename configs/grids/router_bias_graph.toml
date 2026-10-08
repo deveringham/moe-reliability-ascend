@@ -1,0 +1,29 @@
+# Does graph mode remove DeepSeek's skew cost but keep Mixtral's?
+#
+#   2 models = 2 runs, each offsets 0 / 0.5 / 1 / 2 x 3 repeats = 12 points
+#
+# In eager mode on 4 NPUs, 100-token TPOT rose ~7% per +1x busiest-rank load on
+# DeepSeek and ~12% on Mixtral (docs/router-bias-findings.md). Mixtral pays
+# through the hot rank's GEMMs; DeepSeek through the hot rank's host, whose
+# device idles between kernel launches. Graph mode replays decode without
+# per-kernel launches, so it should mostly remove DeepSeek's slope and leave
+# Mixtral's. Offset 3 is left out: DeepSeek collapses to 16 live experts there.
+# Everything else matches the eager rbias-deepseek-001 / rbias-mixtral-001 runs.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/router_bias_graph.toml --dry-run'
+#   ./nrun -t rbgraph 'uv run moe-reliability grid configs/grids/router_bias_graph.toml'
+
+[grid]
+name = "rbias-graph"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"server.enforce_eager" = false
+"client.max_new_tokens" = 100
+"imbalance.imbalance_levels" = [0, 0.5, 1, 2]
+
+[matrix]
+"model.model_id,model.model_name,benchmark.n_samples" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", 3000],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", 2000],
+]

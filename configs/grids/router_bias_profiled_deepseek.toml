@@ -1,0 +1,19 @@
+# Traces at offsets 0 / 1 / 2 on deepseek: GEMM straggler, its share of the step,
+# and how much of it reaches wall time as rank skew rises with every expert
+# live. Prefill-only and 100-token; each point served twice (unprofiled
+# timings, profiled traces). 2000 prompts, profiler window from iteration 30.
+[grid]
+name = "rbias-profiled-deepseek"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+
+"imbalance.imbalance_levels" = [0, 1, 2]
+"benchmark.repeats" = 1
+"benchmark.enable_profiling" = true
+"benchmark.separate_profiling_run" = true
+"benchmark.trace_start_iteration" = 30
+"benchmark.n_samples" = 2000
+
+[matrix]
+"client.max_new_tokens" = [1, 100]

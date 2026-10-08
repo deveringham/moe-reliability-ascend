@@ -118,3 +118,7 @@ def trace_dir(label: str) -> str:
 
 def validation_file(label: str) -> str:
     return f"{VALIDATION_DIR}/{label}.json"
+
+
+def validation_records_file(label: str) -> str:
+    return f"{VALIDATION_DIR}/{label}.records.jsonl"

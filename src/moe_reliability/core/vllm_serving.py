@@ -8,14 +8,21 @@
 ###
 
 import time, subprocess, os, signal, asyncio
-import io, base64
+import io, base64, json
+from collections import Counter
 import urllib.request
 import urllib.error
 import numpy as np
 from openai import AsyncOpenAI
 
+# A capture of a few hundred prompts can lose a few to a rejected request - a
+# prompt longer than max_model_len, say - without losing its meaning. Beyond
+# this it is a different workload from the one asked for, so it fails loudly.
+MAX_FAILED_REQUESTS = 5
+FAILED_REQUEST_FRACTION = 0.01
+
 # Spins up the vLLM server as a subprocess and blocks until ready.
-def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800):
+def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_size=16, max_num_batched_tokens=4096, enforce_eager=True, gpu_memory_utilization=0.85, n_gpus=1, enable_bnb=False, enable_expert_parallel=False, enable_prefix_caching=False, eplb=None, enable_expert_capture=False, trace_dir=None, trace_start_iteration=50, trace_active_iterations=10, startup_timeout=1800, extra_env=None):
     print(f"Starting vLLM server for {model_name}...")
     
     cmd = [
@@ -25,12 +32,11 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         "--max-model-len", str(max_model_len),
         "--gpu-memory-utilization", str(gpu_memory_utilization),
         "--max-num-seqs", str(batch_size), # Batch size is used to set max number of batched requests
-        "--max-num-batched-tokens", "4096", # Max number of tokens per forward pass is fixed based on hardware
+        "--max-num-batched-tokens", str(max_num_batched_tokens), # Token budget of one forward pass
         "--tensor-parallel-size", str(n_gpus),
         "--data-parallel-size", "1",
         "--seed", str(seed),
         "--override-generation-config", '{"temperature": 0.0}',
-        "--enforce-eager",
         "--no-async-scheduling",
     ]
     
@@ -38,6 +44,9 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
         cmd.append("--profiler-config")
         cmd.append(f'{{"profiler": "torch", "torch_profiler_dir": "{trace_dir}", "active_iterations": {trace_active_iterations}, "delay_iterations": {trace_start_iteration}, "torch_profiler_with_stack": false}}')
     
+    if enforce_eager:
+        cmd.append("--enforce-eager")
+
     if enable_expert_parallel:
         cmd.append("--enable-expert-parallel")
 
@@ -49,16 +58,26 @@ def start_vllm_server(model_name, port=8000, seed=0, max_model_len=1024, batch_s
     if enable_bnb:
          cmd.extend(["--quantization", "bitsandbytes"])
 
-    if enable_eplb:
-        cmd.append("--enable-eplb")
+    # vLLM's own --enable-eplb does not reach the vllm-ascend implementation:
+    # the Ascend subsystem (heat collection, policy, D2D weight transfer) is
+    # gated on additional_config.eplb_config.dynamic_eplb, and refuses to start
+    # unless DYNAMIC_EPLB is also set in the environment.
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    if eplb:
+        cmd.extend(["--additional-config", json.dumps({"eplb_config": dict(eplb)})])
+        env["DYNAMIC_EPLB"] = "true"
+        if eplb.get("expert_map_record_path"):
+            env["EXPERT_MAP_RECORD"] = "true"
 
     if enable_expert_capture:
         cmd.append("--enable-return-routed-experts")
 
-        
+
     # Own session, so the whole server tree (API server, engine core, workers)
     # can be signalled as one group on teardown.
-    server_process = subprocess.Popen(cmd, start_new_session=True)
+    server_process = subprocess.Popen(cmd, start_new_session=True, env=env)
     
     # Poll the endpoint for 200 OK. Bounded: a server that comes up but never
     # answers leaves this loop spinning forever while holding every NPU of the
@@ -114,7 +133,14 @@ def stop_vllm_server(server_process, timeout=120.0):
         return not group_alive()
 
     os.killpg(pgid, signal.SIGTERM)
-    server_process.wait()  # reap the parent so it stops counting as a group member
+    try:
+        # Reap the parent so it stops counting as a group member - but on a clock.
+        # An API server with connections still open waits for them before exiting,
+        # so an unbounded wait here would skip the SIGKILL below and hold the NPUs
+        # indefinitely.
+        server_process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Server process still running {timeout:.0f}s after SIGTERM; escalating...")
 
     if not wait_for_group(time.monotonic() + timeout):
         print(f"Server tree still alive after {timeout:.0f}s, sending SIGKILL...")
@@ -157,7 +183,7 @@ def decode_routed_experts(payload):
     return np.asarray(payload, dtype=np.int16)
 
 # Sends a single streaming request and measures TTFT and TPOT
-async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100,
+async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100, collect_itl=False,
                           get_response=False, prompt_formatted=True, capture_experts=False):
     
     start_time = time.perf_counter()
@@ -181,9 +207,14 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
         choice = response.choices[0]
         routed_experts = decode_routed_experts(getattr(choice, "routed_experts", None))
         prompt_routed_experts = decode_routed_experts(getattr(response, "prompt_routed_experts", None))
-        num_input_tokens = response.usage.completion_tokens
-        num_output_tokens = response.usage.prompt_tokens
+        num_input_tokens = response.usage.prompt_tokens
+        num_output_tokens = response.usage.completion_tokens
 
+        # The server returns one array over prompt and generated tokens; split it
+        # at the prompt length. Records captured before 2026-10-05 split at the
+        # completion count instead, so their prompt_routed_experts is always
+        # max_new_tokens long. Their concatenation is still correct: re-split at
+        # num_input_tokens to recover the two parts.
         if prompt_routed_experts is None and routed_experts is not None and routed_experts.shape[0] > num_input_tokens:
             prompt_routed_experts = routed_experts[:num_input_tokens]
             routed_experts = routed_experts[num_input_tokens:]
@@ -193,8 +224,8 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
             "prompt_id": prompt_idx,
             "ttft": None, # Don't report times when recording expert activations, as they are not valid
             "tpot": None,
-            "num_output_tokens": num_input_tokens,
-            "num_input_tokens": num_output_tokens,
+            "num_output_tokens": num_output_tokens,
+            "num_input_tokens": num_input_tokens,
             "total_time": end_time - start_time,
             # [gen_len, n_moe_layers, top_k] and [prompt_len, n_moe_layers, top_k]
             "routed_experts": routed_experts,
@@ -217,16 +248,23 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
 
     response_str = ""
     num_output_tokens = 0
-    
+    # Arrival time of every chunk that carries content. One chunk is normally one
+    # token, but the server is free to coalesce, so n_chunks is recorded too and
+    # the ITL series is only a per-token series where the two agree.
+    chunk_times = []
+
     async for chunk in response:
         # Get output tokens
         if get_response:
             if chunk.choices and chunk.choices[0].delta.content:
                 response_str += chunk.choices[0].delta.content
-        
+
         # Time of first token (in order to deduct decode fromm TPOT)
         if first_token_time is None and chunk.choices:
             first_token_time = time.perf_counter()
+
+        if collect_itl and chunk.choices and chunk.choices[0].delta.content:
+            chunk_times.append(time.perf_counter())
             
         # The last chunk when using include_usage=True contains the token stats
         if chunk.usage is not None:
@@ -257,12 +295,16 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
         "num_input_tokens": num_input_tokens,
         "total_time": end_time - start_time
     }
+    if collect_itl:
+        result["n_chunks"] = len(chunk_times)
+        result["itl_ms"] = [round((b - a) * 1000, 3)
+                            for a, b in zip(chunk_times, chunk_times[1:])]
     if get_response:
         result["response"] = response_str
     return result
     
 # Runs a batch of prompts concurrently and calculates aggregate metrics
-async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False):
+async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False, collect_itl=False):
 
     print(f"Sending batch of {len(prompts)} concurrent requests...")
     
@@ -273,9 +315,13 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
     semaphore = asyncio.Semaphore(concurrency_limit)
 
     # Wrapper function that acquires the semaphore before making the request
+    # Offsets from the batch start, so a point's makespan and throughput can be
+    # recovered: per-request TTFT is mostly queueing when every request is
+    # submitted at once, so the batch wall time is the cleaner prefill measure.
     async def rate_limited_measure_request(i, prompt):
         async with semaphore:
-            return await measure_request(
+            start_s = time.perf_counter() - batch_start_time
+            res = await measure_request(
                 client, 
                 model, 
                 i, 
@@ -284,12 +330,35 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
                 max_new_tokens=max_new_tokens, 
                 get_response=False,
                 prompt_formatted=prompt_formatted,
-                capture_experts=capture_experts
+                capture_experts=capture_experts,
+                collect_itl=collect_itl
             )
+            res["start_s"] = start_s
+            res["end_s"] = time.perf_counter() - batch_start_time
+            return res
     
-    # Fire all requests
+    # Fire all requests.
+    #
+    # return_exceptions keeps one bad request from taking the batch with it. The
+    # default propagates the first exception while the other tasks keep running,
+    # and the caller then tears the server down with requests still in flight -
+    # the API server waits for those connections to close and never exits. One
+    # prompt longer than max_model_len is enough to trigger it.
     tasks = [rate_limited_measure_request(i, prompt) for i, prompt in enumerate(prompts)]
-    results = await asyncio.gather(*tasks)
+    settled = await asyncio.gather(*tasks, return_exceptions=True)
+
+    results = [r for r in settled if not isinstance(r, BaseException)]
+    failures = [r for r in settled if isinstance(r, BaseException)]
+    if failures:
+        kinds = Counter(type(f).__name__ for f in failures)
+        print(f"{len(failures)} of {len(prompts)} requests failed: "
+              + ", ".join(f"{n} x {k}" for k, n in kinds.most_common())
+              + f"; first: {failures[0]}")
+        # A handful of rejected prompts leaves a usable measurement; a batch that
+        # mostly failed does not, and must not be reported as if it had run.
+        if len(failures) > max(MAX_FAILED_REQUESTS, FAILED_REQUEST_FRACTION * len(prompts)):
+            raise RuntimeError(f"{len(failures)} of {len(prompts)} requests failed "
+                               f"(first: {failures[0]!r})")
     
     batch_end_time = time.perf_counter()
     total_batch_time = batch_end_time - batch_start_time
@@ -331,28 +400,35 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
 # - Run inference
 # - Return timing measurements
 async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, concurrency_limit=1024,
-                                  max_model_len=1024, batch_size=256, gpu_memory_utilization=0.85,
+                                  max_model_len=1024, batch_size=256, max_num_batched_tokens=4096, enforce_eager=True,
+                                  gpu_memory_utilization=0.85,
                                   n_gpus=1, n_warmup_samples=5,
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
-                                  enable_prefix_caching=False, enable_eplb=False, enable_expert_capture=False,
-                                  trace_dir=None, trace_active_iterations=2, port=8000):
+                                  enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
+                                  trace_dir=None, trace_active_iterations=2, trace_start_iteration=100,
+                                  port=8000, extra_env=None, collect_itl=False):
     server_process = None
     results = None
+    clients: list = []
     try:
         # Start server
         server_process = start_vllm_server(model, port=port, seed=seed,
                                            max_model_len=max_model_len,
                                            batch_size=batch_size,
+                                           max_num_batched_tokens=max_num_batched_tokens,
+                                           enforce_eager=enforce_eager,
                                            gpu_memory_utilization=gpu_memory_utilization,
                                            n_gpus=n_gpus, enable_expert_parallel=enable_expert_parallel,
                                            enable_prefix_caching=enable_prefix_caching, enable_bnb=enable_bnb,
-                                           enable_eplb=enable_eplb,
+                                           eplb=eplb,
                                            enable_expert_capture=enable_expert_capture,
-                                           trace_dir=trace_dir, trace_start_iteration=100,
-                                           trace_active_iterations=trace_active_iterations)
+                                           trace_dir=trace_dir, trace_start_iteration=trace_start_iteration,
+                                           trace_active_iterations=trace_active_iterations,
+                                           extra_env=extra_env)
 
         # Start client
         client = AsyncOpenAI(api_key="EMPTY", base_url=f"http://localhost:{port}/v1")
+        clients.append(client)
     
         # Run warmup
         await run_batch(client, model, prompts[:n_warmup_samples],
@@ -368,16 +444,24 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         results = await run_batch(client, model, prompts,
                                   seed=seed, print_output=print_output, max_new_tokens=max_new_tokens,
                                   concurrency_limit=concurrency_limit, capture_experts=enable_expert_capture,
-                                  prompt_formatted=True)
+                                  prompt_formatted=True, collect_itl=collect_itl)
         
         # Stop profiling
         if trace_dir is not None:
             stop_profiling(port=port)
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - reported, and the caller sees results=None
         print(f"An error occurred during inference: {e}")
 
     finally:
+        # Close the client first: its open connections are what an API server
+        # waits for when it shuts down, so releasing them lets the server exit
+        # on its own instead of being killed.
+        for c in clients:
+            try:
+                await c.close()
+            except Exception as e:  # noqa: BLE001 - teardown must not mask the real error
+                print(f"Closing the client failed, continuing to shut the server down: {e}")
         # Tear down server
         if server_process is not None:
             stop_vllm_server(server_process)

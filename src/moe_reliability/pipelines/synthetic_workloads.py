@@ -273,9 +273,18 @@ def plan(cfg: ExperimentConfig) -> list[str]:
             lines.append(f"capture routed experts for {cfg.activations.n_samples} MMLU prompts")
         lines.append(f"build workloads: alphas {wl.target_alphas} x prompt lengths {wl.target_prompt_lengths} "
                      f"x max_repeats {wl.max_repeats}")
+    # The plan is what the cost of a run is judged from before it is launched,
+    # so it has to count the repeats: benchmark.repeats measures every alpha
+    # that many times, which multiplies the points actually served.
+    if wl.reuse_workloads_from:
+        n_points = "all"
+    else:
+        n_points = str(len(wl.target_alphas) * max(1, bench.repeats))
+        if bench.repeats > 1:
+            n_points += f" ({len(wl.target_alphas)} alphas x {bench.repeats} repeats)"
     lines.append(f"benchmark workload set max_repeats={bench.workload_max_repeats}, "
                  f"{bench.workload_prompt_length} prompts: "
-                 f"{len(wl.target_alphas) if not wl.reuse_workloads_from else 'all'} sweep points"
+                 f"{n_points} sweep points"
                  f"{common.profiling_note(bench)}")
     return lines
 

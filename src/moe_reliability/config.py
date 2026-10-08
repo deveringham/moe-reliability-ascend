@@ -107,9 +107,30 @@ _SERVER = Section("server", "vLLM server deployment.", (
     Option("gpu_memory_utilization", "float", 0.6, "Fraction of NPU memory vLLM may use "
            "(vLLM's --gpu-memory-utilization)."),
     Option("batch_size", "int", 512, "Maximum number of concurrently batched sequences (--max-num-seqs)."),
+    Option("max_num_batched_tokens", "int", 4096, "Token budget of one forward pass (--max-num-batched-tokens). "
+           "Sets how many tokens a prefill step carries, and so how many tokens each expert's GEMM sees: "
+           "decode steps are bounded by batch_size instead."),
     Option("enable_expert_parallel", "bool", True, "Enable expert parallelism."),
+    Option("enforce_eager", "bool", True, "Run the model eagerly (--enforce-eager). Eager mode leaves the NPUs "
+           "idle between host-launched kernels, ~30% of a prefill step on 4 NPUs, which shrinks every kernel's "
+           "share of the step; false lets vllm-ascend capture graphs."),
     Option("enable_prefix_caching", "bool", False, "Enable prefix caching."),
-    Option("enable_eplb", "bool", False, "Enable expert-parallel load balancing (EPLB)."),
+    Option("enable_eplb", "bool", False, "Enable vllm-ascend dynamic expert-parallel load balancing. "
+           "Sets additional_config.eplb_config.dynamic_eplb and DYNAMIC_EPLB in the server environment; "
+           "vLLM's own --enable-eplb flag does not reach the vllm-ascend implementation."),
+    Option("eplb_policy_type", "int", 2, "Rearrangement policy: 0 random, 1 DefaultEplb, "
+           "2 SwiftBalanceEplb, 3 FlashLB."),
+    Option("eplb_num_redundant_experts", "int", 0, "Redundant expert slots EPLB may use to replicate hot "
+           "experts. At 0 it can only permute experts between ranks, which cannot change the load when "
+           "each rank holds exactly one expert."),
+    Option("eplb_heat_collection_interval", "int", 600, "Forward iterations of expert-load collection "
+           "before each rearrangement. The full cycle is this plus "
+           "eplb_algorithm_execution_interval plus one iteration per MoE layer, and the load counters "
+           "are cleared at the end of it, so a run shorter than one cycle never rearranges at all."),
+    Option("eplb_algorithm_execution_interval", "int", 50, "Iterations the planner is given before the "
+           "new placement is applied."),
+    Option("eplb_record_map", "bool", False, "Write the placement EPLB chose to eplb_expert_map.json in "
+           "the run directory."),
 ))
 
 _CLIENT = Section("client", "Load generation against the server.", (
@@ -147,36 +168,81 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
     Option("workload_max_repeats", "int", 0, "Which workload set (max_repeats) to benchmark."),
     Option("workload_prompt_length", "int", 1000, "Which workload size (target prompt length) to benchmark."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
-    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", True, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
            "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
+    Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
+    Option("save_itl", "bool", True, "Record inter-token latencies: the gap between consecutive streamed "
+           "chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step "
+           "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
+           "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
+           "metrics file."),
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
-    Option("imbalance_levels", "list[number]", [0, 100], "Router bias added to expert 0 in every layer; "
-           "0 serves the unmodified model."),
+    Option("method", "str", "checkpoint", "How imbalance is injected. checkpoint writes a modified model whose "
+           "routing collapses onto the lowest-numbered experts at any nonzero level (one useful setting: total "
+           "collapse). router_bias serves the unmodified model and adds the level to the router logits of the "
+           "experts in bias_target, a graded skew that keeps routing input-dependent.",
+           choices=("checkpoint", "router_bias")),
+    Option("imbalance_levels", "list[number]", [0, 100], "checkpoint: bias added to expert 0's router row. "
+           "router_bias: logit offset added to the targeted experts. 0 serves the unmodified model."),
+    Option("bias_target", "str", "rank:0", "router_bias only: 'rank:<r>' biases every expert placed on "
+           "expert-parallel rank r (contiguous placement, hardware.n_npus ranks); 'experts:<i>,<j>' biases "
+           "those experts; 'rotate' biases rank (layer mod n_npus), so every layer is skewed as strongly as "
+           "a fixed rank target would make it but no rank is hot throughout - the shape natural imbalance "
+           "has, and the case where per-rank totals cancel."),
     Option("model_dir", "str", "models", "Directory for generated imbalanced checkpoints "
            "(reused across runs when present)."),
-    Option("validate_imbalance", "bool", False, "Measure expert load with Hugging Face inference before "
-           "benchmarking each checkpoint."),
+    Option("validate_imbalance", "bool", False, "Capture routed experts at every level before benchmarking "
+           "and record per-expert and per-rank load."),
+    Option("validation_samples", "int", 0, "Prompts for validation: 0 uses six fixed prompts, N > 0 the first "
+           "N MMLU prompts. Rank shares need a few hundred to be stable."),
+    Option("bias_layers", "list[int]", [], "router_bias only: model layer indices (as in model.layers.<i>) "
+           "the bias applies to; empty biases every MoE layer. A few layers hold a skew the way natural "
+           "imbalance does, and test whether a detector localises it. The zero-bias control uses the same "
+           "layers."),
+    Option("validation_workload", "str", "", "Prompts for validation: empty keeps the first "
+           "validation_samples MMLU prompts in the order every earlier run used; a workload spec draws them "
+           "shuffled from one family or several: mmlu, gsm8k, mbpp, mmmlu:<LANG> (e.g. mmmlu:ZH_CN), dolly, "
+           "ultrachat, or mixed:<a>,<b>,... (interleaved, equal shares)."),
+    Option("validation_save_records", "bool", False, "Also write every validation request's routed experts "
+           "(validation/<label>.records.jsonl), for detection analyses that need per-request or per-token "
+           "routing rather than the pooled counts."),
+    Option("bias_plugin_at_zero", "bool", False, "router_bias only: install the plugin at level 0 as well, with "
+           "an all-zero bias vector. The plugin adds a tensor to the router logits on every expert-selection "
+           "call of every rank, so a level-0 point without it is cheaper for a reason unrelated to skew, and "
+           "the difference between the arms is the skew plus the instrument. Turn this on to isolate the skew; "
+           "compare the two forms of level 0 to measure what the instrument costs."),
 ))
 
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
-    Option("n_samples", "int", 15000, "Number of MMLU prompts sent to each checkpoint."),
+    Option("n_samples", "int", 15000, "Number of prompts sent to each checkpoint."),
+    Option("workload", "str", "", "Prompts to benchmark with: empty keeps MMLU in the order every earlier "
+           "run used; a workload spec serves another corpus or a mix of them (same grammar as "
+           "imbalance.validation_workload). Routing concentration varies by corpus - low-resource "
+           "languages reach a busiest rank well above English - so this is how a latency cost is measured "
+           "on the traffic that produces it."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
-    Option("shuffle_points", "bool", True, "Serve the sweep points in a seeded random order. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
            "single profiled pass cannot provide both."),
     Option("trace_active_iterations", "int", 2, "Number of profiled scheduler iterations."),
+    Option("trace_start_iteration", "int", 100, "Scheduler iterations after profiling starts before the window opens. A point with fewer forward passes than this never records a trace: a 2000-request prefill-only point at a 4096-token budget is ~80."),
     Option("save_request_metrics", "bool", DERIVED, "Store per-request TTFT/TPOT measurements "
            "(default: true, unless profiling without a separate unprofiled pass)."),
+    Option("save_itl", "bool", True, "Record inter-token latencies: the gap between consecutive streamed "
+           "chunks of each request, in ms. TPOT averages over a request's decode steps, so a single slow step "
+           "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
+           "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
+           "metrics file."),
 ))
 
 _ANALYSIS = Section("analysis", "Post-processing of profiler traces.", (
@@ -448,7 +514,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     if cfg["model"]["enable_bnb"]:
         errors.append("model.enable_bnb: bitsandbytes quantization is not supported by vLLM Ascend; serve a "
                       "ModelSlim, LLM-Compressor or block-wise FP8 checkpoint instead")
-    for key in ("max_model_len", "batch_size"):
+    for key in ("max_model_len", "batch_size", "max_num_batched_tokens"):
         positive("server", key)
     if not 0 < cfg["server"]["gpu_memory_utilization"] <= 1:
         errors.append("server.gpu_memory_utilization must be in (0, 1]")
@@ -458,6 +524,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     positive("client", "concurrency_limit")
     positive("client", "n_warmup_samples", allow_zero=True)
     positive("benchmark", "trace_active_iterations")
+    positive("benchmark", "trace_start_iteration")
 
     etype = cfg["experiment"]["type"]
     probe = cfg["model"]["probe"]
@@ -489,6 +556,46 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
             errors.append("imbalance.imbalance_levels must be a non-empty list of numbers >= 0")
         if len(set(levels)) != len(levels):
             errors.append("imbalance.imbalance_levels contains duplicates")
+        if cfg["imbalance"]["validation_samples"] < 0:
+            errors.append("imbalance.validation_samples must be >= 0")
+        if cfg["imbalance"]["method"] == "router_bias":
+            from .router_bias import parse_target
+            try:
+                kind, ids = parse_target(cfg["imbalance"]["bias_target"])
+                if kind == "rank" and ids[0] >= cfg["hardware"]["n_npus"]:
+                    errors.append(f"imbalance.bias_target names rank {ids[0]} but hardware.n_npus = "
+                                  f"{cfg['hardware']['n_npus']}")
+            except ValueError as e:
+                errors.append(f"imbalance.bias_target: {e}")
+            # 'rotate' needs the experts to divide over the ranks, like a rank target;
+            # the expert count is not known until the model is read, so
+            # target_experts raises for it at run time.
+            if any(i < 0 for i in cfg["imbalance"]["bias_layers"]):
+                errors.append("imbalance.bias_layers must be layer indices >= 0")
+            if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):
+                errors.append("imbalance.bias_layers contains duplicates")
+            if cfg["server"]["enable_eplb"]:
+                errors.append("imbalance.method = 'router_bias' assumes contiguous expert placement; "
+                              "EPLB moves experts between ranks, so a rank target would not stay on one rank")
+            if probe_family is None:
+                errors.append("imbalance.method = 'router_bias' needs the expert count: set model.probe "
+                              f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
+        if cfg["imbalance"]["bias_layers"] and cfg["imbalance"]["method"] != "router_bias":
+            errors.append("imbalance.bias_layers applies to method = 'router_bias' only")
+        if cfg["benchmark"]["workload"]:
+            from .core.data import parse_workload
+            try:
+                parse_workload(cfg["benchmark"]["workload"])
+            except ValueError as e:
+                errors.append(f"benchmark.workload: {e}")
+        if cfg["imbalance"]["validation_workload"]:
+            from .core.data import parse_workload
+            try:
+                parse_workload(cfg["imbalance"]["validation_workload"])
+            except ValueError as e:
+                errors.append(f"imbalance.validation_workload: {e}")
+            if cfg["imbalance"]["validation_samples"] == 0:
+                errors.append("imbalance.validation_workload needs validation_samples > 0")
         if cfg["imbalance"]["validate_imbalance"] and probe_family is None:
             errors.append("imbalance.validate_imbalance requires model.probe to be set explicitly "
                           f"(one of {list(PROBE_CHOICES[1:])}) for this model_id")

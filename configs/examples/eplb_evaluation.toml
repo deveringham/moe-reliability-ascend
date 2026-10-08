@@ -1,0 +1,102 @@
+# Does enabling EPLB change anything on this deployment?
+#
+# Our own result is that expert load imbalance does not move serving latency on
+# this stack, because concentrating tokens makes the fused-MoE GEMM enough
+# cheaper per call to pay for the straggler. EPLB exists to remove that
+# straggler. If the straggler is not what costs us, rebalancing it should buy
+# nothing - and should cost something, because the rearrangement moves expert
+# weights between ranks while the server is serving.
+#
+# So this measures two things separately, and the pair is the result:
+#   mechanism - does rank load actually equalise? (paired-call straggler from
+#               the traces, plus the placement EPLB chose)
+#   outcome   - does any latency metric move? (TTFT, TPOT, throughput)
+# "EPLB balanced the ranks and latency did not move" is a clean confirmation of
+# the null. "EPLB never fired" is not a result, which is why the placement is
+# recorded and the iteration budget is set deliberately below.
+#
+# Two things matter in the settings and both are easy to get wrong:
+#
+# 1. EPLB rearranges on a fixed iteration counter, not a timer, and clears the
+#    counters at the end of each cycle. One cycle is
+#    expert_heat_collection_interval + algorithm_execution_interval + one
+#    iteration per MoE layer. At the vllm-ascend defaults that is 600 + 50 + 26
+#    = 676 forward iterations, and a 100-token generation gives roughly 100
+#    decode iterations - so at the defaults EPLB would collect load for the
+#    whole run and never act on it. The intervals here are cut to 50 + 10, and
+#    max_new_tokens raised to 300, so a cycle completes about three times per
+#    point.
+#
+# 2. With num_redundant_experts = 0 EPLB can only permute experts between
+#    ranks. DeepSeek-V2-Lite puts 8 of its 64 experts on each of 4 ranks, so a
+#    permutation can genuinely co-locate hot experts with cold ones. On a model
+#    with one expert per rank a permutation is a relabelling and cannot change
+#    the load at all - see the note in the grid config.
+#
+#   ./nrun -t eplb 'uv run moe-reliability run configs/examples/eplb_evaluation.toml'
+
+[experiment]
+type = "synthetic_workloads"
+name = "eplb-eval"
+description = "Alpha sweep with EPLB enabled, profiled, NPUs 0-3."
+seed = 47
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+
+enable_eplb = true
+# SwiftBalanceEplb, the vllm-ascend default: rearranges under a constraint on
+# how many experts may move, so the transfer cost stays bounded.
+eplb_policy_type = 2
+# Permutation only. Raise this to let EPLB replicate hot experts instead, which
+# is the only thing that helps once each rank holds a single expert.
+eplb_num_redundant_experts = 0
+# Cut hard from the 600/50 defaults so a cycle fits inside a point.
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 10
+# Writes the chosen placement per point, so "did not fire" is distinguishable
+# from "fired and changed nothing".
+eplb_record_map = true
+
+[client]
+concurrency_limit = 512
+# Also the decode-iteration budget EPLB spends: see note 1 above.
+max_new_tokens = 300
+
+[activations]
+n_samples = 3000
+reuse_activations_from = "20261001-133042_synthetic_deepseek-v2_npu4_bs512_alpha-sweep"
+
+[workloads]
+# Balanced, natural, and clearly skewed. Three points is enough: the question is
+# whether EPLB changes the picture, not the shape of the alpha response, which
+# the earlier sweeps already covered.
+target_alphas = [0.8, 1.0, 1.6]
+target_prompt_lengths = [300]
+length_in_requests = true
+prompt_length_tolerance = 0.10
+max_repeats = [10]
+
+[benchmark]
+workload_max_repeats = 10
+workload_prompt_length = 300
+# Two measurements per point. Three apparent effects this session dissolved
+# under replication, and an EPLB difference would be smaller than any of them.
+repeats = 2
+enable_profiling = true
+separate_profiling_run = true
+trace_active_iterations = 2
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = true
+trace_summary = false

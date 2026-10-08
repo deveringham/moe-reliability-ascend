@@ -1,0 +1,39 @@
+# Is the measured skew cost still there when both arms carry the instrument?
+#
+#   2 models x 2 plugin settings = 4 runs, each level 0 / 2 x 3 repeats = 6 points
+#
+# The router-bias plugin adds a tensor to the router logits on every
+# expert-selection call of every rank. server_env returns {} at level 0, so every
+# comparison recorded in docs/router-bias-findings.md is skew *plus* the
+# instrument. bias_plugin_at_zero installs an all-zero vector at level 0, which
+# makes the arms pay the same per-call cost.
+#
+# The matrix gives three readings from one grid:
+#
+#   level 0, plugin off  vs  level 0, plugin on   -> what the instrument costs
+#   level 0, plugin on   vs  level 2, plugin on   -> the skew cost, isolated
+#   level 2, plugin off  vs  level 2, plugin on   -> identical configurations, so
+#                                                    their spread is run-to-run drift
+#
+# Eager mode, 100 tokens: the regime where the instrument's per-call cost is
+# largest (graph mode captures the add into the graph) and where the retracted
+# host-launch account lived. Level 2 only, since that is where the step-resolved
+# analysis found the cost; a slope needs the full sweep and should wait for this.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/router_bias_zero_control.toml --dry-run'
+#   ./nrun -t rbzero 'uv run moe-reliability grid configs/grids/router_bias_zero_control.toml'
+
+[grid]
+name = "rbias-zero-control"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"client.max_new_tokens" = 100
+"imbalance.imbalance_levels" = [0, 2]
+
+[matrix]
+"model.model_id,model.model_name,benchmark.n_samples" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", 3000],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", 2000],
+]
+"imbalance.bias_plugin_at_zero" = [false, true]

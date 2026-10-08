@@ -1,0 +1,56 @@
+# Where does a prefill step's time go, and does bias 100 change it?
+#
+# The prefill-regime grid (2026-10-05) found bias 100 no slower than bias 0 in
+# prefill-only serving, and prefill throughput unchanged between a 4096 and a
+# 16384-token forward-pass budget. Two accounts fit:
+#   1. MoE is a small share of a prefill step, so even a 4x rank skew in it
+#      barely moves the step;
+#   2. the step does not actually carry the budgeted tokens, so the GEMMs never
+#      leave the memory-bound regime.
+# The traces separate them: MoE share of the step, per-rank GroupedMatmul time
+# and the paired-call straggler, at bias 0 and 100.
+#
+# The profiler window opens 100 scheduler iterations after profiling starts.
+# 3000 prompts at a 4096-token budget is only ~113 prefill steps, so 6000 keeps
+# the window in full steps rather than the draining tail.
+#
+#   ./nrun -t prefprof 'uv run moe-reliability run configs/examples/prefill_profiled.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "prefill-profiled"
+description = "Profiled bias 0 / 100, prefill-only, 4096-token budget, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+imbalance_levels = [0, 100]
+validate_imbalance = false
+
+[benchmark]
+n_samples = 6000
+repeats = 1
+enable_profiling = true
+separate_profiling_run = true
+trace_active_iterations = 2
+save_request_metrics = true
+
+[analysis]
+parse_npu_traces = true
+trace_summary = true

@@ -30,6 +30,11 @@ notebooks = ["notebook", "ipykernel"]
 [project.scripts]
 moe-reliability = "moe_reliability.cli:main"
 
+# Loaded by vLLM in every engine and worker process. A no-op unless the server
+# environment carries MOE_ROUTER_BIAS (see moe_reliability/router_bias.py).
+[project.entry-points."vllm.general_plugins"]
+moe_router_bias = "moe_reliability.router_bias:register"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

@@ -215,6 +215,137 @@ Two of these were found by the tooling itself within minutes of being committed:
 contention check fired on 3 of 9 points in the positive control, and repeats exposed
 the false 136.2 ms reading.
 
+## Idle time: the ranks wait far more than they differ
+
+Prompted by a question about whether imbalance shows up as device idle time or
+transient spikes rather than mean latency. Neither does, but looking turned up
+something larger. Computed offline over 30 profiled points already on disk -
+DeepSeek-V2-Lite at 4 and 8 ranks, Mixtral at 8, alphas 0.5 to 2.0.
+
+**About 95% of collective time is waiting, not transfer.** `hcom_allReduce_` is
+66.6 s of the 87 s of summed kernel duration in a typical point. Splitting it by
+`collective_wait` - a collective ends for every rank together, so the last rank
+to arrive waits least and its duration bounds the transfer, while every other
+rank's excess is blocked time:
+
+```
+wait share of collective duration: mean 94.9%   range 92.7% - 96.8%   n = 30
+```
+
+So the 71-78% "communication" in the step decomposition is almost entirely one
+rank waiting for another; actual data movement is around 3-4% of summed kernel
+time. Any reading of an MoE profile that treats summed collective duration as
+communication cost is wrong by roughly twenty times.
+
+**One rank paces each server instance, and it is a different rank every time.**
+In most points a single rank is the last to arrive for 60-98% of all collectives
+(`pace_setter_share` 0.54 to 0.98). Which rank it is changes between runs of an
+identical configuration, so it is not topology: rank 0 in one point, rank 3 in
+the next.
+
+**The near-idle rank is the bottleneck, not a victim.** Occupancy per rank spans
+0.18 to 0.90 within a single point, and the rank with the lowest occupancy is the
+pace-setter in **30 of 30 points**. The inversion is the whole point: a rank that
+looks idle is the one everyone else is blocked on, because the ranks that arrive
+early spend the wait inside a collective kernel and therefore count as busy.
+`busy_max_over_mean` reads about 1.33 at 4 ranks and 1.16 at 8, against a
+fused-MoE straggler of 1.026.
+
+**It has nothing to do with imbalance.** `busy_max_over_mean` shows no alpha
+dependence (r = -0.02, +0.05, -0.28 across the three sweeps with enough points),
+the wait share is flat across alpha, and fused-MoE time per rank matches to 0.5%
+in every point. Whatever makes one rank late, it is not its share of expert work.
+
+This gives the headline null a mechanism it did not have. Imbalance is invisible
+twice over: a ~20% skew in expert tokens becomes only a ~2.6% skew in fused-MoE
+time, and that 2.6% is then buried under a ~33% asymmetry in waiting caused by
+something else entirely. The step is gated by collective sync, and the sync is
+paced by an arbitrary rank.
+
+Tails were checked at the same time and show nothing either. TPOT p99 and max
+track the mean, and their correlation with alpha changes sign across runs
+(+0.54, +0.17, -0.09, +0.58, -0.40, +0.52); the positive cases are exactly the
+early runs served in alpha order or under a neighbouring job. One structural
+effect did appear, independent of alpha: p99 sits 3.5% above the mean at 4 ranks
+and 12.6% at 8, so tail inflation grows with expert-parallel degree.
+
+Caveats. The split assumes a collective ends for all ranks at once, so with a
+pipelined ring implementation the per-call minimum is an upper bound on wait and
+a lower bound on transfer - the ratio is extreme enough that the conclusion holds,
+but 94.9% is not a precise figure. Within-request spikes remain unmeasured: TPOT
+averages over a request's decode steps and we record no inter-token latencies, so
+a single slow step is smeared out. And `trace_active_iterations = 2` does not
+bound the profiler window as its name suggests; the spans are ~34 s, essentially
+the whole serving period, which is what made this analysis possible but should be
+understood before relying on the option.
+
+## EPLB: it works, and it buys nothing here
+
+Run 2026-10-02, grid `eplb-eval`, DeepSeek-V2-Lite at 4-way expert parallelism,
+alphas 0.8/1.0/1.6, two repeats per point, EPLB off and on with shared workloads
+so the arms differ only in the rearrangement.
+
+| | EPLB off | EPLB on |
+| --- | --- | --- |
+| paired-call straggler | 1.026 +/- 0.002 | 1.027 +/- 0.002 |
+| fused-MoE time per rank | 1.349 ms +/- 0.025 | 1.351 ms +/- 0.021 |
+| MoE share of compute | 38.30% +/- 0.15 | 37.53% +/- 0.27 |
+
+EPLB ran properly: `SwiftBalanceEplb`, 84 rearrangement cycles across the 12
+server instances, a placement map recorded for every point. By its own
+accounting it does its job, over those 84 cycles:
+
+```
+current   mean 1.139 +/- 0.044   max 1.308 +/- 0.132
+predicted mean 1.007 +/- 0.002   max 1.026 +/- 0.013
+```
+
+The measured straggler did not move by one standard deviation.
+
+**Why: EPLB balances token counts, and what costs time is kernel time.** Its own
+metric sees a 1.14x to 1.31x imbalance in expert hotness where the traces measure
+1.026x in fused-MoE time. That is the cancellation of the headline result seen
+from the other side - concentrating tokens makes `GroupedMatmul` cheaper per
+token, so a ~20% imbalance in tokens is a ~2.6% imbalance in time. EPLB is
+removing a 20% skew in a quantity that was already only 2.6% skewed in the
+quantity that matters, so there is nothing left to win.
+
+The consequence for monitoring is the useful part: **expert token counts are the
+wrong signal**, and a `max/mean` of hotness overstates the time imbalance by
+roughly a factor of six. Any detector built on router counters inherits that
+error.
+
+The one real cost is overhead. MoE share of compute falls 0.77pp (3-5 sigma, and
+a within-run ratio so robust to host load) while absolute MoE time is unchanged -
+EPLB added non-MoE work rather than saving MoE work. Total kernel time is about
+9% higher, but with 10% scatter that is ~1 sigma and should not be quoted.
+
+Two caveats:
+
+- **The latency comparison from this run is unreadable.** A neighbouring job
+  occupied NPUs 4-7 during 5 of the 6 off-arm points and only 1 of 6 on-arm
+  points, so contention is confounded with the arm; TTFT scatters 1927-2915 ms.
+  The straggler and MoE-share figures above are per-rank ratios within a run and
+  survive this; the latency numbers do not. Interleaving the arms, or running
+  both on a quiet node, is the fix.
+- **The intervals were cut hard to make EPLB fire at all.** At the vllm-ascend
+  defaults one cycle is 600 + 50 + one iteration per MoE layer, about 676 forward
+  iterations, against roughly 100 decode iterations in a 100-token generation -
+  EPLB would collect load for an entire run and never act on it. These runs used
+  50 + 10 with 300 generated tokens, which means the 26-layer weight transfer
+  occupies about a third of every cycle and the placement is rarely settled.
+  Across all 84 cycles the realised imbalance (1.139) never approaches the
+  predicted (1.007), which is either genuine non-stationarity of expert load at
+  this timescale or an artefact of that cadence. One run at
+  `eplb_heat_collection_interval = 200` separates them and would also measure the
+  overhead fairly.
+
+Also established, by reading vllm-ascend rather than measuring: rearrangement is
+unconditional. `_compute_imbalance` is called every cycle and used only for a log
+line - there is no threshold, no hysteresis, no gate. EPLB pays the weight
+transfer on a fixed counter whether or not anything is wrong, and the counters
+are cleared at the end of each cycle rather than decayed.
+
 ## Open questions
 
 1. **Wider expert parallelism.** The one lever still untested, and the only one
@@ -226,9 +357,11 @@ the false 136.2 ms reading.
    one expert on each rank instead of eight and changes nothing, because alpha is
    relative to a natural CV that is three times lower. To make granularity bite you
    would have to drive absolute CV, not alpha.
-3. **Does EPLB change anything?** `server.enable_eplb` exists, so somebody expected
-   imbalance to cost something. Running high imbalance with it on and off is a
-   direct test, and a null there would be a strong result in itself.
+3. **Does EPLB change anything? Answered: no, and for an instructive reason.** It
+   rearranges as designed and removes the token imbalance it measures, but token
+   imbalance is six times larger than the time imbalance, so there is nothing left
+   to win. See the EPLB section above. What remains open is its overhead at a
+   realistic cadence, which these aggressive intervals overstate.
 4. **Where the step time actually goes.** The traces now report it: about 74%
    occupancy by wall time, with collectives dominating summed kernel duration
    because they block. Worth separating transfer from wait inside the collectives,

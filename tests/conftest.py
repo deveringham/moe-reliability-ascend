@@ -79,10 +79,17 @@ class FakeDeployment:
         self.fail_models = set(fail_models)
         self.trace_format = trace_format
 
-    def __call__(self, cfg, model_path, prompts, trace_dir, enable_expert_capture=False):
+    def __call__(self, cfg, model_path, prompts, trace_dir, enable_expert_capture=False,
+                 eplb_record_path=None, server_env=None):
+        from moe_reliability.pipelines.common import eplb_settings
+
         rng = np.random.default_rng(len(self.calls) + 1)
         self.calls.append({"model_path": model_path, "n_prompts": len(prompts), "trace_dir": trace_dir,
-                           "capture": enable_expert_capture, "batch_size": cfg.server.batch_size})
+                           "capture": enable_expert_capture, "batch_size": cfg.server.batch_size,
+                           "eplb": eplb_settings(cfg, eplb_record_path), "server_env": server_env})
+        from moe_reliability.router_bias import ENV_VAR, parse_env
+
+        spec = parse_env(server_env[ENV_VAR]) if server_env and ENV_VAR in server_env else None
         if model_path in self.fail_models:
             return None  # measure_vllm_throughput returns None when inference fails
         slowdown = 1.0 + (3.0 if "imbalance" in str(model_path) else 0.0)
@@ -94,13 +101,23 @@ class FakeDeployment:
             if enable_expert_capture:
                 # routing skewed towards an expert that depends on the prompt
                 hot = i % N_EXPERTS
-                probs = np.full(N_EXPERTS, 1.0)
-                probs[hot] = 6.0
-                probs /= probs.sum()
+                base = np.full(N_EXPERTS, 1.0)
+                base[hot] = 6.0
+                # A logit offset scales the selection odds, on the layers the bias
+                # targets and with that layer's own vector (a rotating bias differs
+                # per layer).
+                per_layer = []
+                for layer in range(N_LAYERS):
+                    scale = 1.0
+                    if spec is not None and spec.applies_to(layer):
+                        scale = np.exp(np.asarray(spec.vector(layer, N_EXPERTS), dtype=float))
+                    probs = base * scale
+                    per_layer.append(probs / probs.sum())
 
-                def draw(n_tokens, probs=probs):
-                    return np.stack([np.stack([rng.choice(N_EXPERTS, TOP_K, replace=False, p=probs)
-                                               for _ in range(N_LAYERS)]) for _ in range(n_tokens)]).astype(np.int16)
+                def draw(n_tokens, per_layer=per_layer):
+                    return np.stack([np.stack([rng.choice(N_EXPERTS, TOP_K, replace=False, p=per_layer[layer])
+                                               for layer in range(N_LAYERS)])
+                                     for _ in range(n_tokens)]).astype(np.int16)
 
                 record.update(ttft=None, tpot=None, routed_experts=draw(n_out), prompt_routed_experts=draw(n_in))
             else:

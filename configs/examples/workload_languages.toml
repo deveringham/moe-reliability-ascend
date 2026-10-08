@@ -1,0 +1,71 @@
+# Does traffic in another language concentrate routing more than English does?
+#
+# Natural imbalance is the quantity the whole project's null rests on, and it has
+# only been measured on English corpora. Across six of those (MMLU, GSM8K, MBPP,
+# German MMMLU, Dolly, UltraChat) the busiest rank's load spans a narrow band -
+# 1.20x to 1.30x at an 8-request window on Mixtral, against an impact threshold
+# of 1.31x. Dolly is the most concentrated and crosses it in 0.5% of windows.
+#
+# Language is the most plausible way to beat that. Experts in a MoE model are
+# widely reported to specialise by script and language, and a deployment serving
+# one non-English locale is exactly the homogeneous case our mixed captures
+# average away. Seven locales plus English, covering Latin, Han, Arabic,
+# Devanagari and Japanese scripts, and two low-resource languages where
+# specialisation would be most likely.
+#
+# Capture only: one level, no sweep. The routing is scored offline against the
+# impact thresholds already measured, so no latency run is needed to answer the
+# question. One server, one capture; the per-prompt labels carry the language, so
+# homogeneous and mixed windows both come out of the same records.
+#
+# The questions are short in every locale (9-287 characters), so they fit the
+# 2048-token context with room to spare even where a script tokenises densely.
+#
+#   ./nrun -t lang 'uv run moe-reliability run configs/examples/workload_languages.toml'
+#   (DeepSeek: --set 'model.model_id="deepseek-ai/DeepSeek-V2-Lite-Chat"' \
+#              --set 'model.model_name="deepseek-v2"' --set 'model.probe="deepseek"')
+
+[experiment]
+type = "forced_imbalance"
+name = "workload-languages"
+description = "Natural routing concentration across eight locales, Mixtral, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+# One level, and it is the unbiased one: the plugin is not installed at all, so
+# this measures the model's own routing with nothing in the way.
+imbalance_levels = [0]
+bias_plugin_at_zero = false
+validate_imbalance = true
+validation_samples = 1600
+validation_workload = "mixed:mmlu,mmmlu:DE_DE,mmmlu:ZH_CN,mmmlu:JA_JP,mmmlu:AR_XY,mmmlu:HI_IN,mmmlu:SW_KE,mmmlu:YO_NG"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

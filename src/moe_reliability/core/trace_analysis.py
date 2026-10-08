@@ -246,6 +246,64 @@ def straggler(trace_dir, op_type="GroupedMatmul", scan=None):
     }
 
 
+def collective_wait(trace_dir, op_type="hcom_allReduce_", scan=None):
+    """Split a collective's kernel time into transfer and blocked waiting.
+
+    A collective completes for every rank at once, so a rank's kernel runs from
+    the moment that rank arrives until the whole collective finishes. The last
+    rank to arrive waits least, and its duration is the closest estimate of the
+    transfer itself; every other rank's excess over that minimum is time it sat
+    blocked on the others. That is why summed communication duration is a poor
+    measure of communication cost - most of it is one rank waiting for another -
+    and why per-rank busy time can differ several-fold while the compute behind
+    it is balanced.
+
+    The rank holding the minimum is the one the others waited for, so counting
+    how often each rank is that rank says whether a single rank paces the step
+    (a structural straggler) or whether it moves around (sync jitter).
+
+    Approximate in two ways worth remembering: the kernel duration includes
+    launch overhead, and a collective that is not a full barrier lets a rank
+    leave early, which would understate its wait.
+    """
+    scan = scan if scan is not None else scan_kernels(trace_dir, collect=(op_type,))
+    per_rank = {r: per["durations"].get(op_type, []) for r, per in scan.items()}
+    per_rank = {r: d for r, d in per_rank.items() if d}
+    if len(per_rank) < 2:
+        return None
+    ranks = sorted(per_rank)
+    n = min(len(per_rank[r]) for r in ranks)
+    transfer_us = 0.0
+    wait_us = dict.fromkeys(ranks, 0.0)
+    last_arriver = dict.fromkeys(ranks, 0)
+    for i in range(n):
+        durs = {r: per_rank[r][i] for r in ranks}
+        floor = min(durs.values())
+        transfer_us += floor
+        for r in ranks:
+            wait_us[r] += durs[r] - floor
+        last_arriver[min(durs, key=durs.get)] += 1
+    totals = {r: sum(per_rank[r][:n]) for r in ranks}
+    grand = sum(totals.values())
+    paced_by, paced_n = max(last_arriver.items(), key=lambda kv: kv[1])
+    return {
+        "op_type": op_type,
+        "ranks": ranks,
+        "calls_per_rank": n,
+        "per_rank_total_us": [totals[r] for r in ranks],
+        "transfer_us": transfer_us,
+        "per_rank_wait_us": [wait_us[r] for r in ranks],
+        "wait_us": sum(wait_us.values()),
+        # Share of the collective's summed duration that is waiting, not moving data.
+        "wait_pct": 100.0 * sum(wait_us.values()) / grand if grand else None,
+        "last_arriver_counts": [last_arriver[r] for r in ranks],
+        # The rank the others waited for most often, and how dominant it is. Near
+        # 1/n_ranks means no rank paces the step; near 1 means one rank does.
+        "pace_setter_rank": paced_by,
+        "pace_setter_share": paced_n / n if n else None,
+    }
+
+
 def step_decomposition(trace_dir, scan=None):
     """Where a decode step's time goes, per rank and overall.
 
@@ -301,6 +359,21 @@ def summarize_ascend(trace_dir, op_types=("GroupedMatmul",)):
         raise FileNotFoundError(f"no parsed Ascend profiler output under {trace_dir} "
                                 f"(expected */{ASCEND_OUTPUT}/kernel_details.csv)")
 
+    # The collective that dominates summed duration, re-scanned for its per-call
+    # durations so its time can be split into transfer and waiting. Which
+    # collective that is depends on the parallelism, so it is found rather than
+    # assumed.
+    comm_totals: dict[str, float] = {}
+    for per in scan.values():
+        for name, entry in per["totals"].items():
+            if _category(name) == "communication":
+                comm_totals[name] = comm_totals.get(name, 0.0) + entry["total_us"]
+    waiting = None
+    if comm_totals:
+        busiest = max(comm_totals, key=comm_totals.get)
+        waiting = collective_wait(trace_dir, busiest,
+                                  scan=scan_kernels(trace_dir, collect=(busiest,)))
+
     summed = {}
     for per in scan.values():
         for name, entry in per["totals"].items():
@@ -322,7 +395,21 @@ def summarize_ascend(trace_dir, op_types=("GroupedMatmul",)):
         "decomposition": decomposition,
         "top_ops": [{"op_type": name, **agg} for name, agg in top],
         "stragglers": stragglers,
+        "collective_wait": waiting,
     }
+    if waiting:
+        out["collective_op"] = waiting["op_type"]
+        out["collective_wait_pct"] = waiting["wait_pct"]
+        out["pace_setter_rank"] = waiting["pace_setter_rank"]
+        out["pace_setter_share"] = waiting["pace_setter_share"]
+    if decomposition:
+        # Idle is the complement of occupancy, and the spread of busy time across
+        # ranks is where a straggler would surface if one did.
+        out["busy_max_over_mean"] = decomposition["busy_max_over_mean"]
+        occ = [o for o in decomposition["occupancy"] if o is not None]
+        if occ:
+            out["occupancy_min"] = min(occ)
+            out["occupancy_mean"] = sum(occ) / len(occ)
     # Flat scalars, so a run summary carries them without reaching into the nesting.
     if decomposition:
         out["kernel_total_us"] = decomposition["summed_kernel_us"]

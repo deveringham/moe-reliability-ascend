@@ -1,0 +1,61 @@
+# Positive control, prefill regime: can imbalance cost time when the expert
+# GEMMs are compute-bound?
+#
+# The decode-regime positive control (imbalance_positive_control.toml) was flat:
+# at bias 100 rank 0 carries 6.7x the GEMM work of the others yet spends half
+# the time every rank spends in the balanced case. Decode at batch 512 gives an
+# expert ~48 tokens per call, well below the ~200-token ridge point of a 910B3
+# for a bf16 expert of DeepSeek-V2-Lite (intensity ~ tokens per call, ridge ~
+# 313 TFLOP/s over 1.6 TB/s), so expert cost is weight loading and depends on
+# how many experts are active, not on how many tokens they get. Concentrating
+# tokens is then free or better than free.
+#
+# A prefill step is different: 4096 batched tokens give ~384 tokens per expert
+# on average, past the ridge, where cost tracks tokens. Bias 100 routes every
+# token to experts 0-5, all on rank 0, so in that regime rank 0 should take ~4x
+# the MoE time of a balanced rank. If prefill throughput does not fall here,
+# the roofline argument is wrong and no milder imbalance will show either.
+#
+# The grid crosses this with generation length and the forward-pass token
+# budget; see configs/grids/prefill_regime.toml.
+#
+#   uv run moe-reliability validate configs/examples/prefill_poscontrol.toml
+
+[experiment]
+type = "forced_imbalance"
+name = "prefill-poscontrol"
+description = "Router bias 0 / 100 in a prefill-dominated workload, three repeats, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+# NPUs 4-7 are left for other users on this node.
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+# One token: each request is a single prefill, so the point measures prefill
+# throughput. Read makespan_s / input_tokens_per_s, not TTFT, which is
+# dominated by queueing when the whole batch is submitted at once.
+max_new_tokens = 1
+
+[imbalance]
+imbalance_levels = [0, 100]
+validate_imbalance = false
+
+[benchmark]
+# ~465k prompt tokens, ~110 forward passes at a 4096-token budget: long enough
+# that server-side jitter is a small part of the makespan.
+n_samples = 3000
+repeats = 3
+enable_profiling = false
+save_request_metrics = true

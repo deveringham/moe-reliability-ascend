@@ -1,0 +1,49 @@
+# Can stage 2 tell a costly skew from a free one when their load is identical?
+#
+#   2 runs; DeepSeek and Mixtral, 3 offsets x 1 = 6 points, each served twice
+#
+# The rotating sweeps produced the sharpest test the detection pipeline has:
+# at matched per-layer load a rotating skew costs Mixtral full price (193.2 ms
+# at 2.63x, against 193.9 for a fixed target) and costs DeepSeek nothing
+# (174.8 ms at 3.59x, against 212.6 fixed). Stage 1 sees the same load in both,
+# so only stage 2 - step time conditioned on batch size and prefill content -
+# could separate them. Nothing in the rotating runs was profiled, so there are
+# no step tables to try it on.
+#
+# What a working stage 2 would show: Mixtral's prefill-carrying steps lengthen
+# with the rotating skew as they do with a fixed one, and DeepSeek's
+# below-full-batch decode steps do not, where under a fixed skew they rise
+# +37-40 ms per +1x. If instead both models' steps look alike, stage 2 cannot
+# carry the confirmation and the pipeline needs stage 3 for it.
+#
+# The two passes per point also measure what profiling itself costs, which is
+# still unmeasured: runs before 2026-10-07 discarded the profiled pass's
+# timings and this one keeps them (profiled_request_summary).
+#
+# 100-token regime only: that is where every rotating and controlled latency
+# number was measured, and prefill-only serving on this stack is frontend-bound.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/rotating_skew_profiled.toml --dry-run'
+#   ./nrun -t rotp 'uv run moe-reliability grid configs/grids/rotating_skew_profiled.toml'
+#   then, on the node, where the raw traces live:
+#   ./nrun 'uv run python scripts/step_profile.py results/<run_dir>'
+
+[grid]
+name = "rbias-rotating-profiled"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"client.max_new_tokens" = 100
+"imbalance.bias_target" = "rotate"
+"imbalance.bias_plugin_at_zero" = true
+"imbalance.imbalance_levels" = [0, 1, 2]
+"benchmark.repeats" = 1
+"benchmark.enable_profiling" = true
+"benchmark.separate_profiling_run" = true
+"benchmark.trace_start_iteration" = 30
+
+[matrix]
+"model.model_id,model.model_name,benchmark.n_samples" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", 2000],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", 2000],
+]

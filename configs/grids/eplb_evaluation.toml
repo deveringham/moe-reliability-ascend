@@ -1,0 +1,48 @@
+# EPLB on versus off, at three alphas, with everything else held fixed.
+#
+#   2 EPLB settings x 3 alphas x 2 repeats = 12 measured points
+#   (each point served twice: unprofiled for timings, profiled for traces)
+#
+# The off arm is the control the single-config run cannot give you: EPLB's cost
+# and benefit are both differences, and our own null result means the difference
+# we expect is zero. Without a paired control at the same alphas, in the same
+# session, on the same quiet node, a zero is unreadable.
+#
+# share_workloads keeps both arms on identical prompt sequences, so the only
+# thing that differs between them is the rearrangement.
+#
+# Read it as a pair:
+#   - trace straggler (paired-call) falling in the EPLB arm = the mechanism works
+#   - TTFT/TPOT/throughput unchanged = it buys nothing here
+#   - the recorded placement differing from the initial one = it actually fired
+# If the placement is identical, nothing was measured; lower
+# server.eplb_heat_collection_interval and re-run before reading anything else.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/eplb_evaluation.toml --dry-run'
+#   ./nrun -t eplbgrid 'uv run moe-reliability grid configs/grids/eplb_evaluation.toml'
+
+[grid]
+name = "eplb-eval"
+base = "../examples/eplb_evaluation.toml"
+share_workloads = true
+
+[set]
+"benchmark.save_request_metrics" = true
+
+[matrix]
+"server.enable_eplb" = [false, true]
+
+# Worth running once DeepSeek is understood, as a contrast rather than a sweep:
+#
+#   "model.model_id" = ["mistralai/Mixtral-8x7B-Instruct-v0.1"]
+#   "hardware.n_npus" = [8]
+#
+# At 8-way expert parallelism Mixtral puts exactly one of its 8 experts on each
+# rank. Permutation cannot change a rank's load when it holds a single expert -
+# any permutation is a relabelling - so EPLB with num_redundant_experts = 0 must
+# be a no-op there by construction, however skewed the routing is. That makes it
+# a free check on whether this pipeline reports "no effect" for the right
+# reason: it should show an unchanged placement, not merely flat latency.
+# To make EPLB able to act on that model at all, give it redundant experts:
+#
+#   "server.eplb_num_redundant_experts" = [0, 1]

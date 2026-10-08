@@ -1,0 +1,48 @@
+# Calibrate the router bias: logit offset on rank 0's experts -> realised rank
+# load, measured with routed-expert capture on 200 MMLU prompts per level.
+#
+# Logit scales differ between models, so the offsets that give a 1.25x, 1.5x,
+# 2x ... busiest rank have to be measured per model before a sweep is designed.
+# The benchmark stage still runs (one server per level), on only 20 prompts.
+#
+#   ./nrun -t rbcal 'uv run moe-reliability run configs/examples/router_bias_calibration.toml'
+#   (Mixtral: --set 'model.model_id="mistralai/Mixtral-8x7B-Instruct-v0.1"' --set 'model.model_name="mixtral"')
+
+[experiment]
+type = "forced_imbalance"
+name = "rbias-calibration"
+description = "Router bias on rank 0 at logit offsets 0-4: realised rank load, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.25, 0.5, 1, 2, 4]
+validate_imbalance = true
+validation_samples = 200
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

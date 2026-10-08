@@ -1,0 +1,14 @@
+# Graded rank skew on Mixtral 8x7B (two experts per rank): prefill-only and
+# 100-token regimes. 2000 prompts per point (~80 prefill steps at 4096 tokens).
+#   2 runs x 6 offsets x 3 repeats = 36 points
+[grid]
+name = "rbias-mixtral"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"benchmark.n_samples" = 2000
+
+[matrix]
+"client.max_new_tokens" = [1, 100]

@@ -1,0 +1,47 @@
+# Smoke test for inter-token latency capture and the zero-bias control.
+#
+# One short point per level: checks that itl_ms reaches the metrics file, that
+# the chunk count matches the token count (so an ITL is a token latency), and
+# that the plugin logs the all-zero control at level 0.
+#
+#   ./nrun 'uv run moe-reliability run configs/examples/itl_smoke.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "itl-smoke"
+description = "ITL capture and zero-bias control, 60 prompts per level, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 32
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 2]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 60
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+save_itl = true
+
+[output]
+save_figures = false

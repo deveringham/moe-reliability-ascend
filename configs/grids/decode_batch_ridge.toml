@@ -1,0 +1,63 @@
+# Does imbalance start to cost once a decode step crosses the GEMM ridge point?
+#
+#   3 runs; Mixtral, batch 512 / 1024 / 2048, levels 0 and 2, profiled = 6 points
+#
+# The whole null rests on decode being memory-bound: an expert's cost is loading
+# its weights, so concentrating tokens onto fewer experts makes the busy rank
+# *faster*, not slower. That stops holding above roughly 200 tokens per expert
+# per call, where arithmetic takes over - and prefill, at ~1024 tokens per
+# expert, is where we already measured a cost.
+#
+# Tokens per expert per call is batch x top_k / experts, and in decode the batch
+# is max_num_seqs (server.batch_size), because every running sequence
+# contributes exactly one token per step. Measured on the profiled Mixtral runs:
+# decode steps top out at exactly 512 tokens (max_num_seqs) while
+# prefill-carrying steps reach 4096 (max_num_batched_tokens). The two limits
+# bound different step types, and only the first one moves decode.
+#
+#   Mixtral, top-2 of 8:   batch  512 ->  128 tokens/expert   below the ridge
+#                          batch 1024 ->  256                 just above
+#                          batch 2048 ->  512                 well above
+#
+# Mixtral is the model to do this on: at 128 it is already the closest of the two
+# to the boundary (DeepSeek sits at 48).
+#
+# The readout is the step profile, not TPOT. At batch 512 a full-batch decode
+# step is the same length at every offset - that is the measurement the null is
+# built on. If the ridge explains it, those steps should lengthen under skew at
+# 1024 and 2048. TPOT also moves with batch size for unrelated reasons, so every
+# comparison is within one batch size, never across.
+#
+# gpu_memory_utilization is raised to 0.85 because the default 0.6 leaves room
+# for roughly 1160 concurrent sequences on Mixtral - the flag would be set to
+# 2048 and the engine would quietly never reach it. **Check the achieved decode
+# batch in the step profile before believing any of these points**: if decode
+# steps top out below max_num_seqs, the KV cache bound, not the ridge, and the
+# point does not test what it was meant to.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/decode_batch_ridge.toml --dry-run'
+#   ./nrun -t ridge 'uv run moe-reliability grid configs/grids/decode_batch_ridge.toml'
+#   ./nrun 'uv run python scripts/step_profile.py results/*decode-ridge-*'
+
+[grid]
+name = "decode-ridge"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"model.probe" = "mistral"
+"client.max_new_tokens" = 100
+# Must exceed the largest batch or the client cannot saturate the engine.
+"client.concurrency_limit" = 2600
+"server.gpu_memory_utilization" = 0.85
+"benchmark.n_samples" = 4000
+"imbalance.imbalance_levels" = [0, 2]
+"imbalance.bias_plugin_at_zero" = true
+"benchmark.repeats" = 1
+"benchmark.enable_profiling" = true
+"benchmark.separate_profiling_run" = true
+"benchmark.trace_start_iteration" = 30
+
+[matrix]
+"server.batch_size" = [512, 1024, 2048]

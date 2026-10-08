@@ -63,6 +63,12 @@ class Grid:
         return len(self.entries)
 
     def n_configurations(self) -> int | None:
+        """Sweep points the grid will actually serve.
+
+        benchmark.repeats measures every swept value that many times, so the
+        points served are a multiple of the values swept. The grid total is read
+        as the cost of the grid, so it has to be the former.
+        """
         from .pipelines import pipeline_for
 
         total = 0
@@ -70,7 +76,7 @@ class Grid:
             values = pipeline_for(e.config.experiment_type).sweep_values(e.config)
             if values is None:
                 return None
-            total += len(values)
+            total += len(values) * max(1, e.config.benchmark.repeats)
         return total
 
 

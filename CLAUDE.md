@@ -103,11 +103,92 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   8x7B at 8-way (one expert per rank, MoE 70% of compute) over alpha 0.78–1.43.
   Stragglers do form, but concentrating tokens makes the fused-MoE GEMM enough
   cheaper per call to cancel them. Do not re-run that ground without a reason.
+- **Strong injected skew does cost latency** (2026-10-06/07,
+  `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
+  4 NPUs and the plugin in every arm, 100-token TPOT on Mixtral rises linearly,
+  +19.9 ms (+12%) per +1x busiest-rank load, in eager and graph mode alike.
+  DeepSeek's cost is large by 3.2-3.5x but its shape below that is unresolved:
+  two eager sweeps disagree at 2.34x (+1.0% against +6.5%), by more than either
+  one's spread, so do not quote a DeepSeek threshold. Natural traffic reaches 1.09-1.25x
+  even per single prompt, where the null above still holds. The *mechanism* is
+  not established on either model, and two accounts have already been retracted.
+- **The detection screen works at ~1% of routing counted** (2026-10-07,
+  `docs/detection-findings.md`). Busiest-rank load over a window of 8 requests,
+  counting 4 MoE layers and a tenth of their tokens, flags every skew level that
+  costs latency on both models at a 1% false-alarm rate. Window length matters
+  more than how much is counted: one request at 100% counted is worse than 8 at
+  1.3%, because a single prompt is itself skewed (benign p99 1.41-1.54x). Scoring
+  a one-request window is the mistake to avoid.
+- **Whether a hot rank persists decides the cost, and the models differ**
+  (2026-10-08, `docs/router-bias-findings.md`). With `bias_target = "rotate"`
+  (rank = layer mod n_npus) Mixtral lands on the same millisecond as a fixed
+  target at matched per-layer load (176.4 against 176.6; 193.2 against 193.9),
+  while DeepSeek stays flat (174.8 ms at 3.59x) where a fixed target costs +22%
+  (212.6 ms at 3.45x). DeepSeek pays only for a persistently hot rank; Mixtral
+  pays per layer. Natural traffic rotates, so this is a second reason DeepSeek's
+  null holds and Mixtral's rests only on the skew being small.
+- **A rotating skew is invisible to the pooled statistic** (2026-10-08).
+  `imbalance.bias_target = "rotate"` biases rank (layer mod n_npus): the per-layer
+  load matches a fixed rank target to within 3% (1.71 / 2.40 / 3.53x at offsets
+  0.5 / 1 / 2) while the pooled form reads 1.05-1.08x, i.e. benign. It is the
+  matched pair for every fixed-target sweep, and the case where EPLB's
+  balancedness would report a perfectly balanced server. On Mixtral that skew
+  costs full price and a pooled screen flags 5-10% of windows against the
+  per-layer screen's 100%.
+- **One alarming window is not an alarm.** At a 1% per-window false-alarm rate
+  the screen trips on benign traffic every 324-656 requests. Requiring two
+  consecutive alarming windows gives 98-100% detection, 0-1% early firing and one
+  false alarm per 1200-1750 requests, for 16 requests of delay.
+- **Flag layers individually, not just the mean.** With a bias on 6 of 26 layers
+  the model-wide mean reads 1.40x while the biased layers read 2.58x; per-layer
+  flagging recovers exactly those 6 and names the rank. `detection.localise`.
+- **Measure natural rank load per layer.** The validation summary's
+  `rank_max_over_mean` takes the busiest rank of layer-averaged shares, which
+  lets the hot rank cancel across layers: 1.02x where the per-layer form
+  (`rank_max_over_mean_per_layer`, averaged) reads 1.14x. They agree under router
+  bias, where one rank is hot in every layer. `scripts/plot_findings.py` uses the
+  per-layer form.
+- **Set `imbalance.bias_plugin_at_zero` on every router-bias sweep.** Without it
+  `server_env` returns `{}` at level 0, so the balanced arm runs without the
+  plugin while every other point pays its per-call tensor add. Measured: 10.0 ms
+  per token on DeepSeek (+6.1%, eager, where decode is host-bound) and nothing on
+  Mixtral. It overstates DeepSeek's level-0-to-2 cost by 43%. The offset is
+  collinear with "level > 0", so an affected sweep cannot be fixed by refitting -
+  it has to be re-run.
+- **Compare like steps, never window averages.** `scripts/step_profile.py` splits
+  a trace into engine steps with their batch and token counts. Chunked prefill
+  puts prompt tokens in most steps and the mix moves with the swept parameter
+  (45% to 87% of token-time), which made window averages disagree with TPOT by
+  1.5-3x. A saturated decode step is the same length at every eager offset, and
+  the two models put their cost in different kinds of step.
+- **Step wall does not reconstruct TPOT** (-45% to +19% against the twin run).
+- **Client-side ITLs (`benchmark.save_itl`) are sound in the mean only.** Pooled
+  mean sits within 3% of TPOT, but at 3000-way concurrency 62-70% of gaps are
+  under 1 ms and arrive in bursts: the percentiles and `itl_ms_spike_share`
+  measure the client's event loop, not decode steps. They are meaningful at ~60
+  prompts. For distributions use vLLM's own `vllm:inter_token_latency_seconds`.
+- **Router-bias offsets are calibrated per model** in the `rbias-calibration`
+  runs. DeepSeek collapses to 16 live experts at offset 3 and Mixtral to 3 at
+  offset 4. Those levels vary the active expert count, not just skew.
+- **Prefill-only latency is frontend-bound.** With 3000 prompts submitted at once
+  the engine's queue sits empty 83-90% of the time on DeepSeek (38% on
+  Mixtral), so makespan and TTFT measure the client and API server. Check the
+  log's `Waiting:` counts before trusting a prefill-only latency. Traces are
+  unaffected.
 - **Alpha is relative to each model's natural CV**, so equal alpha on two models
   is equal *relative* imbalance, not equal rank load. That is why Mixtral's one
   expert per rank behaves like DeepSeek's eight.
 - **Set `benchmark.repeats` above 1.** It is the only noise floor. Three single
   points looked like effects this session and dissolved under replication.
+- **Summed collective duration is ~95% waiting, not transfer.** `collective_wait`
+  splits it: a collective ends for all ranks together, so the last arriver's
+  duration bounds the transfer and every other rank's excess is blocked time.
+  Treating the 71-78% "communication" in a step decomposition as communication
+  cost overstates it by roughly twenty times.
+- **The lowest-occupancy rank is the bottleneck, not a victim** (30 of 30 points).
+  Ranks that arrive early wait *inside* a collective kernel and so count as busy,
+  which inverts the obvious reading. One rank paces each server instance, it is a
+  different rank every run, and it is unrelated to alpha.
 - **Per-rank totals hide stragglers.** `trace_max_over_mean` sums each rank's
   kernel time, which equalises when the busiest rank differs per layer: it read
   1.004x where per-call pairing read 1.088x. Pair calls across ranks and sum the
@@ -123,7 +204,7 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 - Points record a `host_before`/`host_after` snapshot and warn when another
   process shares the NPUs. Check it before trusting a comparison: a neighbouring
   job costs ~3% TPOT and ~31% TTFT, and inflated a whole 8-NPU sweep.
-- Sweep points are served in a seeded random order (`benchmark.shuffle_points`,
+- Sweep points are served in seeded random rounds, one per repeat (`benchmark.shuffle_points`,
   on by default), so anything drifting during a run no longer aliases onto the
   swept parameter. The recorded `execution_order` says what ran when. Turn it
   off only to reproduce an older run's ordering.

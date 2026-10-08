@@ -79,8 +79,43 @@ def should_run(ctx: RunContext, stage: str, force: bool = False) -> bool:
         return False
     return True
 
+def eplb_settings(cfg: ExperimentConfig, record_path: str | None = None) -> dict[str, Any] | None:
+    """The vllm-ascend ``eplb_config`` block, or None when EPLB is off.
+
+    Kept here rather than in the serving layer because the record path is a
+    property of the run directory, which only the pipeline knows.
+    """
+    if not cfg.server.enable_eplb:
+        return None
+    settings: dict[str, Any] = {
+        "dynamic_eplb": True,
+        "eplb_policy_type": cfg.server.eplb_policy_type,
+        "num_redundant_experts": cfg.server.eplb_num_redundant_experts,
+        "expert_heat_collection_interval": cfg.server.eplb_heat_collection_interval,
+        "algorithm_execution_interval": cfg.server.eplb_algorithm_execution_interval,
+    }
+    if record_path:
+        settings["expert_map_record_path"] = record_path
+    return settings
+
+
+def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
+    """Forward iterations in one full collect-plan-apply cycle.
+
+    A run that never reaches this many iterations never rearranges, and the
+    counters are cleared at the end of each cycle rather than decayed. The
+    weight transfer adds one iteration per MoE layer, so with n_moe_layers left
+    at 0 this is a lower bound.
+    """
+    return (cfg.server.eplb_heat_collection_interval
+            + cfg.server.eplb_algorithm_execution_interval
+            + n_moe_layers)
+
+
 def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[Any],
-                       trace_dir: str | None, enable_expert_capture: bool = False) -> list[dict] | None:
+                       trace_dir: str | None, enable_expert_capture: bool = False,
+                       eplb_record_path: str | None = None,
+                       server_env: dict[str, str] | None = None) -> list[dict] | None:
     from ..core.vllm_serving import measure_vllm_throughput
 
     return asyncio.run(measure_vllm_throughput(
@@ -90,6 +125,8 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         max_new_tokens=cfg.client.max_new_tokens,
         max_model_len=cfg.server.max_model_len,
         batch_size=cfg.server.batch_size,
+        max_num_batched_tokens=cfg.server.max_num_batched_tokens,
+        enforce_eager=cfg.server.enforce_eager,
         concurrency_limit=cfg.client.concurrency_limit,
         gpu_memory_utilization=cfg.server.gpu_memory_utilization,
         n_gpus=cfg.hardware.n_npus,  # tensor-parallel size
@@ -97,12 +134,15 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         print_output=False,
         enable_expert_parallel=cfg.server.enable_expert_parallel,
         enable_prefix_caching=cfg.server.enable_prefix_caching,
-        enable_eplb=cfg.server.enable_eplb,
+        eplb=eplb_settings(cfg, eplb_record_path),
         enable_bnb=cfg.model.enable_bnb,
         enable_expert_capture=enable_expert_capture,
         trace_dir=trace_dir,
         trace_active_iterations=cfg.benchmark.trace_active_iterations,
+        trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
+        extra_env=server_env,
+        collect_itl=cfg.benchmark.save_itl,
     ))
 
 # Runs and records metrics for all pending sweep points
@@ -111,14 +151,52 @@ def _execution_order(ctx: RunContext, cfg: ExperimentConfig) -> list[dict[str, A
 
     Points are stored and plotted in parameter order, but serving them in that
     order aliases anything that drifts during a run - a neighbouring job, thermal
-    state, a cache filling - onto the swept parameter itself. Shuffling breaks
-    that correlation; the experiment seed keeps it reproducible.
+    state, a cache filling - onto the swept parameter itself.
+
+    Points are served in rounds, one per repeat, each holding every value once
+    in a random order. A single shuffle of all points can fall into blocks (all
+    of one value first), and with a shared seed every run of a grid falls into
+    the same blocks: on 2026-10-05 every run served all three bias-100 repeats
+    before any bias-0 one. Rounds keep each value spread evenly over the run.
+    The seed folds in the experiment name so runs of a grid are ordered
+    differently, and stays reproducible for a resume.
     """
     points = list(ctx.points)
     if not cfg.benchmark.shuffle_points or len(points) < 3:
         return points
-    random.Random(cfg.experiment.seed).shuffle(points)
-    return points
+    rng = random.Random(f"{cfg.experiment.seed}:{cfg.experiment.name}")
+    rounds: dict[int, list[dict[str, Any]]] = {}
+    for p in points:
+        rounds.setdefault(int(p.get("repeat") or 1), []).append(p)
+    order: list[dict[str, Any]] = []
+    for r in sorted(rounds):
+        batch = rounds[r]
+        rng.shuffle(batch)
+        order.extend(batch)
+    return order
+
+
+def _warn_if_eplb_cannot_fire(cfg: ExperimentConfig) -> None:
+    """Warn when the point is too short for EPLB to rearrange even once.
+
+    Rearrangement is on a fixed iteration counter, not a timer, and the counter
+    is cleared at the end of each cycle. A point that generates fewer forward
+    iterations than one cycle therefore collects load, never acts on it, and
+    looks exactly like an EPLB run that found nothing to fix. The decode phase
+    is about one iteration per generated token, so max_new_tokens is the bound
+    worth checking - at the default interval of 600 a 100-token generation is
+    an order of magnitude short.
+    """
+    if not cfg.server.enable_eplb:
+        return
+    cycle = eplb_cycle_iterations(cfg)
+    if cfg.client.max_new_tokens < cycle:
+        log(f"warning: EPLB needs at least {cycle} forward iterations per rearrangement "
+            f"(collect {cfg.server.eplb_heat_collection_interval} + plan "
+            f"{cfg.server.eplb_algorithm_execution_interval}, plus one per MoE layer) but each point "
+            f"generates about {cfg.client.max_new_tokens} decode iterations. EPLB will collect expert load "
+            f"and never rearrange, which is indistinguishable from finding nothing to fix. Lower "
+            f"server.eplb_heat_collection_interval or raise client.max_new_tokens.")
 
 
 def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
@@ -126,6 +204,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
+    _warn_if_eplb_cannot_fire(cfg)
     for order, p in enumerate(_execution_order(ctx, cfg)):
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
@@ -162,8 +241,15 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             log(f"{label}: warning: {warning}")
 
         trace_path = str(ctx.abspath(trace_rel)) if trace_rel else None
+        # Records what EPLB actually did, which is the only way to tell a
+        # rearrangement that never fired from one that fired and changed nothing.
+        eplb_rel = f"{label}_eplb_expert_map.json" if cfg.server.eplb_record_map else None
+        eplb_path = str(ctx.abspath(eplb_rel)) if eplb_rel else None
+        # Per-point server environment, e.g. an injected router bias.
+        server_env = p.get("server_env") or None
         results = serve_and_measure(cfg, model_path, prompts,
-                                    trace_dir=None if separate else trace_path)
+                                    trace_dir=None if separate else trace_path,
+                                    eplb_record_path=eplb_path, server_env=server_env)
 
         if results is None:
             ctx.update_point(label, status=schema.STATUS_FAILED, finished_at=utcnow(),
@@ -172,15 +258,29 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             continue
 
         profiling_error = None
+        profiled_summary = None
         if separate:
             log(f"{label}: profiling pass")
-            if serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path) is None:
+            profiled = serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
+                                         eplb_record_path=eplb_path, server_env=server_env)
+            if profiled is None:
                 # The measurements stand on their own; only the traces are lost.
                 profiling_error = f"profiling pass failed for {model_path} (see {schema.LOG_FILE})"
                 log(f"{label}: profiling pass FAILED - keeping the unprofiled measurements")
+            else:
+                # The two passes are the same configuration on the same point, so their
+                # difference is what the profiler costs - the only twinned measurement
+                # of it available, and it costs nothing extra to keep.
+                profiled_summary = summarize_requests(profiled)
 
         fields: dict[str, Any] = {"request_summary": summarize_requests(results),
                                   "host_after": host_snapshot(cfg.hardware.visible_devices)}
+        if profiled_summary is not None:
+            fields["profiled_request_summary"] = profiled_summary
+        if eplb_rel:
+            # Absent means EPLB never completed a cycle, which is a result in
+            # itself rather than a failure, so it is recorded either way.
+            fields["eplb_expert_map"] = eplb_rel if ctx.abspath(eplb_rel).exists() else None
         if profiling_error:
             fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:
@@ -195,8 +295,12 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             })
         ctx.update_point(label, status=schema.STATUS_COMPLETED, finished_at=utcnow(), **fields)
         s = fields["request_summary"]
+        cost = ""
+        if profiled_summary and s.get("tpot_ms_mean") and profiled_summary.get("tpot_ms_mean"):
+            cost = (f", profiled pass {_fmt(profiled_summary['tpot_ms_mean'])} ms "
+                    f"({100 * (profiled_summary['tpot_ms_mean'] / s['tpot_ms_mean'] - 1):+.1f}%)")
         log(f"{label}: completed ({s.get('n_requests')} requests, "
-            f"mean TTFT {_fmt(s.get('ttft_ms_mean'))} ms, mean TPOT {_fmt(s.get('tpot_ms_mean'))} ms)")
+            f"mean TTFT {_fmt(s.get('ttft_ms_mean'))} ms, mean TPOT {_fmt(s.get('tpot_ms_mean'))} ms{cost})")
 
 
 def _fmt(value: float | None) -> str:
