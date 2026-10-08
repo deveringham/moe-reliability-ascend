@@ -222,7 +222,12 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
 ))
 
 _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level.", (
-    Option("n_samples", "int", 15000, "Number of MMLU prompts sent to each checkpoint."),
+    Option("n_samples", "int", 15000, "Number of prompts sent to each checkpoint."),
+    Option("workload", "str", "", "Prompts to benchmark with: empty keeps MMLU in the order every earlier "
+           "run used; a workload spec serves another corpus or a mix of them (same grammar as "
+           "imbalance.validation_workload). Routing concentration varies by corpus - low-resource "
+           "languages reach a busiest rank well above English - so this is how a latency cost is measured "
+           "on the traffic that produces it."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
     Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
@@ -577,6 +582,12 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                               f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
         if cfg["imbalance"]["bias_layers"] and cfg["imbalance"]["method"] != "router_bias":
             errors.append("imbalance.bias_layers applies to method = 'router_bias' only")
+        if cfg["benchmark"]["workload"]:
+            from .core.data import parse_workload
+            try:
+                parse_workload(cfg["benchmark"]["workload"])
+            except ValueError as e:
+                errors.append(f"benchmark.workload: {e}")
         if cfg["imbalance"]["validation_workload"]:
             from .core.data import parse_workload
             try:

@@ -1,0 +1,62 @@
+# Does traffic that concentrates routing actually cost latency?
+#
+#   8 locales x 3 repeats = 24 points, no injected bias
+#
+# The routing capture (workload-languages) found that language moves natural
+# concentration far more than corpus does. On Mixtral, against an impact
+# threshold of 1.31x busiest-rank load per layer:
+#
+#   Yoruba   1.469    Swahili 1.346    Hindi 1.309    Arabic  1.261
+#   Japanese 1.225    Chinese 1.210    English 1.149  German  1.136
+#
+# Yoruba and Swahili clear the threshold in 99-100% of 8-request windows, where
+# every English corpus we have tried clears it in none. That is a prediction
+# about latency, made from an injected-skew curve, and nobody has measured it on
+# the traffic itself. This measures it.
+#
+# **The confound is prompt length.** The locales differ 2.7x in median input
+# tokens (English 116, Hindi 318), and longer prompts mean more prefill work -
+# which is exactly where Mixtral's injected-skew cost was found. Two things
+# separate them:
+#
+#   - By design: Hindi has the longest prompts (318 tokens) and *less*
+#     concentration than Yoruba (230 tokens). Across all eight the two variables
+#     correlate only +0.57, so a fit with both terms can tell them apart. This is
+#     why all eight run, rather than just the extremes.
+#   - Structurally, in a follow-up: chunked prefill fills each step to
+#     max_num_batched_tokens whatever the individual prompts are, so a step
+#     holding 2500+ prefill tokens is comparable across locales. A profiled run
+#     on the extremes settles it; this grid is the unprofiled headline.
+#
+# Read it as TPOT against concentration *and* median input tokens, never
+# concentration alone.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/language_latency.toml --dry-run'
+#   ./nrun -t langlat 'uv run moe-reliability grid configs/grids/language_latency.toml'
+
+[grid]
+name = "language-latency"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"model.probe" = "mistral"
+"client.max_new_tokens" = 100
+"benchmark.n_samples" = 2000
+"benchmark.repeats" = 3
+# No injected skew anywhere: the only thing that varies is the traffic.
+"imbalance.imbalance_levels" = [0]
+"imbalance.bias_plugin_at_zero" = false
+
+[matrix]
+"benchmark.workload" = [
+    "mmlu",
+    "mmmlu:DE_DE",
+    "mmmlu:ZH_CN",
+    "mmmlu:JA_JP",
+    "mmmlu:AR_XY",
+    "mmmlu:HI_IN",
+    "mmmlu:SW_KE",
+    "mmmlu:YO_NG",
+]

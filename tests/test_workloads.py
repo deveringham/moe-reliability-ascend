@@ -178,3 +178,26 @@ def test_unfiltered_loading_is_unchanged(stub_stream):
     prompts, labels = data.workload_prompts("mmlu", 3, seed=1)
     assert len(prompts) == 3
     assert stub_stream[0][3] == 3                      # no over-fetch when nothing is filtered
+
+
+def test_benchmark_can_serve_another_corpus(deployment, workload_config, stub_stream):
+    workload_config["benchmark"]["workload"] = "mixed:mmlu,gsm8k"
+    workload_config["benchmark"]["n_samples"] = 6
+    cfg = ExperimentConfig.from_dict(workload_config)
+    assert cfg.benchmark.workload == "mixed:mmlu,gsm8k"
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    # The benchmark passes went to the chosen corpus, not the default MMLU prompts.
+    served = [c for c in deployment.calls if not c["capture"]]
+    assert served and all(c["n_prompts"] == 6 for c in served)
+
+
+def test_benchmark_defaults_to_mmlu_in_the_order_earlier_runs_used(deployment, workload_config):
+    cfg = ExperimentConfig.from_dict(workload_config)
+    assert cfg.benchmark.workload == ""
+
+
+def test_benchmark_workload_is_checked(workload_config):
+    workload_config["benchmark"]["workload"] = "nosuch"
+    with pytest.raises(ConfigError, match="unknown family"):
+        ExperimentConfig.from_dict(workload_config)

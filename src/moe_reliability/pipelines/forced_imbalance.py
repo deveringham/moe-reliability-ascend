@@ -266,9 +266,17 @@ def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> N
             cache: dict[str, list] = {}
 
             def point_inputs(p):
-                # Use MMLU questions (loaded once, only if a point still needs benchmarking)
+                # Loaded once, and only if a point still needs benchmarking.
                 if "prompts" not in cache:
-                    cache["prompts"], _, _ = common.mmlu_prompts(cfg.benchmark.n_samples, cfg.experiment.seed)
+                    if cfg.benchmark.workload:
+                        from ..core.data import prompt_char_budget, workload_prompts
+
+                        cache["prompts"], _ = workload_prompts(
+                            cfg.benchmark.workload, cfg.benchmark.n_samples, cfg.experiment.seed,
+                            max_chars=prompt_char_budget(cfg.server.max_model_len))
+                    else:
+                        cache["prompts"], _, _ = common.mmlu_prompts(cfg.benchmark.n_samples,
+                                                                     cfg.experiment.seed)
                 return p.get("model_path") or checkpoint_path(cfg, p["value"]), cache["prompts"]
 
             common.benchmark_points(ctx, cfg, point_inputs, retry_failed=retry_failed)
@@ -290,7 +298,9 @@ def plan(cfg: ExperimentConfig) -> list[str]:
         records = ", per-request records kept" if cfg.imbalance.validation_save_records else ""
         lines.append(f"validate router load of every level ({n or 'six fixed'} {source} prompts, routed-expert "
                      f"capture{records})".replace("  ", " "))
-    lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} MMLU prompts"
+    corpus = cfg.benchmark.workload or "MMLU"
+    lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} "
+                 f"{corpus} prompts"
                  f"{common.profiling_note(cfg.benchmark)}")
     return lines
 

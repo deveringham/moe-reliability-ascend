@@ -277,6 +277,61 @@ def localisation_run():
     return out
 
 
+# --- B4. Where traffic sits, by corpus ----------------------------------------
+
+CORPUS_CAPTURES = ("*detection-capture", "*workload-languages")
+CORPUS_WINDOWS = (1, 8, 64)
+
+
+def _labelled_balanced_arm(pattern, model, n_experts):
+    """Per-request counts and their corpus labels, from a capture's unbiased level."""
+    for d, m in manifests(pattern):
+        if os.path.basename(d).split("_")[2] != model or m.get("status") != "completed":
+            continue
+        for p in m["points"]:
+            if float(p["value"]) != 0.0 or not p.get("validation_file"):
+                continue
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            records = [json.loads(line) for line in gzip.open(path, "rt")]
+            labels = np.array([(r.get("subject") or "unknown").split("/")[0] for r in records])
+            return os.path.basename(d), D.request_counts(records, n_experts), labels
+    return None, None, None
+
+
+def corpus_concentration(model, threshold):
+    """How concentrated each corpus's routing is, against the load that costs latency.
+
+    Homogeneous traffic is the concentrated case: a window drawn from one corpus
+    is more skewed than one drawn from a mix, because different domains favour
+    different experts and mixing averages them out. Reported per window length,
+    since a single prompt is not a serving window.
+    """
+    out = []
+    for pattern in CORPUS_CAPTURES:
+        run, counts, labels = _labelled_balanced_arm(pattern, model, MODELS[model]["n_experts"])
+        if counts is None:
+            continue
+        groups = {c: np.flatnonzero(labels == c) for c in sorted(set(labels))}
+        rows = []
+        for corpus, idx in list(groups.items()) + [("mixed (all)", np.arange(len(counts)))]:
+            if len(idx) < max(CORPUS_WINDOWS):
+                continue
+            row = {"corpus": corpus, "n": int(len(idx)),
+                   "pooled": round(D.busiest_rank(counts[idx].sum(axis=0), N_RANKS), 3)}
+            for w in CORPUS_WINDOWS:
+                loads = D.estimate_loads(counts[idx], N_RANKS, D.WindowSampler(window=w, draws=600), seed=1)
+                row[f"w{w}_p99"] = round(float(np.quantile(loads, 0.99)), 3)
+                if w == 8 and threshold:
+                    row["w8_over_threshold"] = round(float((loads >= threshold).mean()), 4)
+            rows.append(row)
+        out.append({"run": run, "threshold": threshold,
+                    "corpora": sorted(rows, key=lambda r: -r["w8_p99"])})
+    return out
+
+
 # --- B3. How quickly, and how often it cries wolf -----------------------------
 
 DELAY_SETTINGS = [D.WindowSampler(window=w, layers=4, token_fraction=0.1) for w in (8, 32, 128)]
@@ -462,6 +517,10 @@ def main(out_dir="docs"):
             continue
         store["detection"][model] = detection(model, levels,
                                               (store["impact"].get(model) or {}).get("impact_threshold"))
+    store["corpus"] = {}
+    for model in MODELS:
+        store["corpus"][model] = corpus_concentration(
+            model, (store["impact"].get(model) or {}).get("impact_threshold"))
     store["timing"] = {}
     for model in MODELS:
         lv, _ = capture_levels(model)
@@ -521,6 +580,19 @@ def main(out_dir="docs"):
                   + "  ".join(f"{lv['true_load']:.2f}x:{lv['detection_rate']:.2f}"
                               + ("*" if lv["costly"] else "") for lv in s["levels"]))
         print("   (* = load at or above this model's impact threshold)")
+    print()
+    for model, per_capture in store["corpus"].items():
+        for cap in per_capture:
+            t = cap["threshold"]
+            print(f"{model}: routing concentration by corpus ({cap['run'][:15]}), "
+                  f"impact threshold {t:.2f}x" if t else f"{model}: routing concentration by corpus")
+            print(f"   {'corpus':<16} {'n':>5} {'pooled':>7} {'w=1 p99':>8} {'w=8 p99':>8} "
+                  f"{'w=64 p99':>9} {'w=8 over':>9}")
+            for r in cap["corpora"]:
+                over = r.get("w8_over_threshold")
+                print(f"   {r['corpus']:<16} {r['n']:>5} {r['pooled']:>7.3f} {r['w1_p99']:>8.3f} "
+                      f"{r['w8_p99']:>8.3f} {r['w64_p99']:>9.3f} "
+                      f"{(f'{over:.3f}' if over is not None else '-'):>9}")
     print()
     for model, row in store["timing"].items():
         if "skipped" in row:
