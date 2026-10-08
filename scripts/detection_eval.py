@@ -244,43 +244,63 @@ def detection(model, levels, threshold):
     return {"n_requests": int(len(levels[0.0])), "settings": rows}
 
 
-LOCALISE_SAMPLING = ((None, 8, 0.1), (13, 8, 0.1), (4, 8, 0.1))
+# (layers counted, how they are chosen). The screen's own setting is 4; whether
+# those four are the same every window decides both what it can place and, as it
+# turns out, what it can see at all.
+LOCALISE_SAMPLING = ((None, "spaced"), (13, "spaced"), (4, "spaced"), (4, "random"))
+#: Windows of accumulation to report for the random-layer screen.
+ACCUMULATION_WINDOWS = (25, 50, 100, 200)
 
 
-def localisation_sampling(d, m, pools, truth, n_moe):
-    """Can the screen's own sampling say *where* the skew is, or only that it is there?
+def localisation_sampling(pools, truth, n_moe):
+    """What the screen's own sampling can see, and place, for a layer-local skew.
 
-    A layer can only be flagged if it is counted, so localisation and the screen
-    are not the same measurement: the screen reads 4 layers to stay cheap, and
-    four evenly spaced layers need not touch the affected block at all.
+    A layer can only be flagged if it is counted. Counting the same evenly spaced
+    layers every window is cheap and has a blind spot: a skew that falls between
+    them is invisible for detection, not only for localisation. Redrawing the
+    layers each window costs the same and removes it.
     """
-    rows = []
     hot = max(pools)
-    for n_layers, window, token_fraction in LOCALISE_SAMPLING:
-        idx = (np.arange(n_moe) if not n_layers or n_layers >= n_moe
-               else np.unique(np.linspace(0, n_moe - 1, n_layers).round().astype(int)))
-        rng = np.random.default_rng(0)
+    sampler_for = lambda n, how: D.WindowSampler(  # noqa: E731 - a table, not a function
+        window=8, layers=n, token_fraction=0.1, draws=400, layer_choice=how)
+    rows = []
+    for n_layers, how in LOCALISE_SAMPLING:
+        sampler = sampler_for(n_layers, how)
+        benign = D.estimate_loads(pools[0.0], N_RANKS, sampler, seed=0)
+        alarm = D.threshold_at_fpr(benign, 0.01)
+        detected = float((D.estimate_loads(pools[hot], N_RANKS, sampler, seed=1) >= alarm).mean())
+        counted = (n_layers or n_moe) / n_moe * sampler.token_fraction
+        visible = (len(truth) if how == "random" or not n_layers
+                   else len(truth & set(sampler._layer_index(n_moe).tolist())))
+        rows.append({"layers_counted": n_layers or n_moe, "of_layers": n_moe, "layer_choice": how,
+                     "assignment_fraction": round(counted, 4),
+                     "biased_layers_reachable": visible, "biased_layers": len(truth),
+                     "detection_rate": round(detected, 3)})
+    return rows
 
-        def per_layer(pool, idx=idx, rng=rng, window=window, token_fraction=token_fraction):
-            chosen = rng.choice(len(pool), min(window, len(pool)), replace=False)
-            counts = pool[chosen][:, idx].sum(axis=0)
-            if token_fraction < 1.0:
-                counts = rng.binomial(counts.astype(np.int64), token_fraction).astype(float)
-            return D.per_layer_load(counts, N_RANKS)[0]
 
-        benign = np.concatenate([per_layer(pools[0.0]) for _ in range(60)])
-        flag_at = float(np.quantile(benign, 0.99))
-        recall, precision = [], []
-        for _ in range(60):
-            flagged = {int(idx[i]) for i in np.flatnonzero(per_layer(pools[hot]) >= flag_at)}
-            recall.append(len(flagged & truth) / len(truth))
-            precision.append(len(flagged & truth) / len(flagged) if flagged else 1.0)
-        rows.append({"layers_counted": len(idx), "of_layers": n_moe, "window": window,
-                     "token_fraction": token_fraction,
-                     "assignment_fraction": round(len(idx) / n_moe * token_fraction, 4),
-                     "biased_layers_visible": len(truth & set(idx.tolist())), "biased_layers": len(truth),
-                     "recall": round(float(np.mean(recall)), 3),
-                     "precision": round(float(np.mean(precision)), 3)})
+def localisation_accumulation(pools, truth, n_moe):
+    """Localising without ever counting more than the screen's few layers at once.
+
+    With the layers redrawn each window, every layer eventually gets its own
+    evidence, so the skew can be placed by accumulating a per-layer mean rather
+    than by widening the window.
+    """
+    hot = max(pools)
+    sampler = D.WindowSampler(window=8, layers=4, token_fraction=0.1, layer_choice="random")
+    rows = []
+    for windows in ACCUMULATION_WINDOWS:
+        base, _ = D.accumulate_layers(pools[0.0], N_RANKS, sampler, windows=windows, seed=0)
+        observed, seen = D.accumulate_layers(pools[hot], N_RANKS, sampler, windows=windows, seed=1)
+        usable = ~np.isnan(base) & ~np.isnan(observed)
+        if not usable.any():
+            continue
+        flag_at = float(np.nanquantile(base[usable], 0.99))
+        flagged = {int(i) for i in np.flatnonzero(usable & (observed >= flag_at))}
+        rows.append({"windows": windows, "requests": windows * sampler.window,
+                     "layers_seen": int((seen > 0).sum()), "of_layers": n_moe,
+                     "recall": round(len(flagged & truth) / len(truth), 3),
+                     "precision": round(len(flagged & truth) / len(flagged), 3) if flagged else 1.0})
     return rows
 
 
@@ -316,7 +336,8 @@ def localisation_run():
                            "consistent_rank_share": round(found["consistent_rank_share"], 3)})
         entry = {"bias_target": cfg.get("bias_target"), "bias_layers": sorted(biased), "points": points}
         if pools and 0.0 in pools and len(pools) > 1:
-            entry["sampling"] = localisation_sampling(d, m, pools, truth_idx, n_moe)
+            entry["sampling"] = localisation_sampling(pools, truth_idx, n_moe)
+            entry["accumulation"] = localisation_accumulation(pools, truth_idx, n_moe)
         out[os.path.basename(d)] = entry
     return out
 
@@ -661,9 +682,13 @@ def main(out_dir="docs"):
                   f"flagged {len(p['flagged_layers'])} layers (recall {p['recall']}, precision {p['precision']}), "
                   f"rank {p['flagged_rank']}")
         for r in row.get("sampling", []):
-            print(f"   counting {r['layers_counted']:>2}/{r['of_layers']} layers "
-                  f"({r['assignment_fraction']:>5.1%} of routing): {r['biased_layers_visible']}/"
-                  f"{r['biased_layers']} biased layers visible, recall {r['recall']:.2f}, "
+            print(f"   counting {r['layers_counted']:>2}/{r['of_layers']} layers, {r['layer_choice']:<7} "
+                  f"({r['assignment_fraction']:>5.1%} of routing): "
+                  f"{r['biased_layers_reachable']}/{r['biased_layers']} biased layers reachable, "
+                  f"detection {r['detection_rate']:.2f}")
+        for r in row.get("accumulation", []):
+            print(f"   accumulating {r['windows']:>3} random-layer windows ({r['requests']} requests): "
+                  f"{r['layers_seen']}/{r['of_layers']} layers seen, recall {r['recall']:.2f}, "
                   f"precision {r['precision']:.2f}")
     print()
     for model, kinds in store["stage2_step_time"].items():

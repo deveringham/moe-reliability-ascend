@@ -993,57 +993,130 @@ def fig_detection_cost(out, store):
                   xy=(0.97, 0.10), xycoords="axes fraction", ha="right", va="bottom",
                   color=INK3, fontsize=8.5, linespacing=1.3)
 
-    # Right: a skew the model-wide average hides, found layer by layer.
+    # Right: whether the screen's own sampling can place a layer-local skew.
     loc = (data.get("localisation") or {})
     run = next(iter(loc.values()), None)
-    style(right, "MoE layer", "Busiest rank in that layer")
-    right.set_title("Where - but only with every layer counted", color=INK, fontsize=11,
-                    fontweight="bold", loc="left")
-    if run and run["points"]:
-        import gzip as _gz
-        hit = [p for p in run["points"] if p["level"] == max(q["level"] for q in run["points"])][0]
-        for d, m in manifests("*detection-localisation"):
-            for p in m["points"]:
-                if float(p["value"]) != hit["level"] or not p.get("validation_file"):
-                    continue
-                f = json.load(_gz.open(os.path.join(d, p["validation_file"])))
-                per_layer = np.array(f["rank_max_over_mean_per_layer"])
-                flagged = set(hit["expected_layers"])
-                colours = [MODEL_COLOUR["deepseek-v2"] if i in flagged else GRID
-                           for i in range(len(per_layer))]
-                right.bar(range(len(per_layer)), per_layer, 0.8, color=colours, zorder=3)
-                right.axhline(hit["mean_load"], color=INK3, ls="--", lw=1.4, zorder=4)
-                explain(right, f"model-wide average {hit['mean_load']:.2f}x\n"
-                               f"- near the benign floor",
-                               xy=(len(per_layer) - 0.5, hit["mean_load"]), xytext=(-4, 8),
-                               textcoords="offset points", ha="right", va="bottom", color=INK2,
-                               fontsize=8.5, linespacing=1.3)
-                explain(right, f"the {len(flagged)} biased layers, all found\n"
-                               f"- but only when every layer is counted",
-                               xy=(np.mean(sorted(flagged)), per_layer[sorted(flagged)].max()),
-                               xytext=(0, 12), textcoords="offset points", ha="center", va="bottom",
-                               color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold",
-                               linespacing=1.3)
-                rows.append({"localisation_layers": sorted(flagged),
-                             "mean_load": hit["mean_load"], "max_layer": hit["max_layer_load"]})
-                break
-        right.set_ylim(0, 4.4)
-    heading(fig, "The detector: what it catches, what it costs, and what it takes to localise",
+    style(right, "", "Detection of a skew confined to 6 of 26 layers")
+    right.set_title("Fixed layers have a blind spot", color=INK, fontsize=11, fontweight="bold", loc="left")
+    sampling = (run or {}).get("sampling") or []
+    if sampling:
+        labels, values, colours = [], [], []
+        for r in sampling:
+            how = "every layer" if r["layers_counted"] == r["of_layers"] else \
+                f"{r['layers_counted']} layers,\n{r['layer_choice']}"
+            labels.append(f"{how}\n{r['assignment_fraction']:.1%} counted")
+            values.append(r["detection_rate"])
+            colours.append(GRID if r["detection_rate"] < 0.1 else MODEL_COLOUR["deepseek-v2"])
+        right.bar(range(len(values)), values, 0.62, color=colours, zorder=3)
+        for i, r in enumerate(sampling):
+            right.annotate(f"{r['detection_rate']:.2f}", xy=(i, r["detection_rate"]), xytext=(0, 4),
+                           textcoords="offset points", ha="center", color=INK, fontsize=9,
+                           fontweight="bold")
+            right.annotate(f"{r['biased_layers_reachable']}/{r['biased_layers']} reachable",
+                           xy=(i, 0.03), ha="center", va="bottom", color=INK2, fontsize=8)
+        right.set_xticks(range(len(labels)), labels, fontsize=8)
+        right.tick_params(axis="x", labelcolor=INK2)
+        right.set_ylim(0, 1.15)
+        right.set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
+    accum = (run or {}).get("accumulation") or []
+    if accum:
+        best = next((a for a in accum if a["recall"] >= 1.0 and a["precision"] >= 1.0), accum[-1])
+        explain(right, f"random layers also place it:\nrecall and precision {best['recall']:.0%} after "
+                       f"{best['requests']} requests", xy=(len(sampling) - 1, 1.12), ha="right", va="top",
+                color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold", linespacing=1.3)
+
+    heading(fig, "The detector: what it costs, and why the layers must be sampled at random",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
     caption(fig, 0.008, 0.905,
              "Left: each point is one sampling setting; k is how many consecutive alarming windows are "
              "required before raising one.",
              color=INK2, fontsize=9.5)
     caption(fig, 0.008, 0.015,
-             "Requiring three consecutive windows improves detection and cost at once, because a screen "
-             "that cries wolf keeps paying for confirmation.\nLocalising is a separate, later step: a layer "
-             "can only be flagged if it is counted, and the screen's four layers miss this block entirely "
-             "(recall 0.00).\nAt full layer coverage a tenth of the tokens still suffices, so it costs about "
-             "10% of routing, not 100% - but only while it runs.",
+             "Left: requiring three consecutive windows improves detection and cost at once, because a "
+             "screen that cries wolf keeps paying for confirmation.\nRight: a layer can only be flagged if "
+             "it is counted. Counting the same four layers every window misses a skew that falls between "
+             "them - for detection, not\nonly for localisation. Redrawing them each window costs the same "
+             "and, accumulated over windows, also says which layers are affected.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "detection_cost.png"), dpi=200, facecolor=SURFACE)
     store["detection_cost"] = rows
+
+
+BATCH_SWEEP = "*decode-ridge2-*"
+#: Mixtral routes top-2 of 8 experts, so a decode step's tokens per expert is
+#: batch x 2 / 8. The 910B3's GEMM ridge point is around 200 tokens per expert.
+TOP_K, N_EXPERTS, RIDGE = 2, 8, 200
+
+
+def achieved_batch(run_dir):
+    """The largest decode batch the engine actually ran, from its own log.
+
+    max_num_seqs is a cap, not a promise: sequences enter only as fast as prefill
+    admits them and leave after their generation, so the batch settles wherever
+    those balance. A point read at its configured batch rather than its achieved
+    one is not the measurement it claims to be.
+    """
+    path = os.path.join(run_dir, "logs", "run.log")
+    if not os.path.exists(path):
+        return None
+    seen = [int(n) for n in re.findall(r"Running: (\d+) reqs", open(path, errors="replace").read())]
+    return max(seen) if seen else None
+
+
+def fig_batch(out, store):
+    """Does the same skew cost more when a decode step carries more tokens per expert?"""
+    points = []
+    for d, m in manifests(BATCH_SWEEP):
+        by: dict[float, list[float]] = {}
+        for p in m["points"]:
+            if p.get("request_summary"):
+                by.setdefault(float(p["value"]), []).append(p["request_summary"]["tpot_ms_mean"])
+        batch = achieved_batch(d) or m["config"]["server"]["batch_size"]
+        if 0.0 not in by or len(by) < 2:
+            continue
+        hot = max(by)
+        base, skew = np.array(by[0.0]), np.array(by[hot])
+        rel = np.hypot(base.std(ddof=1) / base.mean(), skew.std(ddof=1) / skew.mean())
+        points.append({"configured": m["config"]["server"]["batch_size"], "achieved": batch,
+                       "tokens_per_expert": batch * TOP_K // N_EXPERTS,
+                       "balanced_ms": round(float(base.mean()), 1), "skewed_ms": round(float(skew.mean()), 1),
+                       "cost_pct": round(100 * (skew.mean() / base.mean() - 1), 2),
+                       "cost_sd_pct": round(100 * rel * skew.mean() / base.mean(), 2)})
+    if len(points) < 2:
+        return
+    points.sort(key=lambda r: r["tokens_per_expert"])
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.0), facecolor=SURFACE)
+    style(ax, "Tokens per expert in a decode step", "Cost of the same injected skew (% of TPOT)",
+          "A bigger decode batch makes the same imbalance cost more",
+          "Mixtral 8x7B, 4 NPUs, skew held at 2.6x busiest rank. 3 repeats per point; the batch is the one "
+          "the engine reached, not the one it was asked for.")
+    x = [r["tokens_per_expert"] for r in points]
+    y = [r["cost_pct"] for r in points]
+    e = [r["cost_sd_pct"] for r in points]
+    if max(x) > RIDGE > min(x):
+        ax.axvspan(RIDGE, max(x) * 1.25, color="#f0efec", zorder=0)
+        explain(ax, "arithmetic-bound\n(above the GEMM ridge)", xy=(RIDGE * 1.05, 0.04),
+                xycoords=("data", "axes fraction"), ha="left", va="bottom", color=INK3, fontsize=8.5,
+                linespacing=1.3)
+    ax.errorbar(x, y, yerr=e, ls="-", marker="o", ms=7, lw=2, capsize=4, elinewidth=1,
+                color=MODEL_COLOUR["mixtral"], mec=SURFACE, mew=1.5, zorder=3)
+    for r in points:
+        ax.annotate(f"{r['achieved']} seqs", xy=(r["tokens_per_expert"], r["cost_pct"]), xytext=(0, 13),
+                    textcoords="offset points", ha="center", color=INK2, fontsize=8.5)
+    ax.set_xlim(0, max(x) * 1.25)
+    ax.set_ylim(0, max(np.array(y) + np.array(e)) * 1.3)
+    caption(fig, 0.012, 0.015,
+            f"The clean step is {x[0]} to {x[1]} tokens per expert, where the cost roughly doubles and the "
+            f"intervals do not overlap ({y[0]:+.1f}% against {y[1]:+.1f}%).\nMost of the growth happens "
+            "below the ridge rather than across it, so a bigger batch costing more is not simply the GEMM "
+            "becoming arithmetic-bound.\nThe largest point is the least certain: its balanced arm scatters "
+            f"{[r['cost_sd_pct'] for r in points][-1]:.0f} percentage points.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "batch_size.png"), dpi=200, facecolor=SURFACE)
+    store["batch_size"] = points
 
 
 def fig_timeline(out, store):
@@ -1148,6 +1221,7 @@ def main(out="docs/figures", also_bare=True):
     if list(manifests(ROTATING["mixtral"])):
         fig_rotating(out, store)
     fig_regimes(out, store)
+    fig_batch(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
         fig_detection_cost(out, store)
@@ -1160,7 +1234,7 @@ def main(out="docs/figures", also_bare=True):
             main(os.path.join(out, "bare"), also_bare=False)
         finally:
             BARE = False
-    print(f"wrote {out}/regimes.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/regimes.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

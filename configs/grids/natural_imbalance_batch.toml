@@ -1,0 +1,64 @@
+# Does imbalance at *natural* strength start to cost something at a large batch?
+#
+#   6 batch sizes x 3 levels x 3 repeats = 54 points
+#
+# decode_batch_ridge2 showed that a strong injected skew (2.62x busiest rank)
+# costs more at a larger decode batch: +8.1% at 256 sequences against +14.8% at
+# 512. That says batch size amplifies whatever imbalance is present. It does not
+# say that a bigger batch makes *ordinary* traffic start to hurt, because 2.62x
+# is far above anything natural traffic produces.
+#
+# This asks the question that matters for a deployment. The three levels sit in
+# and just above the natural range rather than far outside it:
+#
+#   level 0      1.18x busiest rank   the model's own routing, unbiased
+#   level 0.25   1.24x                a little above natural
+#   level 0.5    1.38x                the lowest level that cost anything at 4 NPUs
+#
+# The quantity of interest is the *slope* of cost against load within that
+# range, measured separately at each batch size. A slope near zero at small
+# batch that turns positive at large batch would mean the null is an artefact of
+# the operating point, and that a large-batch deployment has to care about
+# imbalance that a small-batch one can ignore.
+#
+# Reaching the batch. max_num_seqs is a cap, not a promise: KV memory allows
+# roughly 4700 sequences here, so what actually bounds the running batch is how
+# fast prefill admits them against how fast they finish. The client's in-flight
+# limit is raised with the batch so it is never the constraint, and n_samples
+# scales with it so every point serves about eight waves whatever its size.
+#
+# **Verify the achieved batch for every point before reading it**:
+#   grep -o "Running: [0-9]* reqs" <run>/logs/run.log | sort -n -k2 | tail -1
+# Points whose achieved batch is far below their setting are measuring the same
+# operating point as a smaller one, which is how the first attempt at this went
+# wrong. Above ~2000 the client's own event loop becomes a suspect too: at
+# 3000-way concurrency it, not the engine, set the pace (docs/router-bias-findings.md).
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/natural_imbalance_batch.toml --dry-run'
+#   ./nrun -t natbatch 'uv run moe-reliability grid configs/grids/natural_imbalance_batch.toml'
+
+[grid]
+name = "natural-batch"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"model.probe" = "mistral"
+"client.max_new_tokens" = 100
+"server.gpu_memory_utilization" = 0.85
+"server.max_num_batched_tokens" = 4096
+"benchmark.repeats" = 3
+"imbalance.imbalance_levels" = [0, 0.25, 0.5]
+"imbalance.bias_plugin_at_zero" = true
+
+[matrix]
+# batch, the client's in-flight limit, and enough prompts for ~8 waves at that size.
+"server.batch_size,client.concurrency_limit,benchmark.n_samples" = [
+    [64, 128, 512],
+    [128, 256, 1024],
+    [256, 512, 2048],
+    [512, 768, 4096],
+    [1024, 1400, 8192],
+    [2048, 2600, 16384],
+]
