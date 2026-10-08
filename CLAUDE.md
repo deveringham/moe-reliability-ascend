@@ -119,12 +119,22 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   more than how much is counted: one request at 100% counted is worse than 8 at
   1.3%, because a single prompt is itself skewed (benign p99 1.41-1.54x). Scoring
   a one-request window is the mistake to avoid.
+- **Whether a hot rank persists decides the cost, and the models differ**
+  (2026-10-08, `docs/router-bias-findings.md`). With `bias_target = "rotate"`
+  (rank = layer mod n_npus) Mixtral lands on the same millisecond as a fixed
+  target at matched per-layer load (176.4 against 176.6; 193.2 against 193.9),
+  while DeepSeek stays flat (174.8 ms at 3.59x) where a fixed target costs +22%
+  (212.6 ms at 3.45x). DeepSeek pays only for a persistently hot rank; Mixtral
+  pays per layer. Natural traffic rotates, so this is a second reason DeepSeek's
+  null holds and Mixtral's rests only on the skew being small.
 - **A rotating skew is invisible to the pooled statistic** (2026-10-08).
   `imbalance.bias_target = "rotate"` biases rank (layer mod n_npus): the per-layer
   load matches a fixed rank target to within 3% (1.71 / 2.40 / 3.53x at offsets
   0.5 / 1 / 2) while the pooled form reads 1.05-1.08x, i.e. benign. It is the
   matched pair for every fixed-target sweep, and the case where EPLB's
-  balancedness would report a perfectly balanced server.
+  balancedness would report a perfectly balanced server. On Mixtral that skew
+  costs full price and a pooled screen flags 5-10% of windows against the
+  per-layer screen's 100%.
 - **One alarming window is not an alarm.** At a 1% per-window false-alarm rate
   the screen trips on benign traffic every 324-656 requests. Requiring two
   consecutive alarming windows gives 98-100% detection, 0-1% early firing and one

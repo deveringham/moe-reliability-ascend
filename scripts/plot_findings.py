@@ -490,6 +490,71 @@ def fig_impact_map(out, store):
     store["impact_map"] = rows
 
 
+ROTATING = {"deepseek-v2": "*rotating-skew-000", "mixtral": "*rotating-skew-001"}
+
+
+def per_layer_loads(pattern):
+    """{level: per-layer busiest-rank load} from a run's own validation files."""
+    (d, m), = list(manifests(pattern))
+    out = {}
+    for p in m["points"]:
+        if p.get("validation_file"):
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+            out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
+    return out
+
+
+def fig_rotating(out, store):
+    """Does it matter which rank is hot, or only how hot each layer is?"""
+    cal = calibration()
+    fig, axes = plt.subplots(1, 2, figsize=(10.6, 5.0), facecolor=SURFACE, sharey=True)
+    rows = []
+    for ax, model in zip(axes, ("mixtral", "deepseek-v2")):
+        style(ax, "Load on the busiest rank, per layer",
+              "Time per output token (ms)" if ax is axes[0] else "")
+        ax.set_title(MODEL_LABEL[model], color=INK, fontsize=11, fontweight="bold", loc="left")
+        # The fixed target is the reference, so it is drawn first and solid.
+        for pattern, label, ls, marker, fill in ((EAGER[0] if model == "deepseek-v2" else EAGER[1],
+                                                  "one fixed rank", "-", "o", None),
+                                                 (ROTATING[model], "rotating", "--", "s", SURFACE)):
+            if not list(manifests(pattern)):
+                continue
+            _, by = sweep(pattern)
+            loads = per_layer_loads(pattern) if label == "rotating" else {
+                lv: cal[model][lv][0] for lv in by if lv in cal[model]}
+            full = max(n for _, n in cal[model].values())
+            levels = [lv for lv in sorted(by) if lv in loads
+                      and (label == "rotating" or cal[model][lv][1] == full)]
+            x = [loads[lv] for lv in levels]
+            y = [float(np.mean(by[lv])) for lv in levels]
+            e = [float(np.std(by[lv], ddof=1)) for lv in levels]
+            ax.errorbar(x, y, yerr=e, ls=ls, marker=marker, ms=6, lw=2, capsize=3, elinewidth=1,
+                        color=MODEL_COLOUR[model], mfc=fill or MODEL_COLOUR[model], mew=1.8,
+                        mec=MODEL_COLOUR[model] if fill else SURFACE, zorder=3, label=label)
+            # Direct-label the endpoint so neither line can be mistaken for the other.
+            ax.annotate(label, xy=(x[-1], y[-1]), xytext=(-6, 12 if label == "rotating" else -16),
+                        textcoords="offset points", ha="right", color=MODEL_COLOUR[model], fontsize=9,
+                        fontweight="bold")
+            rows.append({"model": model, "skew": label, "load": [round(v, 3) for v in x],
+                         "tpot_ms": [round(v, 1) for v in y], "sd": [round(v, 1) for v in e]})
+        ax.set_xlim(1.0, 3.9)
+    axes[0].set_ylim(150, 220)
+    fig.suptitle("Mixtral does not care which rank is hot; DeepSeek only pays when one always is",
+                 color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    fig.text(0.008, 0.905,
+             "Rotating biases rank (layer mod 4), so each layer is skewed as hard as a fixed target makes it "
+             "but no rank is hot throughout.",
+             color=INK2, fontsize=9.5)
+    fig.text(0.008, 0.015,
+             "At matched per-layer load Mixtral lands on the same millisecond either way (176.4 against 176.6; "
+             "193.2 against 193.9), while DeepSeek\nstays flat when the skew rotates and rises 22% when it does "
+             "not. Natural traffic rotates, so this is a second reason DeepSeek's null holds.",
+             color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.savefig(os.path.join(out, "rotating_skew.png"), dpi=200, facecolor=SURFACE)
+    store["rotating"] = rows
+
+
 def fig_detection(out, store):
     """What the screen catches, against what it costs to count."""
     detection = json.load(open(os.path.join("docs", "detection.json")))
@@ -555,10 +620,12 @@ def main(out="docs/figures"):
     fig_instrument(out, store)
     fig_steps(out, store)
     fig_calibration(out, store)
+    if list(manifests(ROTATING["mixtral"])):
+        fig_rotating(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/impact_map.png, detection.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/impact_map.png, detection.png, rotating_skew.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

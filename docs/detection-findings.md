@@ -35,6 +35,13 @@ layers, precision and recall 1.0, and names rank 2**, at both skew levels, with
 no layer flagged in the balanced arm. A detector that reports only a mean would
 have missed this.
 
+**A rotating skew is the case that decides the statistic.** Biasing a different
+rank in each layer gives the same per-layer skew as a fixed target but leaves the
+pooled statistic at 1.05-1.08x, i.e. benign. On Mixtral that skew costs full
+price in latency and a pooled screen flags 5-10% of windows against the per-layer
+screen's 100%. On DeepSeek the same skew costs nothing - so load alone cannot
+tell a costly skew from a free one, which is what stage 2 is for (C3).
+
 **Two outputs that come free with the counts and matter more than the headline
 number:** which layers carry the skew, and whether one rank carries it in all of
 them. In natural traffic the busiest rank leads only 34-35% of layers, against
@@ -180,15 +187,30 @@ natural traffic (1.04x against 1.10x) and a rank hot in every layer was the one
 case the two agreed on. Here is the opposite extreme, constructed: a skew as
 strong as anything we have injected, which a pooled monitor cannot see at all.
 
-Whether it *costs* anything is a separate question, and the one the
-`rotating-skew` grid answers. Either answer is useful:
+**It does cost, on Mixtral, and the pooled screen cannot see it.** The
+`rotating-skew` sweeps ([router-bias-findings.md](router-bias-findings.md))
+measured both models against the fixed-target sweeps at matched per-layer load:
 
-- If a rotating skew is cheap while a fixed one is expensive, then natural
-  imbalance is free partly **because** it rotates, not only because it is small -
-  and a screen can safely use the cheaper pooled statistic after all.
-- If it costs the same, the cost is per layer and the identity of the hot rank
-  does not matter - which would contradict the straggler picture and make the
-  per-layer statistic mandatory.
+| | Rotating costs | Fixed costs | Pooled screen detects | Per-layer screen detects |
+|---|---|---|---|---|
+| Mixtral, 2.6x | **193.2 ms** | 193.9 ms | **0.05** | **1.00** |
+| Mixtral, 1.75x | 176.4 ms | 176.6 ms | 0.10 | 1.00 |
+| DeepSeek, 3.6x | 174.8 ms (flat) | 212.6 ms | 1.00 | 1.00 |
+
+- **On Mixtral a rotating skew costs exactly what a fixed one costs** - the same
+  millisecond at matched load - **and a pooled screen flags 5-10% of windows.**
+  That is the case the per-layer statistic exists for: a real, full-price latency
+  cost that the shipped EPLB statistic reports as a balanced server.
+- **On DeepSeek a rotating skew costs nothing**, so the per-layer screen's 100%
+  detection there is an alarm on something harmless. The pooled screen also fires
+  (its balanced distribution is narrow enough that 1.08x clears a 1.04x alarm),
+  but only by a hair.
+
+**This is the clearest argument for stage 2.** Load alone cannot separate the
+Mixtral case, which costs full price, from the DeepSeek case, which costs
+nothing, because their *load* is the same. Only relating the flagged load to step
+time distinguishes them, and the screen should be read as "look here", never as
+"this is costing you".
 
 ## C4. How fast it fires, and how often it cries wolf
 
@@ -309,10 +331,10 @@ corpus does not transfer exactly to another.
    standing skew, which is the easy case. The plugin would have to read its bias
    from a tensor updated in place - which also keeps graph mode working, since
    the vector is allocated once and never replaced - to script a ramp.
-3. **Localisation under rotating skew.** The 6-layer test is a persistent skew.
-   `rotating-skew` captures per-request routing at each rotating level, so the
-   screen can be scored on it: the per-layer form should catch it and the pooled
-   form should miss it entirely (C3).
+3. **Stage 2 on a rotating skew.** C3 shows load alone cannot separate Mixtral's
+   costly rotating skew from DeepSeek's free one. The step tables that would test
+   whether stage 2 can are not captured for the rotating sweeps, which were not
+   profiled.
 4. **A balanced baseline per profiled run**, so stage 3 can attribute rather
    than coincide.
 5. **Time-varying skew.** Every measurement here is a server whose bias is fixed

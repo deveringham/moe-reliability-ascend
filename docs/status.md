@@ -41,6 +41,15 @@ skew that costs anything (Mixtral, +3.3% at 1.38x), so the null above is a
 statement about realistic skew, not a property of the stack.
 `docs/figures/impact_map.png` puts both on one axis.
 
+**Update 2026-10-08: whether the hot rank persists decides the cost, and the two
+models differ.** A rotating skew - a different rank hot in each layer, which is
+the shape natural traffic has - costs Mixtral exactly what a fixed one costs at
+matched per-layer load, and costs DeepSeek nothing where a fixed one costs +22%.
+So DeepSeek pays only for a persistently hot rank while Mixtral pays per layer.
+The rotating case is also where the pooled load statistic fails completely: it
+reads 1.05-1.08x, i.e. benign, for a skew that costs Mixtral +17%
+(`docs/figures/rotating_skew.png`).
+
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
 expert parallelism, and Mixtral 8x7B (8 experts, top-2) at 8-way, over router
 bias 0-100 and effective alpha 0.75-1.44. Single node, 8x Ascend 910B3.

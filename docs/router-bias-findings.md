@@ -489,6 +489,54 @@ calibrate to 2.67x, 2.95x and 3.21x, inside the gap the controlled sweep left:
   repeats in 2.3-3.5x, and an explanation for why eager DeepSeek's repeat spread
   is 2-5 ms in one run and 9-14 ms in another of the same configuration.
 
+## Rotating skew: the two models part company (2026-10-08)
+
+`rotating-skew` biases rank *(layer mod 4)* instead of one fixed rank, so every
+layer is skewed as hard as before but no rank is hot throughout. Its calibration
+matches the fixed target's per-layer load to within 3% (1.73 / 2.46 / 3.59x
+against 1.66 / 2.35 / 3.45x), which makes the two sweeps a matched pair: same
+per-layer skew, opposite rank consistency. TPOT mean, ms, aligned on per-layer
+load:
+
+| | Rotating | | Fixed | |
+|---|---|---|---|---|
+| **Mixtral** | 1.09x | **171.7 ± 6.8** | 1.18x | **165.5 ± 1.3** |
+| | 1.35x | 167.7 ± 2.0 | 1.38x | 171.0 ± 2.0 |
+| | 1.75x | **176.4 ± 3.5** | 1.76x | **176.6 ± 0.5** |
+| | 2.63x | **193.2 ± 2.4** | 2.62x | **193.9 ± 1.1** |
+| **DeepSeek** | 1.06x | 165.7 ± 12.9 | 1.14x | 174.0 ± 4.2 |
+| | 1.73x | 165.4 ± 9.3 | 1.66x | 171.8 ± 1.6 |
+| | 2.46x | 177.3 ± 10.4 | 2.34x | 175.8 ± 2.3 |
+| | 3.59x | **174.8 ± 5.5** | 3.45x | **212.6 ± 3.7** |
+
+- **On Mixtral, rotation changes nothing.** At matched load the two sweeps land
+  on the same millisecond: 176.4 against 176.6 at ~1.75x, and 193.2 against
+  193.9 at ~2.6x. Mixtral's cost is a property of the skew in each layer, and
+  which rank carries it does not matter.
+- **On DeepSeek, rotation removes the cost.** A rotating skew is flat across the
+  whole range (165.7, 165.4, 177.3, 174.8; slope +4.4 ms per +1x, t = 1.5) where
+  a fixed one reaches +22% at the same load. At 3.59x rotating costs 174.8 ms
+  against the fixed sweep's 212.6 ms at 3.45x, with comparable balanced points.
+- **So DeepSeek's cost needs a persistently hot rank and Mixtral's does not.**
+  That fits where each model's cost was already localised: DeepSeek's in
+  below-full-batch decode steps, where one rank being late at every layer
+  accumulates down the stack, and Mixtral's in prefill-carrying steps, where each
+  layer's own GEMM is on the critical path whatever rank it sits on.
+- **Mixtral's slope comparison is the weaker form of this.** Fitted over all
+  levels it reads +15.9 ms per +1x rotating against +19.9 fixed, which looks like
+  a reduction; the whole difference is the rotating run's noisy balanced point
+  (171.7 ± 6.8 against 165.5 ± 1.3). The matched-load comparison above is the one
+  to trust.
+- **DeepSeek's rotating run is noisy** (repeat sd 5-13 ms, 22 of 24 snapshots
+  flag a neighbour) and its balanced point carries one outlier at 150.9 ms.
+  Against medians the result is unchanged: 172.4 ms balanced, 172.9 ms at 3.59x.
+
+**What this means for the null.** Natural traffic rotates - the busiest rank
+leads 34-35% of layers. On DeepSeek that is a second reason its natural imbalance
+is free: not only is the skew small, it is also the kind that costs nothing even
+when large. On Mixtral that reasoning does not hold, and only the smallness
+protects it.
+
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
 `benchmark.save_itl` records the gap between consecutive streamed chunks of each
@@ -570,6 +618,8 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261007-100316` rbias-calibration | Offsets 1.25 / 1.5 / 1.75 on DeepSeek |
 | `20261007-101356`, `-112132` rbias-graph-threshold-000, -001 | Controlled graph sweep, DeepSeek and Mixtral |
 | `20261007-123441` rbias-graph-threshold-002 | Eager DeepSeek threshold sweep, quiet node |
+| `20261007-202156` rotate-calibration | Rotating bias: per-layer load against the fixed target's |
+| `20261007-203534`, `-214459` rotating-skew-000, -001 | Rotating skew, DeepSeek and Mixtral, 4 offsets x 3 |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
