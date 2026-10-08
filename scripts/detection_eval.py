@@ -186,7 +186,11 @@ def benign(model, counts, labels, threshold):
 # --- B2. Positives: what a window reads at a known skew -----------------------
 
 CAPTURES = {"deepseek-v2": "*detection-capture", "mixtral": "*detection-capture"}
-SCREEN = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600)
+# The recommended configuration. Layers are redrawn each window: on a skew that
+# touches every layer that costs almost nothing (0.68 against 0.72 at Mixtral's
+# lowest costly level), and on one confined to a few layers it is the difference
+# between seeing it and not (0.66 against 0.01).
+SCREEN = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600, layer_choice="random")
 
 
 @functools.lru_cache(maxsize=None)
@@ -219,7 +223,7 @@ def detection(model, levels, threshold):
     if 0.0 not in levels or len(levels) < 2:
         return {"skipped": "capture has no balanced arm to score against"}
     rows, by_setting = [], []
-    for sampler in SAMPLERS:
+    for sampler in SAMPLERS + [SCREEN]:
         benign = D.estimate_loads(levels[0.0], N_RANKS, sampler, seed=0)
         # The alarm level is set on benign traffic, not on the impact threshold:
         # a screen is calibrated where it runs, and the impact curve only says
@@ -238,6 +242,7 @@ def detection(model, levels, threshold):
                               "costly": None if threshold is None else bool(truth >= threshold)})
         by_setting.append({"window": sampler.window, "layers": sampler.layers,
                            "token_fraction": sampler.token_fraction,
+                           "layer_choice": sampler.layer_choice,
                            "assignment_fraction": round(sampler.cost(levels[0.0].shape[1]).assignment_fraction, 4),
                            "alarm_at_1pct_fpr": round(alarm, 4), "levels": per_level})
     rows = by_setting
@@ -399,7 +404,8 @@ def corpus_concentration(model, threshold):
 
 # --- B3. How quickly, and how often it cries wolf -----------------------------
 
-DELAY_SETTINGS = [D.WindowSampler(window=w, layers=4, token_fraction=0.1) for w in (8, 32, 128)]
+DELAY_SETTINGS = [D.WindowSampler(window=w, layers=4, token_fraction=0.1, layer_choice="random")
+                  for w in (8, 32, 128)]
 
 
 def timing(model, levels, threshold):
@@ -640,7 +646,8 @@ def main(out_dir="docs"):
         for s in row["settings"]:
             if s["window"] not in (1, 8, 64):
                 continue
-            print(f"   window {s['window']:>3} layers {str(s['layers']):>4} tok {s['token_fraction']:<4} "
+            print(f"   window {s['window']:>3} layers {str(s['layers']):>4} {s.get('layer_choice','spaced'):<7} "
+                  f"tok {s['token_fraction']:<4} "
                   f"counts {s['assignment_fraction']:.3f}  alarm {s['alarm_at_1pct_fpr']:.2f}  "
                   + "  ".join(f"{lv['true_load']:.2f}x:{lv['detection_rate']:.2f}"
                               + ("*" if lv["costly"] else "") for lv in s["levels"]))
