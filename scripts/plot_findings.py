@@ -1043,6 +1043,94 @@ def fig_detection_cost(out, store):
     store["detection_cost"] = rows
 
 
+def fig_timeline(out, store):
+    """One run through the screen: what it reads, when it alarms, when it decides.
+
+    The stream is reconstructed from captured routing - balanced requests, then
+    skewed ones - because no run has yet served a skew that changes partway
+    through. It is the statistics of detection, not a live onset.
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    model, n_experts = "mixtral", 8
+    pools = {}
+    for d, m in manifests("*detection-capture"):
+        if os.path.basename(d).split("_")[2] != model or m.get("status") != "completed":
+            continue
+        for p in m["points"]:
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
+            path = os.path.join(d, f.get("records_file") or "")
+            if f.get("records_file") and os.path.exists(path):
+                pools[float(p["value"])] = D.request_counts(
+                    [json.loads(line) for line in gzip.open(path, "rt")], n_experts)
+    threshold = (json.load(open(os.path.join("docs", "detection.json")))["impact"]
+                 .get(model, {}).get("impact_threshold"))
+    onset_level = min((lv for lv in pools if lv > 0
+                       and D.busiest_rank(pools[lv].sum(axis=0), N_RANKS) >= (threshold or 0)), default=None)
+    if 0.0 not in pools or onset_level is None:
+        return
+
+    sampler = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600)
+    alarm = D.threshold_at_fpr(D.estimate_loads(pools[0.0], N_RANKS, sampler, seed=0), 0.01)
+    pre, post = 30, 30
+    rng = np.random.default_rng(4)
+    loads = D.stream_loads([(pools[0.0], pre * sampler.window), (pools[onset_level], post * sampler.window)],
+                           N_RANKS, sampler, rng)
+    flags = loads >= alarm
+    fired = {k: D._first_run(flags, k) for k in (1, 3)}
+    x = (np.arange(len(loads)) + 1) * sampler.window      # requests served when the window closes
+    onset_at = pre * sampler.window
+
+    fig, ax = plt.subplots(figsize=(10.4, 4.8), facecolor=SURFACE)
+    style(ax, "Requests served", "Busiest rank, as the screen reads it",
+          "One run past the screen: a skew begins, and the detector decides",
+          f"{MODEL_LABEL[model]}, 8-request windows, 4 of 32 layers, a tenth of their tokens "
+          f"- {sampler.cost(32).assignment_fraction:.1%} of routing counted.")
+    ax.axvspan(onset_at, x[-1], color="#f0efec", zorder=0)
+    explain(ax, "skew present", xy=(onset_at + 12, 0.985), xycoords=("data", "axes fraction"),
+            ha="left", va="top", color=INK3, fontsize=9)
+    ax.axhline(alarm, color=INK3, ls="--", lw=1.4, zorder=2)
+    explain(ax, f"alarm level {alarm:.2f}x (1% of benign windows)", xy=(x[0], alarm), xytext=(2, 5),
+            textcoords="offset points", ha="left", va="bottom", color=INK2, fontsize=8.5)
+    ax.plot(x[~flags], loads[~flags], "o", ms=5, color=INK3, mec=SURFACE, mew=1, zorder=3,
+            label="window below the alarm")
+    ax.plot(x[flags], loads[flags], "o", ms=7, color=MODEL_COLOUR[model], mec=SURFACE, mew=1.2, zorder=4,
+            label="window over the alarm")
+    for k, colour, dy in ((1, INK3, 26), (3, INK, 48)):
+        i = fired[k]
+        if i is None:
+            continue
+        ax.axvline(x[i], color=colour, lw=1.4, ls=":" if k == 1 else "-", zorder=2)
+        late = x[i] - onset_at
+        verdict = (f"k={k} decides here, {late} requests after onset" if late > 0
+                   else f"k={k} decides here \u2014 before the skew, a false start")
+        explain(ax, verdict, xy=(x[i], 1.0), xycoords=("data", "axes fraction"),
+                xytext=(-6 if late <= 0 else 6, -dy), textcoords="offset points",
+                ha="right" if late <= 0 else "left", va="top", color=colour, fontsize=8.5,
+                fontweight="bold")
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="lower right", ncol=2)
+    ax.set_xlim(0, x[-1])
+    timing = (json.load(open(os.path.join("docs", "detection.json")))["timing"].get(model) or {})
+    agg = {r["consecutive"]: r for r in timing.get("settings", []) if r["window"] == sampler.window}
+    if agg:
+        caption(fig, 0.012, 0.015,
+                "One draw, with its seed fixed before the outcome was seen. Over 200 draws at this setting: "
+                f"k=1 fires before the skew in {agg[1]['false_start_fraction']:.0%} of runs and catches "
+                f"{agg[1]['detected_fraction']:.0%};\nk=3 fires early in "
+                f"{agg[3]['false_start_fraction']:.0%} and catches {agg[3]['detected_fraction']:.0%}, "
+                f"a median {agg[3]['delay_requests_p50']:.0f} requests after onset. Reconstructed from "
+                "captured routing: no run has yet served a skew that begins partway through.",
+                color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.085, 1, 1)))
+    fig.savefig(os.path.join(out, "timeline.png"), dpi=200, facecolor=SURFACE)
+    store["timeline"] = {"alarm": round(float(alarm), 3), "onset_requests": int(onset_at),
+                         "onset_level": onset_level,
+                         "fired": {str(k): (None if v is None else int(x[v])) for k, v in fired.items()},
+                         "window_loads": [round(float(v), 3) for v in loads]}
+
+
 def main(out="docs/figures", also_bare=True):
     global BARE
     os.makedirs(out, exist_ok=True)
@@ -1060,6 +1148,7 @@ def main(out="docs/figures", also_bare=True):
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
         fig_detection_cost(out, store)
+        fig_timeline(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
     if also_bare:
         # The same figures with nothing that argues, for slides that are narrated.
@@ -1068,7 +1157,7 @@ def main(out="docs/figures", also_bare=True):
             main(os.path.join(out, "bare"), also_bare=False)
         finally:
             BARE = False
-    print(f"wrote {out}/regimes.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/regimes.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

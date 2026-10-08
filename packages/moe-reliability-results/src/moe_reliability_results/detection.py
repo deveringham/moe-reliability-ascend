@@ -39,7 +39,7 @@ import numpy as np
 
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
-           "roc", "screen_scores", "alarm_stream", "onset_delay", "mean_windows_to_false_alarm",
+           "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
            "batch_busiest_rank", "pipeline_overhead"]
 
 
@@ -196,6 +196,19 @@ def _window_loads(rows: np.ndarray, n_ranks: int, sampler: WindowSampler, rng) -
     return batch_busiest_rank(pooled, n_ranks)
 
 
+def stream_loads(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
+                 rng) -> np.ndarray:
+    """What the screen reads, window by window, for a stream built from successive pools.
+
+    The same construction :func:`alarm_stream` scores, returned before the
+    threshold is applied - so a timeline can show the estimate itself rather than
+    only the decision.
+    """
+    layers = sampler._layer_index(pools[0][0].shape[1])
+    rows = np.concatenate([pool[:, layers][rng.choice(len(pool), n, replace=True)] for pool, n in pools])
+    return _window_loads(rows, n_ranks, sampler, rng)
+
+
 def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
                  alarm: float, rng) -> np.ndarray:
     """Per-window alarm decisions for a stream built from successive pools.
@@ -205,9 +218,7 @@ def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler:
     tumble: a monitor that accumulates counts and resets is the cheap
     implementation, and a window may straddle the join, as it would in service.
     """
-    layers = sampler._layer_index(pools[0][0].shape[1])
-    rows = np.concatenate([pool[:, layers][rng.choice(len(pool), n, replace=True)] for pool, n in pools])
-    return _window_loads(rows, n_ranks, sampler, rng) >= alarm
+    return stream_loads(pools, n_ranks, sampler, rng) >= alarm
 
 
 def _first_run(flags: np.ndarray, consecutive: int) -> int | None:
