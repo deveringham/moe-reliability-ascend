@@ -2382,112 +2382,132 @@
  },
  "stage2_step_time": {
   "deepseek-v2": {
-   "run": "20261005-213619_imbalance_deepseek-v2_npu4_bs512_rbias-profiled-deepseek-001",
-   "levels": [
-    0.0,
-    1.0,
-    2.0
-   ],
-   "by_bin": [
-    {
-     "batch": "1-200",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 118,
-     "ms_per_load": 36.9,
-     "pct_per_load": 24.3
-    },
-    {
-     "batch": "200-350",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 96,
-     "ms_per_load": 36.24,
-     "pct_per_load": 23.0
-    },
-    {
-     "batch": "200-350",
-     "kind": "prefill",
-     "levels": 3,
-     "steps": 32,
-     "ms_per_load": -1.52,
-     "pct_per_load": -0.8
-    },
-    {
-     "batch": "350-480",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 143,
-     "ms_per_load": 39.71,
-     "pct_per_load": 24.4
-    },
-    {
-     "batch": "350-480",
-     "kind": "prefill",
-     "levels": 3,
-     "steps": 83,
-     "ms_per_load": -1.21,
-     "pct_per_load": -0.6
-    },
-    {
-     "batch": "480-max",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 367,
-     "ms_per_load": 1.42,
-     "pct_per_load": 0.9
-    },
-    {
-     "batch": "480-max",
-     "kind": "prefill",
-     "levels": 3,
-     "steps": 415,
-     "ms_per_load": 5.57,
-     "pct_per_load": 2.6
-    }
-   ]
+   "fixed": {
+    "run": "20261005-213619_imbalance_deepseek-v2_npu4_bs512_rbias-profiled-deepseek-001",
+    "levels": [
+     0.0,
+     1.0,
+     2.0
+    ],
+    "loads": [
+     1.142,
+     2.345,
+     3.449
+    ],
+    "by_bin": [
+     {
+      "batch": "1-200",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 118,
+      "ms_per_load": 36.9,
+      "pct_per_load": 24.3
+     },
+     {
+      "batch": "200-350",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 96,
+      "ms_per_load": 36.24,
+      "pct_per_load": 23.0
+     },
+     {
+      "batch": "200-350",
+      "kind": "prefill",
+      "levels": 3,
+      "steps": 32,
+      "ms_per_load": -1.52,
+      "pct_per_load": -0.8
+     },
+     {
+      "batch": "350-480",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 143,
+      "ms_per_load": 39.71,
+      "pct_per_load": 24.4
+     },
+     {
+      "batch": "350-480",
+      "kind": "prefill",
+      "levels": 3,
+      "steps": 83,
+      "ms_per_load": -1.21,
+      "pct_per_load": -0.6
+     },
+     {
+      "batch": "480-max",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 367,
+      "ms_per_load": 1.42,
+      "pct_per_load": 0.9
+     },
+     {
+      "batch": "480-max",
+      "kind": "prefill",
+      "levels": 3,
+      "steps": 415,
+      "ms_per_load": 5.57,
+      "pct_per_load": 2.6
+     }
+    ]
+   },
+   "rotating": {
+    "skipped": "run not pulled"
+   }
   },
   "mixtral": {
-   "run": "20261005-224930_imbalance_mixtral_npu4_bs512_rbias-profiled-mixtral-001",
-   "levels": [
-    0.0,
-    1.0,
-    2.0
-   ],
-   "by_bin": [
-    {
-     "batch": "1-200",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 72,
-     "ms_per_load": 3.32,
-     "pct_per_load": 2.5
-    },
-    {
-     "batch": "350-480",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 199,
-     "ms_per_load": -0.92,
-     "pct_per_load": -0.6
-    },
-    {
-     "batch": "480-max",
-     "kind": "decode",
-     "levels": 3,
-     "steps": 588,
-     "ms_per_load": -0.16,
-     "pct_per_load": -0.1
-    },
-    {
-     "batch": "480-max",
-     "kind": "prefill",
-     "levels": 3,
-     "steps": 268,
-     "ms_per_load": 154.43,
-     "pct_per_load": 69.5
-    }
-   ]
+   "fixed": {
+    "run": "20261005-224930_imbalance_mixtral_npu4_bs512_rbias-profiled-mixtral-001",
+    "levels": [
+     0.0,
+     1.0,
+     2.0
+    ],
+    "loads": [
+     1.178,
+     1.761,
+     2.62
+    ],
+    "by_bin": [
+     {
+      "batch": "1-200",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 72,
+      "ms_per_load": 3.32,
+      "pct_per_load": 2.5
+     },
+     {
+      "batch": "350-480",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 199,
+      "ms_per_load": -0.92,
+      "pct_per_load": -0.6
+     },
+     {
+      "batch": "480-max",
+      "kind": "decode",
+      "levels": 3,
+      "steps": 588,
+      "ms_per_load": -0.16,
+      "pct_per_load": -0.1
+     },
+     {
+      "batch": "480-max",
+      "kind": "prefill",
+      "levels": 3,
+      "steps": 268,
+      "ms_per_load": 154.43,
+      "pct_per_load": 69.5
+     }
+    ]
+   },
+   "rotating": {
+    "skipped": "run not pulled"
+   }
   }
  },
  "stage3_pace_setter": {
@@ -2544,14 +2564,7 @@
    ]
   }
  },
- "profiling_cost": {
-  "deepseek-v2": {
-   "skipped": "this run discarded the profiled pass's timings; re-profile to measure it"
-  },
-  "mixtral": {
-   "skipped": "this run discarded the profiled pass's timings; re-profile to measure it"
-  }
- },
+ "profiling_cost": {},
  "screen_cost": {
   "assumed_per_assignment_ns": 2.0,
   "unmeasured": true,

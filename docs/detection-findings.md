@@ -54,6 +54,13 @@ screen fires during benign traffic every few hundred requests. Requiring two
 consecutive alarming windows fixes it - 98-100% detection, 0-1% early firing,
 one false alarm per 1200-1750 requests - and costs 16 requests of delay (C4).
 
+**The overhead knob that matters is not the sampling fraction.** Counting less
+saves little, because the screen is already the small term; what costs is how
+often it triggers a confirmation, which was measured at +15-19% TPOT while it
+runs. Requiring three consecutive alarming windows takes the amortised pipeline
+cost from 6.1% to 0.2% *and* raises detection from 0.50 to 1.00, for 24-40
+requests of delay (C5).
+
 **What is still unmeasured:** the screen's own cost on the device, behaviour
 under a skew that ramps or flickers rather than switching on (every capture is a
 server whose bias is fixed for its lifetime), and stage 3's ability to attribute
@@ -249,6 +256,58 @@ runs before a false alarm.)
 This is a steady-state result. The onset is instantaneous and the skew then
 persists, because every capture is a server whose bias is fixed for its lifetime;
 a skew that ramps or flickers is not represented.
+
+## C5. Trading accuracy against overhead
+
+Three knobs change the cost, and they do not act on the same term:
+
+| Knob | Changes | Effect on accuracy |
+|---|---|---|
+| Layers and tokens counted | the always-on screen | widens the benign spread, so the alarm rises |
+| Window length | the always-on screen, slightly | longer is tighter, and slower to react |
+| **Consecutive windows (k)** | **how often confirmation fires** | more is quieter, and slower to react |
+
+**The counting is not the expensive part.** The screen at its cheapest setting
+touches 1.2-1.5% of token-expert assignments. What costs is what the screen
+*triggers*: a profiled confirmation was measured at **+15-19% TPOT while it runs**
+(`rbias-rotating-profiled`, which serves each point unprofiled and profiled).
+Paying that every time the screen cries wolf dominates everything else.
+
+Amortised pipeline cost, taking a confirmation as +19% for 100 requests and the
+screen itself as 0.2% (a placeholder - the screen's device cost is still
+unmeasured):
+
+| | w | k | Detect | Delay | Benign quiet for | **Cost, no stage-2 filter** | Cost, perfect filter |
+|---|---|---|---|---|---|---|---|
+| DeepSeek | 8 | 1 | 0.50 | 8 | 324 reqs | **6.06%** | 0.20% |
+| | 8 | 2 | 0.98 | 16 | 1204 reqs | 1.78% | 0.20% |
+| | **8** | **3** | **1.00** | **24** | **never fired** | **0.20%** | 0.20% |
+| | 128 | 2 | 0.95 | 256 | 16896 reqs | 0.31% | 0.20% |
+| Mixtral | 8 | 1 | 0.76 | 8 | 656 reqs | **3.10%** | 0.20% |
+| | 8 | 2 | 1.00 | 16 | 1752 reqs | 1.28% | 0.20% |
+| | **8** | **3** | **1.00** | **40** | **never fired** | **0.20%** | 0.20% |
+| | 128 | 2 | 0.96 | 256 | 31744 reqs | 0.26% | 0.20% |
+
+- **k is the lever, not the sampling fraction.** Going from k = 1 to k = 3 at an
+  8-request window takes the amortised cost from 6.1% to 0.2% on DeepSeek and
+  3.1% to 0.2% on Mixtral, *and* raises detection from 0.50 to 1.00. It costs 16
+  to 32 requests of extra delay. Nothing else on this table buys that much.
+- **Cutting the counting further would be the wrong economy.** At 1.2-1.5% of
+  assignments the screen is already the small term; halving it while leaving
+  k = 1 in place saves 0.1% and leaves 6%.
+- **The two columns bracket what stage 2 is worth.** If the cheap confirmation
+  rejects every false alarm before the profiler runs, the pipeline costs only the
+  screen; if it rejects none, the right-hand column applies. How well it actually
+  filters is unmeasured - it is the same question as whether stage 2 can separate
+  a costly skew from a free one (C3).
+- **k = 3 with an 8-request window is the setting to recommend**: full detection,
+  24-40 requests of delay, no false alarm within the simulated horizon, and no
+  confirmation cost to amortise.
+
+The unmeasured number remains the screen's own device cost. Everything above
+treats it as 0.2%; `detection.monitoring_overhead` prices it from one
+measurement - the per-assignment cost of a `scatter_add_` into a resident buffer
+- which has to be taken on the device.
 
 ## D. Stage 2: step time at matched batch size
 

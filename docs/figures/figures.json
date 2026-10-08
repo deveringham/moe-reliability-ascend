@@ -53,6 +53,16 @@
   1.093,
   1.249
  ],
+ "natural_detail": {
+  "deepseek-v2": [
+   1.096730238855888,
+   1.0375050762595885
+  ],
+  "mixtral": [
+   1.1165945857858401,
+   1.022829516348295
+  ]
+ },
  "impact_map": [
   {
    "model": "deepseek-v2",
@@ -637,6 +647,57 @@
    "live_experts": 3
   }
  ],
+ "statistic": {
+  "profile": [
+   {
+    "alpha": 0.5,
+    "paired": 1.0318,
+    "summed": 1.0046
+   },
+   {
+    "alpha": 0.8,
+    "paired": 1.0208,
+    "summed": 1.0032
+   },
+   {
+    "alpha": 1.0,
+    "paired": 1.0563,
+    "summed": 1.0075
+   },
+   {
+    "alpha": 1.3,
+    "paired": 1.0549,
+    "summed": 1.0118
+   },
+   {
+    "alpha": 1.6,
+    "paired": 1.0328,
+    "summed": 1.0058
+   },
+   {
+    "alpha": 2.0,
+    "paired": 1.0666,
+    "summed": 1.0075
+   }
+  ],
+  "routing": [
+   {
+    "condition": "natural traffic",
+    "per_layer": 1.117,
+    "pooled": 1.023
+   },
+   {
+    "condition": "one rank hot, every layer",
+    "per_layer": 2.688,
+    "pooled": 2.688
+   },
+   {
+    "condition": "a different rank hot each layer",
+    "per_layer": 2.625,
+    "pooled": 1.032
+   }
+  ]
+ },
  "rotating": [
   {
    "model": "mixtral",

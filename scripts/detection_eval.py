@@ -53,6 +53,11 @@ MODELS = {"deepseek-v2": {"n_experts": 64, "top_k": 6, "capture": "*alpha-sweep"
           "mixtral": {"n_experts": 8, "top_k": 2, "capture": "*mixtral-alpha"}}
 CONTROLLED = {"deepseek-v2": "*rbias-controlled-000", "mixtral": "*rbias-controlled-001"}
 PROFILED = {"deepseek-v2": "*rbias-profiled-deepseek-001", "mixtral": "*rbias-profiled-mixtral-001"}
+# The same models under a rotating skew, which carries the same per-layer load as
+# a fixed one but costs Mixtral full price and DeepSeek nothing.
+ROTATING = {"deepseek-v2": "*rotating-skew-000", "mixtral": "*rotating-skew-001"}
+ROTATING_PROFILED = {"deepseek-v2": "*rbias-rotating-profiled-000",
+                     "mixtral": "*rbias-rotating-profiled-001"}
 
 
 def manifests(pattern):
@@ -321,22 +326,51 @@ def step_table(run_dir, label):
     return {"reqs": reqs, "tokens": tokens, "wall_us": wall.mean(axis=0)}
 
 
-def stage2(cal):
+def rotating_loads(model):
+    """{level: per-layer busiest-rank load} from the rotating sweep's own validation.
+
+    The profiled rotating runs do not validate (the base config has it off), and
+    load is a property of the model and the bias rather than of a run's timings.
+    """
     out = {}
-    for model, pattern in PROFILED.items():
-        d, m = one(pattern)
-        if m is None:
-            continue
-        steps, loads = {}, {}
+    for d, m in manifests(ROTATING[model]):
         for p in m["points"]:
-            if not p.get("trace_dir"):
-                continue
-            table = step_table(d, os.path.basename(p["trace_dir"]))
-            level = float(p["value"])
-            if table is not None and level in cal[model]:
-                steps[level], loads[level] = table, cal[model][level][0]
-        out[model] = ({"run": os.path.basename(d), "levels": sorted(steps), **D.step_cost_fit(steps, loads)}
-                      if len(steps) >= 3 else {"skipped": "fewer than three profiled levels with step tables"})
+            if p.get("validation_file"):
+                f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+                out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
+    return out
+
+
+def _step_fit(pattern, loads):
+    """Stage-2 fit for one profiled run, given its levels' loads."""
+    d, m = one(pattern)
+    if m is None:
+        return {"skipped": "run not pulled"}
+    steps, used = {}, {}
+    for p in m["points"]:
+        if not p.get("trace_dir"):
+            continue
+        table = step_table(d, os.path.basename(p["trace_dir"]))
+        level = float(p["value"])
+        if table is not None and level in loads:
+            steps[level], used[level] = table, loads[level]
+    if len(steps) < 3:
+        return {"skipped": f"{len(steps)} profiled levels with step tables, need 3"}
+    return {"run": os.path.basename(d), "levels": sorted(steps),
+            "loads": [round(used[lv], 3) for lv in sorted(steps)], **D.step_cost_fit(steps, used)}
+
+
+def stage2(cal):
+    """Step-time fits for a fixed skew and, where profiled, a rotating one.
+
+    The pair is the test stage 2 exists for: the two carry the same per-layer
+    load, and only one of them costs latency on each model.
+    """
+    out = {}
+    for model in PROFILED:
+        out[model] = {"fixed": _step_fit(PROFILED[model],
+                                         {lv: v[0] for lv, v in cal.get(model, {}).items()}),
+                      "rotating": _step_fit(ROTATING_PROFILED[model], rotating_loads(model))}
     return out
 
 
@@ -360,7 +394,7 @@ def stage3():
 
 # --- F. What confirmation costs ----------------------------------------------
 
-def profiling_cost():
+def profiling_cost(patterns=None):
     """What the profiled pass costs, from points served twice in one run.
 
     ``separate_profiling_run`` serves each point unprofiled for the timings and
@@ -369,7 +403,7 @@ def profiling_cost():
     pass's timings, so only later runs can answer this.
     """
     out = {}
-    for model, pattern in PROFILED.items():
+    for model, pattern in (patterns or PROFILED).items():
         d, m = one(pattern)
         if m is None:
             continue
@@ -436,7 +470,8 @@ def main(out_dir="docs"):
     store["localisation"] = localisation_run()
     store["stage2_step_time"] = stage2(cal)
     store["stage3_pace_setter"] = stage3()
-    store["profiling_cost"] = profiling_cost()
+    # Only runs from 2026-10-07 on keep the profiled pass's timings.
+    store["profiling_cost"] = profiling_cost(ROTATING_PROFILED)
     store["screen_cost"] = screen_cost()
 
     os.makedirs(out_dir, exist_ok=True)
@@ -510,14 +545,16 @@ def main(out_dir="docs"):
                   f"flagged {len(p['flagged_layers'])} layers (recall {p['recall']}, precision {p['precision']}), "
                   f"rank {p['flagged_rank']}")
     print()
-    for model, row in store["stage2_step_time"].items():
-        if "skipped" in row:
-            print(f"{model}: stage 2 skipped - {row['skipped']}")
-            continue
-        print(f"{model}: stage 2, ms per +1x load by step kind")
-        for b in row["by_bin"]:
-            print(f"   batch {b['batch']:>8} {b['kind']:<8} {b['ms_per_load']:+8.2f} ms "
-                  f"({b['pct_per_load']:+.1f}%, {b['steps']} steps)")
+    for model, kinds in store["stage2_step_time"].items():
+        print(f"{model}: stage 2, ms per +1x per-layer load by step kind")
+        for skew, row in kinds.items():
+            if "skipped" in row:
+                print(f"   {skew:<9} skipped - {row['skipped']}")
+                continue
+            print(f"   {skew:<9} loads {row['loads']}")
+            for b in row["by_bin"]:
+                print(f"     batch {b['batch']:>8} {b['kind']:<8} {b['ms_per_load']:+8.2f} ms "
+                      f"({b['pct_per_load']:+.1f}%, {b['steps']} steps)")
     print()
     for model, row in store["stage3_pace_setter"].items():
         if "skipped" in row:

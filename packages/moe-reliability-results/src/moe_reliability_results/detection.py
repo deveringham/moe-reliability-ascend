@@ -40,7 +40,7 @@ import numpy as np
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
            "roc", "screen_scores", "alarm_stream", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank"]
+           "batch_busiest_rank", "pipeline_overhead"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -444,6 +444,35 @@ def pace_setter_agreement(trace_metrics: Mapping[float, Mapping], hot_rank: int 
                     "is_hot_rank": wait.get("pace_setter_rank") == hot_rank,
                     "wait_pct": wait.get("wait_pct")})
     return out
+
+
+def pipeline_overhead(screen_pct: float, requests_to_false_alarm: float | None,
+                      confirm_pct: float, confirm_requests: float,
+                      stage2_rejects: float = 1.0) -> dict:
+    """What the whole pipeline costs, amortised, as a percentage of serving time.
+
+    Two terms, and the second is usually the larger:
+
+    - the screen, which runs always and whose cost is set by how much is counted;
+    - the confirmation it triggers, whose cost is set by how *often* it triggers.
+
+    The second is why the accuracy knobs are also cost knobs. A confirmation pass
+    that costs ``confirm_pct`` and lasts ``confirm_requests`` is paid every
+    ``requests_to_false_alarm`` requests on benign traffic, so a screen that
+    cries wolf every 324 requests spends far more on confirming than on counting.
+
+    ``stage2_rejects`` is the share of false alarms the cheap confirmation throws
+    out before the expensive one runs: 1.0 assumes it rejects all of them (the
+    optimistic bound), 0.0 that it rejects none (the conservative one). It is
+    unmeasured, so both bounds are worth quoting.
+    """
+    if requests_to_false_alarm is None:        # never fired over the horizon
+        triggered = 0.0
+    else:
+        triggered = min(1.0, confirm_requests / requests_to_false_alarm) * (1 - stage2_rejects)
+    return {"screen_pct": screen_pct, "confirm_share": round(triggered, 4),
+            "confirm_pct": round(triggered * confirm_pct, 3),
+            "total_pct": round(screen_pct + triggered * confirm_pct, 3)}
 
 
 def monitoring_overhead(assignment_fraction: float, per_assignment_ns: float,

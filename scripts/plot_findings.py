@@ -19,6 +19,7 @@ import glob
 import gzip
 import json
 import os
+import re
 import sys
 
 import matplotlib
@@ -371,6 +372,14 @@ def fig_calibration(out, store):
 def natural(store):
     """Natural-traffic load per model and window, and the band it spans."""
     nat = {"deepseek-v2": natural_load("*alpha-sweep", 64), "mixtral": natural_load("*mixtral-alpha", 8)}
+    detail = {}
+    for model, n_experts, pattern in (("deepseek-v2", 64, "*alpha-sweep"), ("mixtral", 8, "*mixtral-alpha")):
+        counts, _ = routing_counts(pattern, n_experts)
+        pooled = counts.sum(axis=0)
+        # The two forms of the same statistic: busiest rank per layer, averaged,
+        # against the busiest rank of the layer-averaged shares.
+        per_rank = (pooled / pooled.sum(axis=1, keepdims=True)).reshape(pooled.shape[0], N_RANKS, -1).sum(axis=2)
+        detail[model] = (busiest_rank(pooled), float(per_rank.mean(axis=0).max() * N_RANKS))
     rows = []
     for model, windows in nat.items():
         for window, v in windows.items():
@@ -380,6 +389,7 @@ def natural(store):
                          "median": round(float(np.median(v)), 3), "hi": round(float(hi), 3)})
     store["natural"] = rows
     store["natural_band"] = (min(r["lo"] for r in rows), max(r["hi"] for r in rows))
+    store["natural_detail"] = detail
 
 
 def fig_impact_map(out, store):
@@ -555,6 +565,102 @@ def fig_rotating(out, store):
     store["rotating"] = rows
 
 
+def _capture_loads(pattern, n_experts, level_filter=None):
+    """{level: (per-layer load, pooled load)} from a run's validation records."""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    out: dict[float, tuple[float, float]] = {}
+    for d, m in manifests(pattern):
+        for p in m["points"]:
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            level = float(p["value"])
+            if level_filter is not None and level not in level_filter:
+                continue
+            counts = D.request_counts([json.loads(line) for line in gzip.open(path, "rt")], n_experts)
+            pooled = counts.sum(axis=0)
+            out[level] = (D.busiest_rank(pooled, N_RANKS), D.pooled_busiest_rank(pooled, N_RANKS))
+    return out
+
+
+def fig_statistic(out, store):
+    """Summing before taking the maximum hides imbalance - in traces and in routing."""
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.9), facecolor=SURFACE)
+    rows: dict = {}
+
+    # Left: kernel time. Pair GroupedMatmul calls across ranks, or sum each rank first.
+    points = []
+    for f in sorted(glob.glob(os.path.join(RESULTS, "*mixtral-alpha", "trace_metrics", "*.json.gz"))):
+        summary = json.load(gzip.open(f)).get("stragglers", {}).get("GroupedMatmul", {})
+        alpha = re.search(r"alpha_([0-9]+(?:\.[0-9]+)?)\.json", f)
+        if summary.get("calls_per_rank") and alpha:
+            points.append((float(alpha.group(1)), summary["straggler"], summary["totals_max_over_mean"]))
+    points.sort()
+    style(left, "Workload imbalance (alpha)", "Busiest rank, relative to the mean")
+    left.set_title("In a profile", color=INK, fontsize=11, fontweight="bold", loc="left")
+    x = [p[0] for p in points]
+    for ys, colour, label, lw in (([p[1] for p in points], INK, "pair each call across ranks", 2.2),
+                                  ([p[2] for p in points], INK3, "sum each rank, then compare", 2.0)):
+        left.plot(x, ys, "-o", ms=6, lw=lw, color=colour, mec=SURFACE, mew=1.5, zorder=3)
+        left.annotate(label, xy=(x[-1], ys[-1]), xytext=(-4, 10 if colour == INK else -16),
+                      textcoords="offset points", ha="right", color=colour, fontsize=8.5, fontweight="bold")
+    left.axhline(1.0, color=GRID, lw=1)
+    left.set_ylim(0.99, 1.09)
+    rows["profile"] = [{"alpha": a, "paired": round(b, 4), "summed": round(c, 4)} for a, b, c in points]
+
+    # Right: routing. Busiest rank per layer, or pooled over layers first.
+    conditions = []
+    nat = store.get("natural_detail", {}).get("mixtral")
+    if nat:
+        conditions.append(("natural\ntraffic", nat[0], nat[1]))
+    fixed = _capture_loads("*mixtral*detection-capture", 8, level_filter={2.0})
+    if fixed:
+        conditions.append(("one rank hot,\nevery layer", *list(fixed.values())[0]))
+    rot = _capture_loads("*rotating-skew-001", 8, level_filter={2.0})
+    if rot:
+        conditions.append(("a different rank\nhot each layer", *list(rot.values())[0]))
+
+    style(right, "", "Busiest rank, relative to the mean")
+    right.set_title("In the router's own counters", color=INK, fontsize=11, fontweight="bold", loc="left")
+    width = 0.34
+    for i, (label, per_layer, pooled) in enumerate(conditions):
+        for j, (value, colour, name) in enumerate(((per_layer, INK, "per layer"),
+                                                   (pooled, INK3, "pooled over layers"))):
+            right.bar(i + (j - 0.5) * (width + 0.02), value, width, color=colour, zorder=3,
+                      label=name if i == 0 else None)
+            right.annotate(f"{value:.2f}x", xy=(i + (j - 0.5) * (width + 0.02), value), xytext=(0, 4),
+                           textcoords="offset points", ha="center", color=INK, fontsize=9,
+                           fontweight="bold")
+    right.set_xticks(range(len(conditions)), [c[0] for c in conditions], fontsize=9)
+    right.tick_params(axis="x", labelcolor=INK2)
+    right.axhline(1.0, color=GRID, lw=1)
+    right.set_ylim(0, 3.6)
+    right.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left", ncol=2,
+                 columnspacing=1.4)
+    rows["routing"] = [{"condition": c[0].replace("\n", " "), "per_layer": round(c[1], 3),
+                        "pooled": round(c[2], 3)} for c in conditions]
+
+    fig.suptitle("Summing before you take the maximum hides imbalance",
+                 color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    fig.text(0.008, 0.905,
+             "Both panels measure the same routing two ways. Mixtral 8x7B; the right-hand panel is the "
+             "strongest injected skew that keeps every expert live.",
+             color=INK2, fontsize=9.5)
+    fig.text(0.008, 0.015,
+             "Left: a step runs its layers in sequence, so what it waits for is the sum over calls of the "
+             "maximum over ranks. Summing each rank first lets a\nbusiest rank that changes between layers "
+             "cancel. Right: the same cancellation in the router's counters - and for a skew that rotates "
+             "between layers,\nthe pooled form reads 1.03x, which is what benign traffic reads.",
+             color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.89))
+    fig.savefig(os.path.join(out, "statistic.png"), dpi=200, facecolor=SURFACE)
+    store["statistic"] = rows
+
+
 def fig_detection(out, store):
     """What the screen catches, against what it costs to count."""
     detection = json.load(open(os.path.join("docs", "detection.json")))
@@ -620,12 +726,13 @@ def main(out="docs/figures"):
     fig_instrument(out, store)
     fig_steps(out, store)
     fig_calibration(out, store)
+    fig_statistic(out, store)
     if list(manifests(ROTATING["mixtral"])):
         fig_rotating(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/impact_map.png, detection.png, rotating_skew.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":

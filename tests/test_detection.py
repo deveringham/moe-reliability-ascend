@@ -295,3 +295,22 @@ def test_batch_reduction_matches_the_single_window_form():
     windows = rng.integers(1, 500, size=(7, 5, 8)).astype(float)
     one_at_a_time = np.array([D.busiest_rank(w, N_RANKS) for w in windows])
     assert np.allclose(D.batch_busiest_rank(windows, N_RANKS), one_at_a_time)
+
+
+def test_pipeline_overhead_is_dominated_by_how_often_confirmation_fires():
+    # The screen is the same in both; only how often it cries wolf differs.
+    noisy = D.pipeline_overhead(screen_pct=0.2, requests_to_false_alarm=324,
+                                confirm_pct=19.0, confirm_requests=100, stage2_rejects=0.0)
+    quiet = D.pipeline_overhead(screen_pct=0.2, requests_to_false_alarm=1204,
+                                confirm_pct=19.0, confirm_requests=100, stage2_rejects=0.0)
+    assert noisy["total_pct"] > 3 * quiet["screen_pct"]      # confirmation dominates
+    assert noisy["total_pct"] > quiet["total_pct"]
+
+    # A screen that never fires on benign traffic pays only for counting.
+    silent = D.pipeline_overhead(0.2, None, 19.0, 100, stage2_rejects=0.0)
+    assert silent["total_pct"] == 0.2
+
+
+def test_a_cheap_confirmation_that_rejects_removes_the_expensive_one():
+    both = [D.pipeline_overhead(0.2, 324, 19.0, 100, stage2_rejects=r) for r in (0.0, 1.0)]
+    assert both[1]["confirm_pct"] == 0.0 and both[0]["confirm_pct"] > 0

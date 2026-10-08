@@ -1,6 +1,9 @@
 # Where this project stands
 
-Orientation document, 2026-10-02, updated 2026-10-07. One pass, no detail: the
+**For the whole story in one place, written without assuming the codebase, start
+with [findings.md](findings.md).** This document is the working orientation note.
+
+Orientation document, 2026-10-02, updated 2026-10-08. One pass, no detail: the
 numbers and their derivations are in [imbalance-findings.md](imbalance-findings.md),
 [regime-findings.md](regime-findings.md) and
 [router-bias-findings.md](router-bias-findings.md).
