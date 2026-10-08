@@ -379,3 +379,59 @@ def test_accumulation_reports_layers_it_never_saw_as_unknown():
     mean_load, seen = D.accumulate_layers(counts, N_RANKS, few, windows=2, seed=0)
     assert np.isnan(mean_load[seen == 0]).all()  # not a reading of 0
     assert seen.sum() == 8
+
+
+# --- Calibrating one deployment ---------------------------------------------
+
+LOADS = [1.18, 1.24, 1.38, 1.76, 2.62]
+COSTS = [0.0, 0.96, 3.32, 6.71, 17.16]        # Mixtral's measured eager curve
+BALANCED = [165.5, 164.1, 166.5]
+SAMPLING = {"window": 8, "layers": 4, "token_fraction": 0.1, "layer_choice": "random"}
+
+
+def test_calibration_separates_where_it_costs_from_where_to_alarm():
+    benign = np.random.default_rng(0).normal(1.15, 0.03, 500)
+    cal = D.calibrate(LOADS, COSTS, BALANCED, benign, SAMPLING, alarm_margin=0.5)
+
+    # This deployment's own noise floor is 0.77%, which the 1.24x level already
+    # clears, so the threshold interpolates between the first two measured loads.
+    assert cal["noise_floor_pct"] == pytest.approx(0.77, abs=0.02)
+    assert LOADS[0] < cal["impact_threshold"] < LOADS[2]
+    # The alarm sits below the cost, so there is warning rather than confirmation.
+    assert cal["alarm"]["level"] < cal["impact_threshold"]
+    assert cal["alarm"]["warns_before_cost"]
+    assert cal["benign_ceiling"] < cal["alarm"]["level"]
+
+
+def test_the_margin_trades_warning_against_false_alarms():
+    benign = np.random.default_rng(1).normal(1.15, 0.03, 500)
+    late = D.calibrate(LOADS, COSTS, BALANCED, benign, SAMPLING, alarm_margin=0.0)
+    early = D.calibrate(LOADS, COSTS, BALANCED, benign, SAMPLING, alarm_margin=1.0)
+
+    assert late["alarm"]["level"] == pytest.approx(late["impact_threshold"])
+    assert early["alarm"]["level"] < late["alarm"]["level"]
+    assert early["alarm"]["false_alarm_rate"] >= late["alarm"]["false_alarm_rate"]
+
+
+def test_a_deployment_whose_traffic_already_reaches_the_cost_has_no_headroom():
+    # Benign traffic sitting on top of the impact threshold: no alarm level
+    # separates them, and the calibration has to say so rather than pick one.
+    benign = np.random.default_rng(2).normal(1.45, 0.03, 500)
+    cal = D.calibrate(LOADS, COSTS, BALANCED, benign, SAMPLING, alarm_margin=0.5)
+    assert cal["headroom"] < 0
+    assert "cannot warn before" in cal["note"]
+
+
+def test_the_noise_floor_comes_from_this_deployment_not_a_constant():
+    quiet = D.calibrate(LOADS, COSTS, [165.5, 165.4, 165.6], [1.1] * 50, SAMPLING)
+    noisy = D.calibrate(LOADS, COSTS, [176.7, 176.1, 169.2], [1.1] * 50, SAMPLING)
+    assert noisy["noise_floor_pct"] > quiet["noise_floor_pct"] * 3
+    # A noisier deployment needs a larger cost before it can claim one.
+    assert noisy["impact_threshold"] >= quiet["impact_threshold"]
+
+
+def test_a_sweep_that_never_leaves_the_noise_says_so():
+    # A noisy balanced arm (floor 2.8%) against levels that cost at most 1%.
+    cal = D.calibrate(LOADS[:2], COSTS[:2], [176.7, 176.1, 169.2], [1.1] * 50, SAMPLING)
+    assert cal["impact_threshold"] is None and cal["alarm"] is None
+    assert "nothing to calibrate" in cal["note"]

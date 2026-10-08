@@ -1,0 +1,42 @@
+{
+ "noise_floor_pct": 1.1,
+ "impact_threshold": 1.374,
+ "benign_ceiling": 1.178,
+ "benign_median": 1.178,
+ "sampling": {
+  "window": 8,
+  "layers": 4,
+  "token_fraction": 0.1,
+  "layer_choice": "random"
+ },
+ "curve": [
+  {
+   "load": 1.178,
+   "cost_pct": 0.0
+  },
+  {
+   "load": 2.62,
+   "cost_pct": 8.08
+  }
+ ],
+ "headroom": 0.196,
+ "alarm": {
+  "level": 1.276,
+  "margin": 0.5,
+  "false_alarm_rate": 0.0,
+  "warns_before_cost": true
+ },
+ "run": "20261008-143211_imbalance_mixtral_npu4_bs256_decode-ridge2-000",
+ "model": "mixtral",
+ "deployment": {
+  "n_npus": 4,
+  "batch_size": 256,
+  "max_num_batched_tokens": 4096,
+  "enforce_eager": true,
+  "max_new_tokens": 100,
+  "bias_target": "rank:0"
+ },
+ "balanced_tpot_ms": 137.1,
+ "loads_from": "a separate calibration run of this model",
+ "note": "realised loads were borrowed from another run's traffic, so the thresholds are only as good as that traffic matching this one"
+}

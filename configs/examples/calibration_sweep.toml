@@ -1,0 +1,80 @@
+# A skew sweep that carries everything a calibration needs, so none of it is borrowed.
+#
+# scripts/calibrate.py turns a sweep into the thresholds a screen runs on. It can
+# fall back to a separate calibration run for the realised loads, and every
+# artefact derived that way says so - because load is a property of the traffic
+# as well as of the knob. The same injected offset reads 1.35x on a six-corpus
+# mix and 1.30x on MMLU alone, so a borrowed load is only as good as the traffic
+# matching. This run captures its own.
+#
+# What each setting is here for:
+#
+#   validate_imbalance        measures the realised busiest-rank load per level
+#                             on this deployment's own traffic
+#   validation_save_records   keeps per-request routing, which is what the benign
+#                             distribution and the screen's sampling are computed
+#                             from - pooled counts cannot give a distribution
+#   validation_workload       the traffic the deployment actually serves; change
+#                             it to match, since corpus moves load by a few
+#                             percent and language by far more
+#   bias_plugin_at_zero       the instrument runs in the balanced arm too, so the
+#                             comparison is the skew rather than the skew plus
+#                             the plugin
+#   repeats = 3               the balanced arm's spread is the noise floor, and it
+#                             is deployment-specific: 0.5% to 9% across the runs
+#                             measured so far. One repeat gives no floor at all.
+#
+# The levels are spaced finely at the bottom, because the threshold is usually
+# near the benign end and a coarse sweep can only place it between two levels
+# that are far apart. Sweep coarseness is a parameter worth varying: it trades
+# NPU time against how precisely the threshold is located.
+#
+# Copy it and set model, hardware, batch size and mode to the deployment being
+# calibrated - the whole point is that a calibration belongs to a configuration.
+#
+#   ./nrun -t cal 'uv run moe-reliability run configs/examples/calibration_sweep.toml'
+#   uv run python scripts/calibrate.py results/<run> --margin 0.5
+
+[experiment]
+type = "forced_imbalance"
+name = "calibration-sweep"
+description = "Graded skew with routing captured per level, for scripts/calibrate.py."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+max_num_batched_tokens = 4096
+enable_expert_parallel = true
+enforce_eager = true
+
+[client]
+max_new_tokens = 100
+concurrency_limit = 700
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.125, 0.25, 0.375, 0.5, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 600
+validation_workload = "mmlu"
+validation_save_records = true
+
+[benchmark]
+n_samples = 2000
+repeats = 3
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

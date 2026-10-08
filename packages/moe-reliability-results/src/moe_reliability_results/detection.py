@@ -40,7 +40,7 @@ import numpy as np
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
            "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers"]
+           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -379,6 +379,67 @@ def impact_threshold(loads: Sequence[float], costs: Sequence[float], noise_pct: 
             # next measured level.
             return float(x[i - 1] + (x[i] - x[i - 1]) * ((noise_pct - y[i - 1]) / span)) if span else float(x[i])
     return float(x[0]) if len(y) and y[0] >= noise_pct else None
+
+
+def calibrate(loads: Sequence[float], costs: Sequence[float], balanced_repeats: Sequence[float],
+              benign_loads: Sequence[float], sampling: dict, alarm_margin: float = 0.5,
+              fpr: float = 0.01) -> dict:
+    """Turn one deployment's measured skew sweep into what a screen needs to run on it.
+
+    Two thresholds, and they are not the same thing:
+
+    - the **impact threshold** is where cost rises above this deployment's own
+      noise floor, which is physical and measured here;
+    - the **alarm level** is where the screen should speak up, which is a choice.
+
+    Setting the alarm from the benign distribution alone - the obvious thing, and
+    what this project did first - ignores impact entirely. On a deployment whose
+    benign traffic sits far below anything costly it alarms constantly on
+    harmless skew: DeepSeek's 1% false-alarm level is 1.23x where nothing costs
+    anything until 2.41x. So the alarm is placed between the two instead,
+    ``alarm_margin`` of the way back from impact toward what benign traffic
+    already reaches: 0 alarms only once it is costing, 1 alarms at the benign
+    ceiling and buys the earliest warning the data allows.
+
+    The gap between those two is the deployment's **headroom**, and it is a
+    result in its own right. Without it there is no early warning to be had at
+    any margin, and the screen can only confirm what latency already shows.
+    """
+    noise_pct = float(np.max(np.abs(
+        100 * (np.asarray(balanced_repeats, dtype=float) / np.mean(balanced_repeats) - 1))))
+    impact = impact_threshold(loads, costs, noise_pct)
+    benign = np.asarray(benign_loads, dtype=float)
+    ceiling = float(np.quantile(benign, 1 - fpr))
+    out = {
+        "noise_floor_pct": round(noise_pct, 2),
+        "impact_threshold": None if impact is None else round(impact, 3),
+        "benign_ceiling": round(ceiling, 3),
+        "benign_median": round(float(np.median(benign)), 3),
+        "sampling": dict(sampling),
+        "curve": [{"load": round(float(a), 3), "cost_pct": round(float(b), 2)}
+                  for a, b in zip(loads, costs)],
+    }
+    if impact is None:
+        out["alarm"] = None
+        out["headroom"] = None
+        out["note"] = "no swept level cost more than the noise floor; nothing to calibrate against"
+        return out
+    headroom = impact - ceiling
+    alarm = impact - alarm_margin * headroom
+    out["headroom"] = round(headroom, 3)
+    out["alarm"] = {
+        "level": round(float(alarm), 3),
+        "margin": alarm_margin,
+        "false_alarm_rate": round(float((benign >= alarm).mean()), 4),
+        "warns_before_cost": bool(alarm < impact),
+    }
+    if headroom <= 0:
+        out["note"] = ("benign traffic already reaches the load that costs latency: no alarm level "
+                       "separates them, and the screen cannot warn before the cost arrives")
+    elif headroom < 0.1:
+        out["note"] = (f"only {headroom:.2f}x of headroom between benign traffic and the cost: an alarm "
+                       "set for early warning will fire often")
+    return out
 
 
 def roc(positive: Sequence[float], negative: Sequence[float]) -> dict:
