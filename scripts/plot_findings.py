@@ -238,6 +238,11 @@ def fig_instrument(out, store):
         for p in m["points"]:
             runs.setdefault((model, flag, float(p["value"])), []).append(p["request_summary"]["tpot_ms_mean"])
 
+    cal = calibration()
+    # The legend names the realised load of the skewed arm, which the calibration
+    # measures: typing it would let the legend drift from the experiment.
+    skew_label = "skewed " + " / ".join(
+        f"{cal[m][2.0][0]:.1f}x" for m in ("deepseek-v2", "mixtral") if 2.0 in cal.get(m, {}))
     fig, ax = plt.subplots(figsize=(9.0, 4.6), facecolor=SURFACE)
     style(ax, "", "Time per output token (ms)",
           "Part of the measured cost was our own measurement plugin",
@@ -254,7 +259,7 @@ def fig_instrument(out, store):
             for bi, (v, colour) in enumerate(((lo, COND[0]), (hi, COND[1]))):
                 x = base + (bi - 0.5) * inner
                 ax.bar(x, v.mean(), width, color=colour, zorder=3,
-                       label=("balanced" if bi == 0 else "skewed 3.5x / 2.6x") if (mi, fi) == (0, 0) else None)
+                       label=(("balanced" if bi == 0 else skew_label) if (mi, fi) == (0, 0) else None))
                 ax.errorbar(x, v.mean(), yerr=v.std(ddof=1), color=INK2, lw=1, capsize=3, zorder=4)
                 ax.annotate(f"{v.mean():.0f}", xy=(x, v.mean()), xytext=(0, 8), textcoords="offset points",
                             ha="center", color=INK, fontsize=9.5, fontweight="bold", zorder=5)
@@ -422,6 +427,22 @@ def natural(store):
     store["natural_detail"] = detail
 
 
+def _impact_caption(rows):
+    """The disagreement between DeepSeek's two eager sweeps, read off the plotted points."""
+    pair = [r for r in rows if r["model"] == "deepseek-v2" and r.get("mode") != "graph"]
+    if len(pair) < 2:
+        return "Levels that collapse routing onto fewer live experts are excluded."
+    first, second = (r for r in sorted(pair, key=lambda r: r.get("run") == "second"))
+    shared = sorted(set(first["load"]) & set(second["load"]))
+    if not shared:
+        return "DeepSeek's two eager sweeps cover different loads."
+    at = max(shared, key=lambda v: v if v < 3 else 0)
+    a = first["tpot_pct"][first["load"].index(at)]
+    b = second["tpot_pct"][second["load"].index(at)]
+    return (f"DeepSeek's two eager sweeps disagree at {at:.2f}x: one reads {a:+.0f}%, the other {b:+.0f}%. "
+            "Where its cost begins is unresolved;\nMixtral's rise reproduces.")
+
+
 def fig_impact_map(out, store):
     """What it costs, against where natural traffic falls, on one load axis."""
     cal = calibration()
@@ -521,8 +542,7 @@ def fig_impact_map(out, store):
              "Load: the busiest rank's share of token-expert assignments in each MoE layer, averaged over layers; "
              "4-way contiguous placement.\nNatural ranges: single prompts and random 200-prompt mixes p1-p99, "
              "one-subject windows min-max; dot = median. Levels that collapse routing are excluded.\n"
-             "DeepSeek's two eager sweeps disagree between 2.3x and 3.4x: the filled one reads +1% at 2.35x, "
-             "the hollow one +7%.\nWhere its cost begins is unresolved; Mixtral's rise from 1.3x reproduces.",
+             + _impact_caption(rows),
              color=INK3, fontsize=7.5, va="bottom", linespacing=1.4)
     # Explicit margins: tight_layout cannot place shared axes with long tick labels.
     fig.subplots_adjust(left=0.215, right=0.975, top=0.995 if BARE else 0.875,
@@ -543,6 +563,28 @@ def per_layer_loads(pattern):
             f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
             out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
     return out
+
+
+def _rotating_caption(rows):
+    """Mixtral's matched-load pairs and DeepSeek's gap, read off the plotted points."""
+    def series(model, skew):
+        return next((r for r in rows if r["model"] == model and r["skew"] == skew), None)
+
+    pairs = []
+    rot, fixed = series("mixtral", "rotating"), series("mixtral", "one fixed rank")
+    if rot and fixed:
+        for i, load in enumerate(rot["load"]):
+            j = min(range(len(fixed["load"])), key=lambda k: abs(fixed["load"][k] - load))
+            if abs(fixed["load"][j] - load) < 0.05 and load > 1.5:
+                pairs.append(f"{rot['tpot_ms'][i]:.1f} against {fixed['tpot_ms'][j]:.1f}")
+    ds_rot, ds_fixed = series("deepseek-v2", "rotating"), series("deepseek-v2", "one fixed rank")
+    gap = ""
+    if ds_rot and ds_fixed:
+        gap = (f"\nwhile DeepSeek stays at {ds_rot['tpot_ms'][-1]:.0f} ms when the skew rotates and reaches "
+               f"{ds_fixed['tpot_ms'][-1]:.0f} ms when it does not")
+    lead = ("At matched per-layer load Mixtral lands on the same millisecond either way ("
+            + "; ".join(pairs) + ")," if pairs else "At matched per-layer load,")
+    return lead + gap + ". Natural traffic rotates, so this is a second reason DeepSeek's null holds."
 
 
 def fig_rotating(out, store):
@@ -587,9 +629,7 @@ def fig_rotating(out, store):
              "but no rank is hot throughout.",
              color=INK2, fontsize=9.5)
     caption(fig, 0.008, 0.015,
-             "At matched per-layer load Mixtral lands on the same millisecond either way (176.4 against 176.6; "
-             "193.2 against 193.9), while DeepSeek\nstays flat when the skew rotates and rises 22% when it does "
-             "not. Natural traffic rotates, so this is a second reason DeepSeek's null holds.",
+             _rotating_caption(rows),
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "rotating_skew.png"), dpi=200, facecolor=SURFACE)
@@ -685,7 +725,9 @@ def fig_statistic(out, store):
              "Left: a step runs its layers in sequence, so what it waits for is the sum over calls of the "
              "maximum over ranks. Summing each rank first lets a\nbusiest rank that changes between layers "
              "cancel. Right: the same cancellation in the router's counters - and for a skew that rotates "
-             "between layers,\nthe pooled form reads 1.03x, which is what benign traffic reads.",
+             "between layers,\nthe pooled form reads "
+             + (f"{rows['routing'][-1]['pooled']:.2f}x" if rows.get("routing") else "near 1.0x")
+             + ", which is what benign traffic reads.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=frame((0, 0.08, 1, 0.89)))
     fig.savefig(os.path.join(out, "statistic.png"), dpi=200, facecolor=SURFACE)
