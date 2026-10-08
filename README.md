@@ -120,7 +120,7 @@ Grid runs are idempotent: repeating the command skips completed runs and resumes
 configs/
   examples/             ready-to-run configurations (full templates, smoke test, profiled run)
   grids/                parameter grids for multi-configuration datasets
-docs/                   setup, usage, experiments, configuration, data format, results API
+docs/                   findings, setup, usage, experiments, configuration, data format, results API
 notebooks/              analysis examples using moe_reliability_results
 packages/moe-reliability-results/   results library (query, aggregation, visualization)
 src/moe_reliability/
@@ -138,6 +138,8 @@ tests/                  test suite (simulated NPU deployment)
 
 ## Documentation
 
+- **[Findings](docs/findings.md): what the project measured, in plain language,
+  with every figure — start here**
 - [Setup](docs/setup.md): Ascend host preparation, installation, Docker, credentials
 - [Usage](docs/usage.md): CLI workflow, runs, resuming, grids, logs
 - [Experiments](docs/experiments.md): methodology and metric definitions
