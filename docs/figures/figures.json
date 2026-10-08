@@ -797,6 +797,85 @@
    ]
   }
  ],
+ "regimes": [
+  {
+   "group": "Natural traffic",
+   "label": "English, 4 ranks",
+   "model": "mixtral",
+   "load": 1.15,
+   "pct": 0.0,
+   "sd": 0.6,
+   "balanced_ms": 165.5,
+   "skewed_ms": 165.5,
+   "note": "the 2026-10-02 null"
+  },
+  {
+   "group": "Injected skew, eager",
+   "label": "Mixtral, one hot rank",
+   "model": "mixtral",
+   "load": 3.36,
+   "pct": 26.8,
+   "sd": 1.1,
+   "balanced_ms": 165.5,
+   "skewed_ms": 209.8,
+   "note": ""
+  },
+  {
+   "group": "Injected skew, eager",
+   "label": "DeepSeek, one hot rank",
+   "model": "deepseek-v2",
+   "load": 3.45,
+   "pct": 22.2,
+   "sd": 3.6,
+   "balanced_ms": 174.0,
+   "skewed_ms": 212.6,
+   "note": ""
+  },
+  {
+   "group": "Injected skew, graph",
+   "label": "Mixtral, one hot rank",
+   "model": "mixtral",
+   "load": 3.36,
+   "pct": 43.0,
+   "sd": 10.1,
+   "balanced_ms": 146.1,
+   "skewed_ms": 208.9,
+   "note": ""
+  },
+  {
+   "group": "Injected skew, graph",
+   "label": "DeepSeek, one hot rank",
+   "model": "deepseek-v2",
+   "load": 3.45,
+   "pct": 34.4,
+   "sd": 11.9,
+   "balanced_ms": 142.3,
+   "skewed_ms": 191.2,
+   "note": ""
+  },
+  {
+   "group": "Skew that rotates",
+   "label": "Mixtral, hot rank per layer",
+   "model": "mixtral",
+   "load": 2.63,
+   "pct": 12.5,
+   "sd": 4.6,
+   "balanced_ms": 171.7,
+   "skewed_ms": 193.2,
+   "note": ""
+  },
+  {
+   "group": "Skew that rotates",
+   "label": "DeepSeek, hot rank per layer",
+   "model": "deepseek-v2",
+   "load": 3.59,
+   "pct": 5.5,
+   "sd": 8.8,
+   "balanced_ms": 165.7,
+   "skewed_ms": 174.8,
+   "note": ""
+  }
+ ],
  "detection": [
   {
    "model": "deepseek-v2",
@@ -977,6 +1056,164 @@
     1.0,
     1.0
    ]
+  }
+ ],
+ "detection_cost": [
+  {
+   "model": "deepseek-v2",
+   "window": 8,
+   "k": 1,
+   "cost_pct": 3.904,
+   "detected": 0.5,
+   "delay_requests": 8.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 8,
+   "k": 2,
+   "cost_pct": 1.197,
+   "detected": 0.985,
+   "delay_requests": 16.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 8,
+   "k": 3,
+   "cost_pct": 0.2,
+   "detected": 1.0,
+   "delay_requests": 24.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 32,
+   "k": 1,
+   "cost_pct": 0.743,
+   "detected": 0.66,
+   "delay_requests": 32.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 32,
+   "k": 2,
+   "cost_pct": 0.399,
+   "detected": 1.0,
+   "delay_requests": 64.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 32,
+   "k": 3,
+   "cost_pct": 0.2,
+   "detected": 1.0,
+   "delay_requests": 96.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 128,
+   "k": 1,
+   "cost_pct": 0.608,
+   "detected": 0.25,
+   "delay_requests": 128.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 128,
+   "k": 2,
+   "cost_pct": 0.271,
+   "detected": 0.95,
+   "delay_requests": 256.0
+  },
+  {
+   "model": "deepseek-v2",
+   "window": 128,
+   "k": 3,
+   "cost_pct": 0.237,
+   "detected": 1.0,
+   "delay_requests": 384.0
+  },
+  {
+   "model": "mixtral",
+   "window": 8,
+   "k": 1,
+   "cost_pct": 2.029,
+   "detected": 0.76,
+   "delay_requests": 8.0
+  },
+  {
+   "model": "mixtral",
+   "window": 8,
+   "k": 2,
+   "cost_pct": 0.885,
+   "detected": 1.0,
+   "delay_requests": 16.0
+  },
+  {
+   "model": "mixtral",
+   "window": 8,
+   "k": 3,
+   "cost_pct": 0.2,
+   "detected": 1.0,
+   "delay_requests": 40.0
+  },
+  {
+   "model": "mixtral",
+   "window": 32,
+   "k": 1,
+   "cost_pct": 1.271,
+   "detected": 0.38,
+   "delay_requests": 32.0
+  },
+  {
+   "model": "mixtral",
+   "window": 32,
+   "k": 2,
+   "cost_pct": 0.346,
+   "detected": 0.99,
+   "delay_requests": 64.0
+  },
+  {
+   "model": "mixtral",
+   "window": 32,
+   "k": 3,
+   "cost_pct": 0.325,
+   "detected": 1.0,
+   "delay_requests": 96.0
+  },
+  {
+   "model": "mixtral",
+   "window": 128,
+   "k": 1,
+   "cost_pct": 0.591,
+   "detected": 0.31,
+   "delay_requests": 128.0
+  },
+  {
+   "model": "mixtral",
+   "window": 128,
+   "k": 2,
+   "cost_pct": 0.238,
+   "detected": 0.96,
+   "delay_requests": 256.0
+  },
+  {
+   "model": "mixtral",
+   "window": 128,
+   "k": 3,
+   "cost_pct": 0.232,
+   "detected": 0.995,
+   "delay_requests": 384.0
+  },
+  {
+   "localisation_layers": [
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+   ],
+   "mean_load": 1.666,
+   "max_layer": 3.691
   }
  ]
 }

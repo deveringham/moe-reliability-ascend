@@ -661,6 +661,141 @@ def fig_statistic(out, store):
     store["statistic"] = rows
 
 
+def top_level_cost(pattern, loads=None, live_only=True, model=None):
+    """Cost of the strongest clean skew in one run: (load, % over balanced, sd %).
+
+    ``loads`` maps level to realised busiest-rank load; without it the shared
+    calibration is used. Levels where routing collapses onto fewer live experts
+    are dropped, since they vary the expert count as well as the skew.
+    """
+    runs = list(manifests(pattern))
+    if not runs:
+        return None
+    model = model or os.path.basename(runs[0][0]).split("_")[2]
+    _, by = sweep(pattern)
+    if loads is None:
+        cal = calibration()
+        full = max(n for _, n in cal[model].values())
+        loads = {lv: cal[model][lv][0] for lv in by
+                 if lv in cal[model] and (not live_only or cal[model][lv][1] == full)}
+    levels = [lv for lv in sorted(by) if lv in loads]
+    if len(levels) < 2:
+        return None
+    base = float(np.mean(by[levels[0]]))
+    top_level = max(levels, key=lambda lv: loads[lv])
+    top = float(np.mean(by[top_level]))
+
+    def spread(values):
+        return float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+
+    # The ratio's uncertainty comes from both arms, and for graph mode the
+    # balanced arm is the noisy one: quoting only the skewed arm's spread would
+    # make a +43% reading look precise to a third of a point when it is not.
+    rel = np.hypot(spread(by[top_level]) / top, spread(by[levels[0]]) / base)
+    return loads[top_level], 100 * (top / base - 1), 100 * rel * (top / base), base, top
+
+
+def fig_regimes(out, store):
+    """Which serving regimes turn expert imbalance into latency, and which do not."""
+    rows: list = []
+
+    def add(group, label, model, result, note=""):
+        if result:
+            rows.append({"group": group, "label": label, "model": model, "load": round(result[0], 2),
+                         "pct": round(result[1], 1), "sd": round(result[2], 1),
+                         "balanced_ms": round(result[3], 1), "skewed_ms": round(result[4], 1),
+                         "note": note})
+
+    # Natural traffic is the null: the same measurement with nothing injected.
+    add("Natural traffic", "English, 4 ranks", "mixtral", (1.15, 0.0, 0.6, 165.5, 165.5),
+        "the 2026-10-02 null")
+    for pattern, model in (("*language-latency-007", "mixtral"),):
+        r = top_level_cost(pattern, loads={0.0: 1.47})  # unbiased; load is the corpus's own
+        add("Natural traffic", "Yoruba, 4 ranks", model, r)
+
+    add("Injected skew, eager", "Mixtral, one hot rank", "mixtral", top_level_cost(EAGER[1]))
+    add("Injected skew, eager", "DeepSeek, one hot rank", "deepseek-v2", top_level_cost(EAGER[0]))
+    add("Injected skew, graph", "Mixtral, one hot rank", "mixtral", top_level_cost(GRAPH[1]))
+    add("Injected skew, graph", "DeepSeek, one hot rank", "deepseek-v2", top_level_cost(GRAPH[0]))
+
+    for model in ("mixtral", "deepseek-v2"):
+        loads = per_layer_loads(ROTATING[model]) if list(manifests(ROTATING[model])) else None
+        add("Skew that rotates", f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}, hot rank per layer",
+            model, top_level_cost(ROTATING[model], loads=loads, model=model))
+
+    for pattern, label in (("*decode-ridge-000", "batch 512 (128 tok/expert)"),
+                           ("*decode-ridge-001", "batch 1024 (256)"),
+                           ("*decode-ridge-002", "batch 2048 (512)")):
+        add("Decode batch size", label, "mixtral", top_level_cost(pattern))
+
+    add("Expert-parallel width", "Mixtral, 8 ranks", "mixtral",
+        top_level_cost("*rbias-npu8-000", loads=_npu8_loads()))
+
+    if not rows:
+        return
+    fig, ax = plt.subplots(figsize=(9.6, 0.42 * len(rows) + 2.6), facecolor=SURFACE)
+    style(ax, "Change in time per output token against the balanced arm (%)", "",
+          "Where expert imbalance turns into latency, and where it does not",
+          "Each bar is the strongest skew that keeps every expert live, measured against that run's own "
+          "balanced point.")
+    ax.axvspan(-DRIFT_PCT, DRIFT_PCT, color="#f0efec", zorder=0)
+    y, ticks, labels = 0.0, [], []
+    last = None
+    for r in rows:
+        if r["group"] != last:
+            if last is not None:
+                y += 0.6
+            ax.annotate(r["group"], xy=(0, y + 0.42), xycoords=("axes fraction", "data"), xytext=(2, 0),
+                        textcoords="offset points", ha="left", va="center", color=INK, fontsize=9,
+                        fontweight="bold")
+            y += 0.95
+            last = r["group"]
+        ax.barh(y, r["pct"], 0.62, color=MODEL_COLOUR[r["model"]], zorder=3)
+        if r["sd"]:
+            ax.errorbar(r["pct"], y, xerr=r["sd"], color=INK2, lw=1, capsize=3, zorder=4)
+        # The millisecond pair matters: graph mode is faster at rest, so the same
+        # absolute cost is a larger percentage there.
+        detail = f"  at {r['load']:.2f}x" if r["load"] > 1.2 else ""
+        if r["balanced_ms"] != r["skewed_ms"]:
+            detail += f"   {r['balanced_ms']:.0f}\u2192{r['skewed_ms']:.0f} ms"
+        ax.annotate(f"{r['pct']:+.1f}%" + detail,
+                    xy=(r["pct"] + (r["sd"] if r["pct"] >= 0 else -r["sd"]), y),
+                    xytext=(8 if r["pct"] >= 0 else -8, 0), textcoords="offset points",
+                    ha="left" if r["pct"] >= 0 else "right", va="center", color=INK2, fontsize=8.5)
+        ticks.append(y)
+        labels.append(r["label"])
+        y += 1.0
+    ax.set_yticks(ticks, labels, fontsize=9)
+    ax.tick_params(axis="y", labelcolor=INK2)
+    ax.invert_yaxis()
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, lw=0.8)
+    ax.axvline(0, color=GRID, lw=1)
+    ax.set_xlim(min(-6, min(r["pct"] for r in rows) - 8), max(r["pct"] for r in rows) + 34)
+    ax.annotate(f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(DRIFT_PCT, 0.0),
+                xycoords=("data", "axes fraction"), xytext=(5, 6), textcoords="offset points",
+                ha="left", va="bottom", color=INK3, fontsize=8.5)
+    fig.text(0.012, 0.012,
+             "Blue is DeepSeek-V2-Lite, orange Mixtral 8x7B. 4 ranks and eager mode unless the row says "
+             "otherwise. Error bars carry the spread of both\narms, which is why graph mode - fast at rest, "
+             "and noisiest there - is the least precise row despite the largest percentage.",
+             color=INK3, fontsize=8, va="bottom")
+    fig.tight_layout(rect=(0, 0.05, 1, 1))
+    fig.savefig(os.path.join(out, "regimes.png"), dpi=200, facecolor=SURFACE)
+    store["regimes"] = rows
+
+
+def _npu8_loads():
+    """Realised per-layer load by level from the 8-way calibration, if it has run."""
+    out = {}
+    for d, m in manifests("*rbias-npu8-calibration"):
+        for p in m["points"]:
+            if p.get("validation_file"):
+                f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+                out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
+    return out or None
+
+
 def fig_detection(out, store):
     """What the screen catches, against what it costs to count."""
     detection = json.load(open(os.path.join("docs", "detection.json")))
@@ -717,6 +852,108 @@ def fig_detection(out, store):
     store["detection"] = rows
 
 
+def fig_detection_cost(out, store):
+    """What the detector buys, against what the whole pipeline costs to run."""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    data = json.load(open(os.path.join("docs", "detection.json")))
+    if not data.get("timing"):
+        return
+    # A confirmation pass was measured at +15-19% on DeepSeek and +1.6-6.8% on
+    # Mixtral; the midpoint prices the amortised cost, and the screen itself is
+    # still a placeholder.
+    CONFIRM_PCT, CONFIRM_REQS, SCREEN_PCT = 12.0, 100, 0.2
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 5.0), facecolor=SURFACE)
+    rows = []
+    style(left, "Amortised cost of running the detector (% of serving time)",
+          "Skews caught, at the lowest costly level")
+    left.set_title("What it buys, and what it costs", color=INK, fontsize=11, fontweight="bold", loc="left")
+    for model, row in data["timing"].items():
+        if "skipped" in row:
+            continue
+        by_window: dict = {}
+        for r in row["settings"]:
+            cost = D.pipeline_overhead(SCREEN_PCT, r["requests_to_false_alarm_p50"], CONFIRM_PCT,
+                                       CONFIRM_REQS, stage2_rejects=0.0)["total_pct"]
+            by_window.setdefault(r["window"], []).append((r["consecutive"], cost, r["detected_fraction"]))
+            rows.append({"model": model, "window": r["window"], "k": r["consecutive"],
+                         "cost_pct": cost, "detected": r["detected_fraction"],
+                         "delay_requests": r["delay_requests_p50"]})
+        for window, pts in sorted(by_window.items()):
+            pts.sort()
+            xs = [p[1] for p in pts]
+            ys = [p[2] for p in pts]
+            # One line per window; walking it is raising k, which moves up and left.
+            left.plot(xs, ys, "-o", ms=6, lw=1.6, color=MODEL_COLOUR[model], mec=SURFACE, mew=1.4,
+                      zorder=3, alpha=0.95 if window == 8 else 0.45,
+                      label=MODEL_LABEL[model] if window == 8 else None)
+            if window == 8:
+                for k, x, y in pts:
+                    left.annotate(f"k={k}", xy=(x, y), xytext=(0, -15 if k == 1 else 10),
+                                  textcoords="offset points", ha="center", color=INK2, fontsize=8.5,
+                                  fontweight="bold" if k == 3 else "normal")
+    left.set_xscale("log")
+    left.set_xticks([0.2, 0.5, 1, 2, 5], ["0.2%", "0.5%", "1%", "2%", "5%"])
+    left.minorticks_off()
+    left.set_ylim(0.15, 1.12)
+    left.set_yticks([0.25, 0.5, 0.75, 1.0], ["25%", "50%", "75%", "100%"])
+    left.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="lower left")
+    left.annotate("the solid line is an 8-request window;\nfainter lines are 32 and 128",
+                  xy=(0.97, 0.10), xycoords="axes fraction", ha="right", va="bottom",
+                  color=INK3, fontsize=8.5, linespacing=1.3)
+
+    # Right: a skew the model-wide average hides, found layer by layer.
+    loc = (data.get("localisation") or {})
+    run = next(iter(loc.values()), None)
+    style(right, "MoE layer", "Busiest rank in that layer")
+    right.set_title("It says where, not just whether", color=INK, fontsize=11, fontweight="bold", loc="left")
+    if run and run["points"]:
+        import gzip as _gz
+        hit = [p for p in run["points"] if p["level"] == max(q["level"] for q in run["points"])][0]
+        for d, m in manifests("*detection-localisation"):
+            for p in m["points"]:
+                if float(p["value"]) != hit["level"] or not p.get("validation_file"):
+                    continue
+                f = json.load(_gz.open(os.path.join(d, p["validation_file"])))
+                per_layer = np.array(f["rank_max_over_mean_per_layer"])
+                flagged = set(hit["expected_layers"])
+                colours = [MODEL_COLOUR["deepseek-v2"] if i in flagged else GRID
+                           for i in range(len(per_layer))]
+                right.bar(range(len(per_layer)), per_layer, 0.8, color=colours, zorder=3)
+                right.axhline(hit["mean_load"], color=INK3, ls="--", lw=1.4, zorder=4)
+                right.annotate(f"model-wide average {hit['mean_load']:.2f}x\n"
+                               f"- near the benign floor",
+                               xy=(len(per_layer) - 0.5, hit["mean_load"]), xytext=(-4, 8),
+                               textcoords="offset points", ha="right", va="bottom", color=INK2,
+                               fontsize=8.5, linespacing=1.3)
+                right.annotate(f"the {len(flagged)} biased layers, all found\n"
+                               f"(precision and recall 1.0, rank named)",
+                               xy=(np.mean(sorted(flagged)), per_layer[sorted(flagged)].max()),
+                               xytext=(0, 12), textcoords="offset points", ha="center", va="bottom",
+                               color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold",
+                               linespacing=1.3)
+                rows.append({"localisation_layers": sorted(flagged),
+                             "mean_load": hit["mean_load"], "max_layer": hit["max_layer_load"]})
+                break
+        right.set_ylim(0, 4.4)
+    fig.suptitle("The detector: what it catches, what it costs, and what it can point at",
+                 color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    fig.text(0.008, 0.905,
+             "Left: each point is one sampling setting; k is how many consecutive alarming windows are "
+             "required before raising one.",
+             color=INK2, fontsize=9.5)
+    fig.text(0.008, 0.015,
+             "Requiring three consecutive windows improves detection and cost at once, because a screen "
+             "that cries wolf keeps paying for confirmation.\nThe screen's own cost on the device is not "
+             "yet measured and is carried here as 0.2%; confirmation is priced at +12% while it runs.",
+             color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.savefig(os.path.join(out, "detection_cost.png"), dpi=200, facecolor=SURFACE)
+    store["detection_cost"] = rows
+
+
 def main(out="docs/figures"):
     os.makedirs(out, exist_ok=True)
     store: dict = {}
@@ -729,10 +966,12 @@ def main(out="docs/figures"):
     fig_statistic(out, store)
     if list(manifests(ROTATING["mixtral"])):
         fig_rotating(out, store)
+    fig_regimes(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
+        fig_detection_cost(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/regimes.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
 
 
 if __name__ == "__main__":
