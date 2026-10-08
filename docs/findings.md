@@ -275,11 +275,29 @@ catch.
 Given all the above, what would a practical monitor look like? We designed and
 evaluated a three-stage pipeline.
 
-| Stage | Reads | Runs | Answers |
-|---|---|---|---|
-| **1. Screen** | token-to-expert counts per layer and chip | always | is imbalance high? |
-| **2. Confirm** | engine step times, by step type | on alarm | is it costing time? |
-| **3. Attribute** | a short profiled window | rarely | which chip, and why? |
+| Stage | Reads | Runs | Answers | State |
+|---|---|---|---|---|
+| **1. Screen** | token-to-expert counts per layer and chip | always | is imbalance high? | works |
+| **2. Confirm** | engine step times, by step type | on alarm | is it costing time? | works, but only from profiler traces |
+| **3. Attribute** | a short profiled window | rarely | which chip, and why? | does not work yet |
+
+**Everything here was computed offline.** The server records which experts each
+token was routed to, and a run writes profiler traces; the windowing, sampling,
+thresholds, alarms and step fits are all applied to those recordings afterwards.
+The routing and the step times are real, so what each stage would *read* is
+faithful — but nothing runs inside the serving loop, and no runtime cost has been
+measured. Stage 1 has a cheap online implementation sketched (a counter in the
+expert-selection path) and not built. Stage 2 would not need the profiler in
+production, since the engine already knows how long each step took and what was
+in it, but that version does not exist either.
+
+**And no stage infers impact from routing.** It cannot: a rotating skew gives
+Mixtral and DeepSeek identical routing statistics and opposite costs, and
+DeepSeek's own curve is flat to 2.34x and then jumps. The screen's threshold is
+*calibrated* from a separately measured cost curve — per model, and as section 2
+shows, per batch size too. Stage 2 is the only part that measures impact, and it
+reads step times rather than routing. An alarm means "look here", never "this is
+costing you".
 
 Stage 1's threshold comes from the measured **cost** curve, not from the load
 distribution — because, as section 5 showed, the same load costs full price on
@@ -320,6 +338,20 @@ a profiled confirmation measured at **+15–19% TPOT while it runs**.
 time**, for a few dozen requests of delay. Cutting the sampling further would be
 the wrong economy — it is already the small term.
 
+### Sample the layers at random, not on a fixed schedule
+
+Counting the same few layers every window has a blind spot, and it is worse than
+a missing feature. On 26 MoE layers, four evenly spaced picks land on 0, 8, 17
+and 25 — and a skew confined to layers 9 to 14 falls entirely between them.
+Measured: the screen detects that skew in **1% of windows**. It is not that it
+cannot say where the problem is; it cannot see it at all.
+
+Redrawing the four layers each window costs exactly the same and detects it in
+**66%**, the chance that a random four of 26 includes one of the six affected. On
+a skew that touches every layer — the case all the other numbers here use —
+random sampling is indistinguishable from fixed (0.68 against 0.72 at Mixtral's
+hardest level). It is strictly better, and it is the configuration to use.
+
 ### It can say *where*, not just *whether*
 
 Because the counts are per layer, the screen can report which layers are affected
@@ -327,6 +359,13 @@ and whether one chip carries them. With a skew confined to 6 of 26 layers on
 chip 2 — where the model-wide average reads a near-benign 1.40x — per-layer
 flagging recovered **exactly those 6 layers, named chip 2, and flagged nothing in
 the balanced case.**
+
+With random layer sampling this needs no second mode and no extra counting: each
+layer accumulates its own evidence over successive windows, and after 50 windows
+— 400 requests, still at about 1% of routing counted — every layer has been seen
+and the six affected ones come back with precision and recall 1.0. An earlier
+version of this result pooled every layer, every token and 800 requests at once,
+which is not something the screen could do at all.
 
 That distinction is directly actionable: a skew that one chip carries throughout
 might be fixed by moving experts; one that rotates between layers cannot be, and
