@@ -40,7 +40,7 @@ import numpy as np
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
            "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank", "pipeline_overhead"]
+           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -110,6 +110,30 @@ def per_layer_load(counts: np.ndarray, n_ranks: int) -> tuple[np.ndarray, np.nda
     return per_rank.max(axis=1) * n_ranks, per_rank.argmax(axis=1)
 
 
+def accumulate_layers(counts: np.ndarray, n_ranks: int, sampler: WindowSampler, windows: int,
+                      seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Mean load observed per layer, and how often each was counted, over many windows.
+
+    This is what random layer sampling buys: no single window sees every layer,
+    but over enough of them each layer accumulates its own evidence, so the skew
+    can be placed without ever counting more than ``sampler.layers`` at a time.
+    Layers never drawn come back as NaN rather than as a reading.
+    """
+    rng = np.random.default_rng(seed)
+    n_layers = counts.shape[1]
+    total = np.zeros(n_layers)
+    seen = np.zeros(n_layers, dtype=int)
+    for _ in range(windows):
+        idx = sampler._layer_index(n_layers, rng)
+        rows = counts[rng.choice(len(counts), min(sampler.window, len(counts)), replace=False)][:, idx]
+        pooled = rows.sum(axis=0)
+        if sampler.token_fraction < 1.0:
+            pooled = rng.binomial(pooled.astype(np.int64), sampler.token_fraction).astype(float)
+        total[idx] += per_layer_load(pooled, n_ranks)[0]
+        seen[idx] += 1
+    return np.where(seen > 0, total / np.maximum(seen, 1), np.nan), seen
+
+
 def localise(counts: np.ndarray, n_ranks: int, threshold: float) -> dict:
     """Which layers carry a skew, and whether one rank carries it throughout.
 
@@ -161,14 +185,24 @@ class WindowSampler:
     layers: int | None = None
     token_fraction: float = 1.0
     draws: int = 200
+    #: "spaced" counts the same evenly spaced layers every window, which is cheap
+    #: and has a blind spot: a skew confined to layers between them is invisible,
+    #: for detection as well as for localisation. "random" redraws the layers each
+    #: window, so every layer is eventually counted at the same per-window cost.
+    layer_choice: str = "spaced"
 
     def cost(self, n_layers: int) -> SampleCost:
         layers = n_layers if self.layers is None else min(self.layers, n_layers)
         return SampleCost(layer_fraction=layers / n_layers, token_fraction=self.token_fraction)
 
-    def _layer_index(self, n_layers: int) -> np.ndarray:
+    def _layer_index(self, n_layers: int, rng=None) -> np.ndarray:
         if self.layers is None or self.layers >= n_layers:
             return np.arange(n_layers)
+        if self.layer_choice == "random":
+            if rng is None:
+                raise ValueError("random layer sampling needs a generator: the point is that the layers "
+                                 "differ between windows")
+            return np.sort(rng.choice(n_layers, self.layers, replace=False))
         return np.unique(np.linspace(0, n_layers - 1, self.layers).round().astype(int))
 
 
@@ -305,13 +339,18 @@ def estimate_loads(counts: np.ndarray, n_ranks: int, sampler: WindowSampler,
     per token, which is the same multinomial and far cheaper.
     """
     rng = np.random.default_rng(seed)
-    layers = sampler._layer_index(counts.shape[1])
     window = min(sampler.window, len(counts))
+    drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
+    if sampler.layer_choice == "random":
+        # Each window sees a different set of layers, so they cannot share one pass.
+        return np.array([_window_loads(counts[:, sampler._layer_index(counts.shape[1], rng)][
+            rng.choice(len(counts), window, replace=False)], n_ranks, drawn, rng)[0]
+            for _ in range(sampler.draws)])
+    layers = sampler._layer_index(counts.shape[1])
     # Windows are drawn without replacement within themselves but independently of
     # each other, so they are laid end to end and reduced in one pass.
     chosen = np.concatenate([rng.choice(len(counts), window, replace=False)
                              for _ in range(sampler.draws)])
-    drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
     return _window_loads(counts[:, layers][chosen], n_ranks, drawn, rng)
 
 

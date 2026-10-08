@@ -997,7 +997,8 @@ def fig_detection_cost(out, store):
     loc = (data.get("localisation") or {})
     run = next(iter(loc.values()), None)
     style(right, "MoE layer", "Busiest rank in that layer")
-    right.set_title("It says where, not just whether", color=INK, fontsize=11, fontweight="bold", loc="left")
+    right.set_title("Where - but only with every layer counted", color=INK, fontsize=11,
+                    fontweight="bold", loc="left")
     if run and run["points"]:
         import gzip as _gz
         hit = [p for p in run["points"] if p["level"] == max(q["level"] for q in run["points"])][0]
@@ -1018,7 +1019,7 @@ def fig_detection_cost(out, store):
                                textcoords="offset points", ha="right", va="bottom", color=INK2,
                                fontsize=8.5, linespacing=1.3)
                 explain(right, f"the {len(flagged)} biased layers, all found\n"
-                               f"(precision and recall 1.0, rank named)",
+                               f"- but only when every layer is counted",
                                xy=(np.mean(sorted(flagged)), per_layer[sorted(flagged)].max()),
                                xytext=(0, 12), textcoords="offset points", ha="center", va="bottom",
                                color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold",
@@ -1027,7 +1028,7 @@ def fig_detection_cost(out, store):
                              "mean_load": hit["mean_load"], "max_layer": hit["max_layer_load"]})
                 break
         right.set_ylim(0, 4.4)
-    heading(fig, "The detector: what it catches, what it costs, and what it can point at",
+    heading(fig, "The detector: what it catches, what it costs, and what it takes to localise",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
     caption(fig, 0.008, 0.905,
              "Left: each point is one sampling setting; k is how many consecutive alarming windows are "
@@ -1035,8 +1036,10 @@ def fig_detection_cost(out, store):
              color=INK2, fontsize=9.5)
     caption(fig, 0.008, 0.015,
              "Requiring three consecutive windows improves detection and cost at once, because a screen "
-             "that cries wolf keeps paying for confirmation.\nThe screen's own cost on the device is not "
-             "yet measured and is carried here as 0.2%; confirmation is priced at +12% while it runs.",
+             "that cries wolf keeps paying for confirmation.\nLocalising is a separate, later step: a layer "
+             "can only be flagged if it is counted, and the screen's four layers miss this block entirely "
+             "(recall 0.00).\nAt full layer coverage a tenth of the tokens still suffices, so it costs about "
+             "10% of routing, not 100% - but only while it runs.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
     fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "detection_cost.png"), dpi=200, facecolor=SURFACE)

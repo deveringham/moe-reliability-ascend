@@ -244,6 +244,46 @@ def detection(model, levels, threshold):
     return {"n_requests": int(len(levels[0.0])), "settings": rows}
 
 
+LOCALISE_SAMPLING = ((None, 8, 0.1), (13, 8, 0.1), (4, 8, 0.1))
+
+
+def localisation_sampling(d, m, pools, truth, n_moe):
+    """Can the screen's own sampling say *where* the skew is, or only that it is there?
+
+    A layer can only be flagged if it is counted, so localisation and the screen
+    are not the same measurement: the screen reads 4 layers to stay cheap, and
+    four evenly spaced layers need not touch the affected block at all.
+    """
+    rows = []
+    hot = max(pools)
+    for n_layers, window, token_fraction in LOCALISE_SAMPLING:
+        idx = (np.arange(n_moe) if not n_layers or n_layers >= n_moe
+               else np.unique(np.linspace(0, n_moe - 1, n_layers).round().astype(int)))
+        rng = np.random.default_rng(0)
+
+        def per_layer(pool, idx=idx, rng=rng, window=window, token_fraction=token_fraction):
+            chosen = rng.choice(len(pool), min(window, len(pool)), replace=False)
+            counts = pool[chosen][:, idx].sum(axis=0)
+            if token_fraction < 1.0:
+                counts = rng.binomial(counts.astype(np.int64), token_fraction).astype(float)
+            return D.per_layer_load(counts, N_RANKS)[0]
+
+        benign = np.concatenate([per_layer(pools[0.0]) for _ in range(60)])
+        flag_at = float(np.quantile(benign, 0.99))
+        recall, precision = [], []
+        for _ in range(60):
+            flagged = {int(idx[i]) for i in np.flatnonzero(per_layer(pools[hot]) >= flag_at)}
+            recall.append(len(flagged & truth) / len(truth))
+            precision.append(len(flagged & truth) / len(flagged) if flagged else 1.0)
+        rows.append({"layers_counted": len(idx), "of_layers": n_moe, "window": window,
+                     "token_fraction": token_fraction,
+                     "assignment_fraction": round(len(idx) / n_moe * token_fraction, 4),
+                     "biased_layers_visible": len(truth & set(idx.tolist())), "biased_layers": len(truth),
+                     "recall": round(float(np.mean(recall)), 3),
+                     "precision": round(float(np.mean(precision)), 3)})
+    return rows
+
+
 def localisation_run():
     """A skew confined to a few layers on a rank other than 0: is it found?"""
     out = {}
@@ -252,7 +292,7 @@ def localisation_run():
         biased = set(cfg.get("bias_layers") or [])
         model = os.path.basename(d).split("_")[2]
         n_experts = MODELS[model]["n_experts"]
-        points = []
+        points, pools, truth_idx, n_moe = [], {}, set(), 0
         for p in m["points"]:
             f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
             path = os.path.join(d, f.get("records_file") or "")
@@ -263,6 +303,8 @@ def localisation_run():
             # bias names; moe_layers maps one to the other.
             moe_layers = f.get("moe_layers") or list(range(counts.shape[1]))
             expected = {i for i, layer in enumerate(moe_layers) if layer in biased}
+            pools[float(p["value"])] = counts
+            truth_idx, n_moe = expected, len(moe_layers)
             found = D.localise(counts.sum(axis=0), N_RANKS, threshold=1.3)
             flagged = set(found["flagged_layers"])
             points.append({"level": float(p["value"]), "mean_load": round(found["mean_load"], 3),
@@ -272,8 +314,10 @@ def localisation_run():
                            "precision": round(len(flagged & expected) / len(flagged), 3) if flagged else None,
                            "flagged_rank": found["flagged_rank"],
                            "consistent_rank_share": round(found["consistent_rank_share"], 3)})
-        out[os.path.basename(d)] = {"bias_target": cfg.get("bias_target"), "bias_layers": sorted(biased),
-                                    "points": points}
+        entry = {"bias_target": cfg.get("bias_target"), "bias_layers": sorted(biased), "points": points}
+        if pools and 0.0 in pools and len(pools) > 1:
+            entry["sampling"] = localisation_sampling(d, m, pools, truth_idx, n_moe)
+        out[os.path.basename(d)] = entry
     return out
 
 
@@ -616,6 +660,11 @@ def main(out_dir="docs"):
             print(f"   level {p['level']:g}: mean {p['mean_load']:.2f}x, worst layer {p['max_layer_load']:.2f}x, "
                   f"flagged {len(p['flagged_layers'])} layers (recall {p['recall']}, precision {p['precision']}), "
                   f"rank {p['flagged_rank']}")
+        for r in row.get("sampling", []):
+            print(f"   counting {r['layers_counted']:>2}/{r['of_layers']} layers "
+                  f"({r['assignment_fraction']:>5.1%} of routing): {r['biased_layers_visible']}/"
+                  f"{r['biased_layers']} biased layers visible, recall {r['recall']:.2f}, "
+                  f"precision {r['precision']:.2f}")
     print()
     for model, kinds in store["stage2_step_time"].items():
         print(f"{model}: stage 2, ms per +1x per-layer load by step kind")

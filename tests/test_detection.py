@@ -314,3 +314,68 @@ def test_pipeline_overhead_is_dominated_by_how_often_confirmation_fires():
 def test_a_cheap_confirmation_that_rejects_removes_the_expensive_one():
     both = [D.pipeline_overhead(0.2, 324, 19.0, 100, stage2_rejects=r) for r in (0.0, 1.0)]
     assert both[1]["confirm_pct"] == 0.0 and both[0]["confirm_pct"] > 0
+
+
+# --- Random layer sampling, and localising by accumulation -------------------
+
+def test_evenly_spaced_layers_can_miss_a_block_entirely():
+    sampler = D.WindowSampler(window=8, layers=4)
+    spaced = set(sampler._layer_index(26).tolist())
+    # The block the localisation experiment biases sits between the spaced picks.
+    assert spaced.isdisjoint({9, 10, 11, 12, 13, 14})
+
+
+def test_random_layer_sampling_redraws_every_window():
+    sampler = D.WindowSampler(window=8, layers=4, layer_choice="random")
+    rng = np.random.default_rng(0)
+    draws = {tuple(sampler._layer_index(26, rng)) for _ in range(20)}
+    assert len(draws) > 10                       # not the same four every time
+    assert all(len(set(d)) == 4 for d in draws)  # and four distinct layers each time
+    with pytest.raises(ValueError, match="needs a generator"):
+        sampler._layer_index(26)
+
+
+def _layered(n=300, n_layers=26, n_experts=8, hot=(), hot_share=0.5, seed=0):
+    """Requests routing evenly, except on ``hot`` layers where rank 0 takes a share."""
+    rng = np.random.default_rng(seed)
+    out = np.empty((n, n_layers, n_experts))
+    even = np.full(n_experts, 1 / n_experts)
+    skew = np.full(n_experts, (1 - hot_share) / (n_experts - 2))
+    skew[:2] = hot_share / 2
+    for layer in range(n_layers):
+        p = skew if layer in hot else even
+        out[:, layer] = rng.multinomial(400, p, size=n)
+    return out
+
+
+def test_random_sampling_sees_a_layer_local_skew_that_spaced_sampling_misses():
+    # A skew in layers 9-14 only, which the evenly spaced four do not touch.
+    balanced = _layered(seed=0)
+    skewed = _layered(hot=set(range(9, 15)), seed=1)
+
+    def detection(choice):
+        s = D.WindowSampler(window=8, layers=4, draws=300, layer_choice=choice)
+        alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, s, seed=0), 0.01)
+        return float((D.estimate_loads(skewed, N_RANKS, s, seed=1) >= alarm).mean())
+
+    assert detection("spaced") < 0.1     # blind to it
+    assert detection("random") > 0.5     # sees it, at the same per-window cost
+
+
+def test_accumulation_places_the_skew_without_counting_every_layer_at_once():
+    skewed = _layered(hot=set(range(9, 15)), seed=1)
+    sampler = D.WindowSampler(window=8, layers=4, layer_choice="random")
+
+    mean_load, seen = D.accumulate_layers(skewed, N_RANKS, sampler, windows=200, seed=0)
+    assert seen.min() > 0                       # every layer eventually counted
+    assert np.nanmax(mean_load[9:15]) > np.nanmax(np.delete(mean_load, range(9, 15))) + 0.2
+    # Four layers a window, 200 windows: each layer seen a fraction of the time.
+    assert seen.sum() == 200 * 4
+
+
+def test_accumulation_reports_layers_it_never_saw_as_unknown():
+    counts = _layered(n=50, seed=2)
+    few = D.WindowSampler(window=8, layers=4, layer_choice="random")
+    mean_load, seen = D.accumulate_layers(counts, N_RANKS, few, windows=2, seed=0)
+    assert np.isnan(mean_load[seen == 0]).all()  # not a reading of 0
+    assert seen.sum() == 8
