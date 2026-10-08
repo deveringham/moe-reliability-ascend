@@ -435,3 +435,70 @@ def test_a_sweep_that_never_leaves_the_noise_says_so():
     cal = D.calibrate(LOADS[:2], COSTS[:2], [176.7, 176.1, 169.2], [1.1] * 50, SAMPLING)
     assert cal["impact_threshold"] is None and cal["alarm"] is None
     assert "nothing to calibrate" in cal["note"]
+
+
+# --- A screen built from a calibration --------------------------------------
+
+def _calibration(margin=0.5, benign_at=1.15):
+    benign = np.random.default_rng(0).normal(benign_at, 0.03, 500)
+    cal = D.calibrate(LOADS, COSTS, BALANCED, benign, SAMPLING, alarm_margin=margin)
+    cal["run"] = "a-deployment"
+    return cal
+
+
+def test_a_screen_carries_its_deployment_s_numbers():
+    screen = D.Screen.from_calibration(_calibration())
+    assert screen.alarm == pytest.approx(_calibration()["alarm"]["level"])
+    assert screen.sampler.window == 8 and screen.sampler.layer_choice == "random"
+    assert screen.source == "a-deployment"
+
+
+def test_one_window_over_the_level_is_not_an_alarm():
+    screen = D.Screen.from_calibration(_calibration(), consecutive=3)
+    high = screen.alarm + 0.1
+    assert screen.decide([high, 1.0, high, 1.0])["raised"] is None
+    out = screen.decide([1.0, high, high, high, 1.0])
+    assert out["raised"] == 3                       # the window that completed the run
+    assert out["raised_after_requests"] == 32       # four windows of eight
+
+
+def test_the_screen_separates_alarming_from_costing():
+    screen = D.Screen.from_calibration(_calibration(margin=1.0))
+    assert screen.alarm < screen.impact_threshold   # it warns before the cost
+    mild = screen.decide([screen.alarm + 0.01] * 5)
+    assert mild["raised"] is not None               # worth looking at
+    assert mild["above_impact_threshold"] is False  # ...but not yet costing
+
+    # Nothing raised means no verdict on cost, rather than a verdict of False.
+    assert screen.decide([1.0] * 5)["above_impact_threshold"] is None
+
+
+def test_a_single_high_window_does_not_make_traffic_look_costly():
+    # Benign traffic throws occasional high windows; judging cost on the peak
+    # would call ordinary traffic costly whenever one of them lands.
+    screen = D.Screen.from_calibration(_calibration())
+    quiet = [1.05] * 20 + [screen.impact_threshold + 0.5] + [1.05] * 20
+    out = screen.decide(quiet)
+    assert out["raised"] is None
+    assert out["peak_load"] > screen.impact_threshold
+    assert out["above_impact_threshold"] is None
+
+
+def test_a_calibration_with_no_measurable_cost_cannot_arm_a_screen():
+    cal = D.calibrate(LOADS[:2], COSTS[:2], [176.7, 176.1, 169.2], [1.1] * 50, SAMPLING)
+    with pytest.raises(ValueError, match="no alarm level"):
+        D.Screen.from_calibration(cal)
+
+
+def test_a_stream_redraws_its_layers_per_window():
+    # Picking the layers once for the whole stream would be fixed sampling under
+    # another name, and would carry the same blind spot.
+    counts = _layered(n=200, hot=set(range(9, 15)), seed=3)
+    sampler = D.WindowSampler(window=8, layers=4, layer_choice="random")
+    rng = np.random.default_rng(0)
+    loads = D.stream_loads([(counts, 8 * 60)], N_RANKS, sampler, rng)
+    assert len(loads) == 60
+    # With four of 26 layers redrawn each window, some windows catch the hot
+    # block and some miss it, so the readings must not all be the same.
+    assert loads.std() > 0.02
+    assert loads.max() > loads.min() + 0.1

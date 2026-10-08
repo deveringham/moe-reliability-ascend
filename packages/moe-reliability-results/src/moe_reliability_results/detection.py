@@ -40,7 +40,7 @@ import numpy as np
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
            "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate"]
+           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate", "Screen"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -238,9 +238,17 @@ def stream_loads(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler:
     threshold is applied - so a timeline can show the estimate itself rather than
     only the decision.
     """
-    layers = sampler._layer_index(pools[0][0].shape[1])
-    rows = np.concatenate([pool[:, layers][rng.choice(len(pool), n, replace=True)] for pool, n in pools])
-    return _window_loads(rows, n_ranks, sampler, rng)
+    n_layers = pools[0][0].shape[1]
+    rows = np.concatenate([pool[rng.choice(len(pool), n, replace=True)] for pool, n in pools])
+    if sampler.layer_choice != "random":
+        return _window_loads(rows[:, sampler._layer_index(n_layers)], n_ranks, sampler, rng)
+    # Redraw the layers for each window, which is the whole point of the mode:
+    # choosing them once for the stream would be fixed sampling under another name.
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    return np.array([
+        _window_loads(rows[i * sampler.window:(i + 1) * sampler.window][
+            :, sampler._layer_index(n_layers, rng)], n_ranks, flat, rng)[0]
+        for i in range(len(rows) // sampler.window)])
 
 
 def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
@@ -440,6 +448,68 @@ def calibrate(loads: Sequence[float], costs: Sequence[float], balanced_repeats: 
         out["note"] = (f"only {headroom:.2f}x of headroom between benign traffic and the cost: an alarm "
                        "set for early warning will fire often")
     return out
+
+
+@dataclass(frozen=True)
+class Screen:
+    """A calibrated screen: the sampling it runs at, and what it alarms on.
+
+    Built from a calibration artefact so a deployment's thresholds travel with
+    it, rather than being typed in from another deployment's. :meth:`decide`
+    applies the whole rule - window loads in, a decision out - so the alarm
+    level, the consecutive-window requirement and the impact threshold cannot
+    drift apart from each other.
+    """
+
+    alarm: float
+    sampler: WindowSampler
+    consecutive: int = 3
+    impact_threshold: float | None = None
+    headroom: float | None = None
+    source: str = ""
+
+    @classmethod
+    def from_calibration(cls, calibration: Mapping, consecutive: int = 3,
+                         draws: int = 600) -> "Screen":
+        if not calibration.get("alarm"):
+            raise ValueError(f"calibration {calibration.get('run', '?')} has no alarm level: "
+                             f"{calibration.get('note', 'its sweep never cost more than the noise floor')}")
+        s = calibration["sampling"]
+        return cls(alarm=float(calibration["alarm"]["level"]),
+                   sampler=WindowSampler(window=int(s["window"]), layers=s["layers"],
+                                         token_fraction=float(s["token_fraction"]),
+                                         draws=draws, layer_choice=s.get("layer_choice", "spaced")),
+                   consecutive=consecutive,
+                   impact_threshold=calibration.get("impact_threshold"),
+                   headroom=calibration.get("headroom"),
+                   source=str(calibration.get("run", "")))
+
+    def decide(self, window_loads: Sequence[float]) -> dict:
+        """Apply the rule to a sequence of window readings.
+
+        ``raised`` is the index of the window that completed the run of alarms,
+        not the first window over the level: one window over is not an alarm,
+        which is the whole point of ``consecutive``.
+        """
+        loads = np.asarray(window_loads, dtype=float)
+        flags = loads >= self.alarm
+        at = _first_run(flags, self.consecutive)
+        # The load that raised the alarm is the median of the run that raised it,
+        # not the highest window seen. A peak is one draw and benign traffic
+        # produces high ones: comparing a peak against the impact threshold says
+        # "costing" about traffic that is doing nothing of the sort.
+        raising = (float(np.median(loads[at + 1 - self.consecutive:at + 1]))
+                   if at is not None else None)
+        return {"raised": at,
+                "raised_after_requests": None if at is None else (at + 1) * self.sampler.window,
+                "windows_over": int(flags.sum()),
+                "raising_load": None if raising is None else round(raising, 3),
+                "peak_load": float(loads.max()) if loads.size else float("nan"),
+                # Whether what raised the alarm is in the range measured to cost
+                # time here - a different question from whether to alarm at all,
+                # and None when nothing was raised.
+                "above_impact_threshold": (None if raising is None or self.impact_threshold is None
+                                           else bool(raising >= self.impact_threshold))}
 
 
 def roc(positive: Sequence[float], negative: Sequence[float]) -> dict:
