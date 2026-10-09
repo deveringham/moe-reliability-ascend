@@ -40,9 +40,9 @@ def num(value, default=float("nan")):
         return default
 
 
-def axes(ax, xlabel, ylabel):
+def axes(ax, xlabel, ylabel, grid_axis="y"):
     ax.set_facecolor(SURFACE)
-    ax.grid(axis="y", color=GRID, lw=0.8)
+    ax.grid(axis=grid_axis, color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
@@ -53,8 +53,8 @@ def axes(ax, xlabel, ylabel):
     ax.set_ylabel(ylabel, color=INK2, fontsize=10)
 
 
-def save(fig, out, name):
-    fig.tight_layout()
+def save(fig, out, name, rect=None):
+    fig.tight_layout(rect=rect)
     fig.savefig(os.path.join(out, name), dpi=200, facecolor=SURFACE)
     plt.close(fig)
     print(f"  {name}")
@@ -216,16 +216,102 @@ def plot_margin(table, out):
     save(fig, out, "alarm_margin.png")
 
 
+def corpus_by_model(table):
+    """{model: [(corpus, pooled, p99 at window 8, p99 at window 1, over-threshold share)]}.
+
+    A corpus measured in two runs of the same model is averaged: the detection
+    capture and the language run share mmlu, mmmlu:DE_DE and the mix, and they
+    agree there to within 0.002x, so the mean loses nothing and the CSV keeps
+    both rows.
+    """
+    merged: dict = {}
+    for r in table:
+        merged.setdefault(r["model"], {}).setdefault(r["corpus"], []).append(r)
+    out = {}
+    for model, corpora in merged.items():
+        out[model] = sorted(
+            ((corpus, float(np.mean([num(r["pooled"]) for r in rs])),
+              float(np.mean([num(r["p99_window_8"]) for r in rs])),
+              float(np.mean([num(r["p99_window_1"]) for r in rs])),
+              float(np.mean([num(r["over_threshold_window_8"], 0.0) for r in rs])))
+             for corpus, rs in corpora.items()), key=lambda c: c[1])
+    return out
+
+
+def plot_corpus_load(table, out):
+    """What ordinary traffic concentrates to, corpus by corpus, with no skew injected."""
+    by_model = corpus_by_model(table)
+    if not by_model:
+        return
+    models = sorted(by_model)
+    heights = [len(by_model[m]) for m in models]
+    fig, axs = plt.subplots(1, len(models), figsize=(5.8 * len(models), 0.42 * max(heights) + 2.2),
+                            facecolor=SURFACE, squeeze=False, sharex=True)
+    for ax, model in zip(axs[0], models):
+        pts = by_model[model]
+        axes(ax, "Load on the busiest rank, unskewed traffic\n"
+                 f"{LABEL[model]}", "", grid_axis="x")
+        y = np.arange(len(pts))
+        colour = MODEL[model]
+        for i, (_c, pooled, w8, w1, _o) in enumerate(pts):
+            ax.plot([pooled, w1], [i, i], lw=2, color=colour, alpha=0.35, zorder=2,
+                    solid_capstyle="round")
+        ax.plot([p[1] for p in pts], y, "o", ms=7, color=colour, mec=SURFACE, mew=1.2, zorder=4)
+        ax.plot([p[2] for p in pts], y, "s", ms=7, mfc=SURFACE, mec=colour, mew=2, zorder=4)
+        ax.plot([p[3] for p in pts], y, "^", ms=7, mfc=SURFACE, mec=colour, mew=2, zorder=4)
+        ax.set_yticks(y, [p[0] for p in pts], fontsize=9)
+        ax.tick_params(axis="y", labelcolor=INK2)
+        ax.set_ylim(-0.8, len(pts) - 0.2)
+    # One legend for the figure, in neutral ink: the marks mean the same thing in
+    # both panels, and inside either one it lands on the data.
+    marks = [("o", "pooled over the whole corpus"), ("s", "p99 of a window of 8 requests"),
+             ("^", "p99 of a single request")]
+    fig.legend(handles=[plt.Line2D([], [], ls="", marker=m, ms=7, mec=INK2, mew=2,
+                                   mfc=INK2 if m == "o" else SURFACE, label=text)
+                        for m, text in marks],
+               frameon=False, fontsize=9, labelcolor=INK2, loc="lower center", ncol=3,
+               bbox_to_anchor=(0.5, 0.0))
+    save(fig, out, "corpus_load.png", rect=(0, 0.07, 1, 1))
+
+
+def plot_corpus_alarm(table, out):
+    """How often each corpus alone reaches the load at which skew began to cost."""
+    by_model = corpus_by_model(table)
+    thresholds = {r["model"]: num(r["impact_threshold"]) for r in table}
+    if not by_model:
+        return
+    models = sorted(by_model)
+    heights = [len(by_model[m]) for m in models]
+    fig, axs = plt.subplots(1, len(models), figsize=(5.8 * len(models), 0.42 * max(heights) + 2.2),
+                            facecolor=SURFACE, squeeze=False, sharex=True)
+    for ax, model in zip(axs[0], models):
+        pts = by_model[model]
+        axes(ax, "Share of 8-request windows reaching the load that costs latency\n"
+                 f"{LABEL[model]}, which begins at {thresholds.get(model, float('nan')):.2f}x", "",
+             grid_axis="x")
+        y = np.arange(len(pts))
+        ax.barh(y, [p[4] for p in pts], 0.6, color=MODEL[model], zorder=3)
+        ax.set_yticks(y, [p[0] for p in pts], fontsize=9)
+        ax.tick_params(axis="y", labelcolor=INK2)
+        ax.set_xlim(0, 1.05)
+        ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0], ["0", "25%", "50%", "75%", "100%"])
+        ax.set_ylim(-0.8, len(pts) - 0.2)
+    save(fig, out, "corpus_alarm.png")
+
+
 def main(out="docs/figures/tables"):
     print("writing plots:")
     regimes = rows(os.path.join(out, "regimes.csv"))
     detection = rows(os.path.join(out, "detection.csv"))
     calibration = rows(os.path.join(out, "calibration.csv"))
+    corpus = rows(os.path.join(out, "corpus.csv"))
     plot_cost_vs_load(regimes, out)
     plot_batch(regimes, out)
     plot_detection(detection, out)
     plot_layer_sampling(detection, out)
     plot_margin(calibration, out)
+    plot_corpus_load(corpus, out)
+    plot_corpus_alarm(corpus, out)
 
 
 if __name__ == "__main__":

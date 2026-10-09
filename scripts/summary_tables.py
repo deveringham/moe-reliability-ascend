@@ -10,6 +10,7 @@ run each row came from is a column, so any of them can be traced back.
                    it produced and the spread it was measured against
   detection.csv    what the screen catches, misses and costs, per setting
   calibration.csv  what a deployment's own calibration says about it
+  corpus.csv       what ordinary traffic concentrates to, corpus by corpus
 """
 
 from __future__ import annotations
@@ -240,6 +241,38 @@ def calibration_rows():
     return rows
 
 
+def corpus_rows():
+    """What each corpus's own routing concentrates to, with no skew injected.
+
+    The load a deployment calls "benign" is a property of its traffic, not of the
+    model: homogeneous traffic concentrates, because one domain favours one set
+    of experts, and a mix averages them out. ``over_threshold`` is the share of
+    8-request windows that reach the load at which injected skew began to cost on
+    that model - traffic alone, nothing imposed.
+    """
+    path = os.path.join("docs", "detection.json")
+    if not os.path.exists(path):
+        return []
+    data = json.load(open(path))
+    rows = []
+    for model, runs in (data.get("corpus") or {}).items():
+        for run in runs:
+            # "mixed (all)" means a different population in each run - the capture
+            # mixes six English and code corpora, the language run nine including
+            # Yoruba and Swahili - so it is named by what went into it. Otherwise
+            # the two are averaged together downstream as if they were one thing.
+            n_corpora = sum(1 for c in run["corpora"] if c["corpus"] != "mixed (all)")
+            for c in run["corpora"]:
+                name = f"mixed ({n_corpora} corpora)" if c["corpus"] == "mixed (all)" else c["corpus"]
+                rows.append({"model": model, "corpus": name, "requests": c["n"],
+                             "pooled": c["pooled"], "p99_window_1": c.get("w1_p99"),
+                             "p99_window_8": c.get("w8_p99"), "p99_window_64": c.get("w64_p99"),
+                             "impact_threshold": round(run["threshold"], 3) if run.get("threshold") else "",
+                             "over_threshold_window_8": c.get("w8_over_threshold"),
+                             "run": run["run"]})
+    return rows
+
+
 def write(rows, path):
     if not rows:
         print(f"  (no rows for {os.path.basename(path)})")
@@ -267,10 +300,11 @@ def markdown(rows, columns, path, title):
 def main(out="docs/figures/tables"):
     os.makedirs(out, exist_ok=True)
     print("writing tables:")
-    reg, det, cal = regimes(), detection_rows(), calibration_rows()
+    reg, det, cal, cor = regimes(), detection_rows(), calibration_rows(), corpus_rows()
     write(reg, os.path.join(out, "regimes.csv"))
     write(det, os.path.join(out, "detection.csv"))
     write(cal, os.path.join(out, "calibration.csv"))
+    write(cor, os.path.join(out, "corpus.csv"))
 
     # One digest per question, with the columns that answer it.
     markdown(reg, ["group", "condition", "model", "npus", "batch_achieved", "mode",
@@ -287,6 +321,10 @@ def main(out="docs/figures/tables"):
                     "fires_before_onset", "delay_requests_p50", "requests_to_false_alarm",
                     "windows", "requests", "layers_seen", "recall", "precision"],
              os.path.join(out, "detection_rule.md"), "The alarm rule, and localising by accumulation")
+    markdown(cor, ["model", "corpus", "requests", "pooled", "p99_window_1", "p99_window_8",
+                   "p99_window_64", "impact_threshold", "over_threshold_window_8"],
+             os.path.join(out, "corpus.md"),
+             "What ordinary traffic concentrates to, by corpus (no skew injected)")
     markdown(cal, ["model", "npus", "batch", "mode", "noise_floor_pct", "impact_threshold",
                    "benign_ceiling", "headroom", "margin", "alarm", "false_alarm_rate",
                    "warns_before_cost", "catches_once_costly"],
