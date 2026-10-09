@@ -40,7 +40,7 @@ import numpy as np
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
            "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate", "Screen"]
+           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate", "margin_sweep", "Screen"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -448,6 +448,44 @@ def calibrate(loads: Sequence[float], costs: Sequence[float], balanced_repeats: 
         out["note"] = (f"only {headroom:.2f}x of headroom between benign traffic and the cost: an alarm "
                        "set for early warning will fire often")
     return out
+
+
+def margin_sweep(impact: float, benign_loads: Sequence[float],
+                 level_loads: Mapping[float, Sequence[float]],
+                 margins: Sequence[float] = (0.0, 0.25, 0.5, 0.75, 1.0),
+                 fpr: float = 0.01) -> list[dict]:
+    """What each alarm margin buys and costs, on one deployment's own traffic.
+
+    ``level_loads`` maps a level's realised load to the window estimates the
+    screen reads there, so detection is measured rather than assumed. The
+    trade is the whole point: a margin near 1 warns while the skew is still
+    harmless and fires on benign traffic doing so; a margin of 0 never
+    false-alarms and never warns either, because by the time it speaks the cost
+    has already arrived.
+
+    ``caught_before_cost`` is the share of levels that are detected *and* still
+    below the impact threshold - the warnings that were actually worth having.
+    """
+    benign = np.asarray(benign_loads, dtype=float)
+    ceiling = float(np.quantile(benign, 1 - fpr))
+    rows = []
+    for margin in margins:
+        alarm = impact - margin * (impact - ceiling)
+        detected = {load: float((np.asarray(v, dtype=float) >= alarm).mean())
+                    for load, v in level_loads.items()}
+        harmless = [load for load in level_loads if load < impact]
+        rows.append({
+            "margin": margin,
+            "alarm": round(float(alarm), 3),
+            "false_alarm_rate": round(float((benign >= alarm).mean()), 4),
+            "detection": {round(float(k), 3): round(v, 3) for k, v in sorted(detected.items())},
+            "caught_before_cost": (round(float(np.mean([detected[load] for load in harmless])), 3)
+                                   if harmless else None),
+            "caught_once_costly": (round(float(np.mean([detected[load] for load in level_loads
+                                                        if load >= impact])), 3)
+                                   if any(load >= impact for load in level_loads) else None),
+        })
+    return rows
 
 
 @dataclass(frozen=True)

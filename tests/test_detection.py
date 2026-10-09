@@ -502,3 +502,28 @@ def test_a_stream_redraws_its_layers_per_window():
     # block and some miss it, so the readings must not all be the same.
     assert loads.std() > 0.02
     assert loads.max() > loads.min() + 0.1
+
+
+def test_the_margin_trade_is_visible_end_to_end():
+    rng = np.random.default_rng(0)
+    benign = rng.normal(1.15, 0.03, 600)
+    # Two levels below the cost and two above it.
+    levels = {1.22: rng.normal(1.22, 0.03, 400), 1.28: rng.normal(1.28, 0.03, 400),
+              1.45: rng.normal(1.45, 0.03, 400), 1.90: rng.normal(1.90, 0.03, 400)}
+    rows = D.margin_sweep(impact=1.35, benign_loads=benign, level_loads=levels)
+
+    late, early = rows[0], rows[-1]
+    assert late["margin"] == 0.0 and early["margin"] == 1.0
+    assert late["alarm"] > early["alarm"]
+    # Warning earlier catches more of the harmless levels, and costs false alarms.
+    assert early["caught_before_cost"] > late["caught_before_cost"]
+    assert early["false_alarm_rate"] >= late["false_alarm_rate"]
+    # Anything already costing is caught at every margin.
+    assert all(r["caught_once_costly"] == 1.0 for r in rows)
+
+
+def test_margin_sweep_reports_nothing_to_warn_about_when_every_level_costs():
+    rng = np.random.default_rng(1)
+    levels = {1.90: rng.normal(1.90, 0.03, 200)}
+    rows = D.margin_sweep(1.35, rng.normal(1.15, 0.03, 200), levels)
+    assert all(r["caught_before_cost"] is None for r in rows)

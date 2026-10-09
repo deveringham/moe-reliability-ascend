@@ -1,0 +1,6 @@
+model,npus,batch,mode,noise_floor_pct,impact_threshold,benign_ceiling,headroom,loads_from,run,margin,alarm,false_alarm_rate,warns_before_cost,catches_once_costly
+deepseek-v2,4,512,eager,2.75,2.434,1.142,1.292,a separate calibration run of this model,20261006-155755_imbalance_deepseek-v2_npu4_bs512_rbias-controlled-000,,,,,
+mixtral,4,512,eager,0.86,1.234,1.178,0.056,a separate calibration run of this model,20261006-165818_imbalance_mixtral_npu4_bs512_rbias-controlled-001,,,,,
+mixtral,4,256,eager,1.1,1.374,1.178,0.196,a separate calibration run of this model,20261008-143211_imbalance_mixtral_npu4_bs256_decode-ridge2-000,,,,,
+mixtral,4,512,eager,0.51,1.227,1.178,0.049,a separate calibration run of this model,20261008-150130_imbalance_mixtral_npu4_bs512_decode-ridge2-001,,,,,
+mixtral,4,1024,eager,9.16,2.023,1.178,0.845,a separate calibration run of this model,20261008-152542_imbalance_mixtral_npu4_bs1024_decode-ridge2-002,,,,,

@@ -104,6 +104,38 @@ def benign_distribution(run_dir, points, manifest, sampler, n_ranks):
     return D.estimate_loads(counts, n_ranks, sampler, seed=0)
 
 
+def expert_width(run_dir, points):
+    """How many experts the router scores, from whichever capture is at hand."""
+    for entry in points.values():
+        path = os.path.join(run_dir, entry.get("records") or "")
+        if entry.get("records") and os.path.exists(path):
+            for line in gzip.open(path, "rt"):
+                r = json.loads(line)
+                ids = r.get("routed_experts")
+                if ids is None:
+                    ids = r.get("prompt_routed_experts")
+                return int(np.max(ids)) + 1
+    return 0
+
+
+def level_distributions(run_dir, points, sampler, n_ranks, width):
+    """{realised load: window estimates} per level, from each level's own capture.
+
+    Needed to measure what a margin actually catches rather than infer it: a
+    level's pooled load says where it sits, its distribution says how often a
+    window of it clears a given alarm.
+    """
+    out = {}
+    for level, entry in points.items():
+        path = os.path.join(run_dir, entry.get("records") or "")
+        if not entry.get("records") or not os.path.exists(path) or entry["load"] is None:
+            continue
+        records = [json.loads(line) for line in gzip.open(path, "rt")]
+        counts = D.request_counts(records, width)
+        out[entry["load"]] = D.estimate_loads(counts, n_ranks, sampler, seed=1)
+    return out
+
+
 def calibrate_run(run_dir, sampler, margin, fpr):
     manifest, points = sweep_points(run_dir)
     config = manifest["config"]
@@ -143,6 +175,13 @@ def calibrate_run(run_dir, sampler, margin, fpr):
                          "bias_target": config["imbalance"]["bias_target"]}
     cal["balanced_tpot_ms"] = round(base, 1)
     cal["loads_from"] = "this sweep" if borrowed is None else "a separate calibration run of this model"
+    # What each margin would buy, measured on this deployment's own levels rather
+    # than inferred from the curve.
+    cal["margin_sweep"] = None
+    if cal.get("impact_threshold") and any(p.get("records") for p in points.values()):
+        per_level = level_distributions(run_dir, points, sampler, n_ranks, expert_width(run_dir, points))
+        if len(per_level) > 1:
+            cal["margin_sweep"] = D.margin_sweep(cal["impact_threshold"], benign, per_level, fpr=fpr)
     if borrowed is not None:
         cal.setdefault("note", "")
         cal["note"] = ((cal["note"] + "; ") if cal["note"] else "") + (
@@ -194,6 +233,12 @@ def main(argv=None):
             print(f"   alarm at         {a['level']}x (margin {a['margin']}), "
                   f"false alarms {a['false_alarm_rate']:.1%}")
         print(f"   loads from       {cal['loads_from']}")
+        for r in cal.get("margin_sweep") or []:
+            print(f"   margin {r['margin']:<4} alarm {r['alarm']:>6.3f}x  false alarms "
+                  f"{r['false_alarm_rate']:>6.1%}  warns before cost "
+                  f"{('-' if r['caught_before_cost'] is None else format(r['caught_before_cost'], '.0%')):>5}"
+                  f"  catches costly "
+                  f"{('-' if r['caught_once_costly'] is None else format(r['caught_once_costly'], '.0%')):>5}")
         if cal.get("note"):
             print(f"   note: {cal['note']}")
         print(f"   -> {name}")
