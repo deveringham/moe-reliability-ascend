@@ -1,6 +1,17 @@
 model,npus,batch,mode,noise_floor_pct,impact_threshold,benign_ceiling,headroom,loads_from,run,margin,alarm,false_alarm_rate,warns_before_cost,catches_once_costly
 deepseek-v2,4,512,eager,2.75,2.434,1.142,1.292,a separate calibration run of this model,20261006-155755_imbalance_deepseek-v2_npu4_bs512_rbias-controlled-000,,,,,
 mixtral,4,512,eager,0.86,1.234,1.178,0.056,a separate calibration run of this model,20261006-165818_imbalance_mixtral_npu4_bs512_rbias-controlled-001,,,,,
+deepseek-v2,4,512,eager,8.95,,1.171,,this sweep,20261007-203534_imbalance_deepseek-v2_npu4_bs512_rotating-skew-000,,,,,
+mixtral,4,512,eager,4.44,1.895,1.275,0.621,this sweep,20261007-214459_imbalance_mixtral_npu4_bs512_rotating-skew-001,0.0,1.895,0.0,0.044,1.0
+mixtral,4,512,eager,4.44,1.895,1.275,0.621,this sweep,20261007-214459_imbalance_mixtral_npu4_bs512_rotating-skew-001,0.25,1.74,0.0,0.184,1.0
+mixtral,4,512,eager,4.44,1.895,1.275,0.621,this sweep,20261007-214459_imbalance_mixtral_npu4_bs512_rotating-skew-001,0.5,1.585,0.0,0.301,1.0
+mixtral,4,512,eager,4.44,1.895,1.275,0.621,this sweep,20261007-214459_imbalance_mixtral_npu4_bs512_rotating-skew-001,0.75,1.43,0.0,0.398,1.0
+mixtral,4,512,eager,4.44,1.895,1.275,0.621,this sweep,20261007-214459_imbalance_mixtral_npu4_bs512_rotating-skew-001,1.0,1.275,0.01,0.618,1.0
 mixtral,4,256,eager,1.1,1.374,1.178,0.196,a separate calibration run of this model,20261008-143211_imbalance_mixtral_npu4_bs256_decode-ridge2-000,,,,,
 mixtral,4,512,eager,0.51,1.227,1.178,0.049,a separate calibration run of this model,20261008-150130_imbalance_mixtral_npu4_bs512_decode-ridge2-001,,,,,
 mixtral,4,1024,eager,9.16,2.023,1.178,0.845,a separate calibration run of this model,20261008-152542_imbalance_mixtral_npu4_bs1024_decode-ridge2-002,,,,,
+mixtral,4,512,eager,0.95,1.42,1.278,0.142,this sweep,20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep,0.0,1.42,0.0,0.066,0.998
+mixtral,4,512,eager,0.95,1.42,1.278,0.142,this sweep,20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep,0.25,1.385,0.0,0.098,0.999
+mixtral,4,512,eager,0.95,1.42,1.278,0.142,this sweep,20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep,0.5,1.349,0.0,0.162,1.0
+mixtral,4,512,eager,0.95,1.42,1.278,0.142,this sweep,20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep,0.75,1.314,0.0017,0.236,1.0
+mixtral,4,512,eager,0.95,1.42,1.278,0.142,this sweep,20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep,1.0,1.278,0.01,0.324,1.0

@@ -50,5 +50,6 @@
  },
  "balanced_tpot_ms": 174.0,
  "loads_from": "a separate calibration run of this model",
+ "margin_sweep": null,
  "note": "realised loads were borrowed from another run's traffic, so the thresholds are only as good as that traffic matching this one"
 }

@@ -38,5 +38,6 @@
   "bias_target": "rank:0"
  },
  "balanced_tpot_ms": 174.0,
- "loads_from": "a separate calibration run of this model"
+ "loads_from": "a separate calibration run of this model",
+ "margin_sweep": null
 }

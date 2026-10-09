@@ -126,6 +126,12 @@ def regimes():
                       loads=cal.get("deepseek-v2"))
     rows += cost_rows("*rbias-graph-threshold-001", "execution mode", "graph mode",
                       loads=cal.get("mixtral"))
+    # The same deployment as rbias-controlled-001, swept finely around the onset
+    # and capturing its own routing, so its loads are this traffic's rather than
+    # another run's.
+    for d, m in manifests("*calibration-sweep"):
+        rows += cost_rows(os.path.basename(d), "skew strength",
+                          "one rank hot, every layer, fine levels", loads=own_loads(d, m))
     rows += cost_rows("*rotating-skew-000", "skew shape", "a different rank hot each layer")
     rows += cost_rows("*rotating-skew-001", "skew shape", "a different rank hot each layer")
     rows += cost_rows("*rbias-npu8-000", "expert parallelism", "8 ranks, one expert each",

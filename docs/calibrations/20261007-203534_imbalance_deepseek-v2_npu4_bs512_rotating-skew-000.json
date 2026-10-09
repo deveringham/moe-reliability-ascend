@@ -1,0 +1,46 @@
+{
+ "noise_floor_pct": 8.95,
+ "impact_threshold": null,
+ "benign_ceiling": 1.171,
+ "benign_median": 1.1,
+ "sampling": {
+  "window": 8,
+  "layers": 4,
+  "token_fraction": 0.1,
+  "layer_choice": "random"
+ },
+ "curve": [
+  {
+   "load": 1.058,
+   "cost_pct": 0.0
+  },
+  {
+   "load": 1.73,
+   "cost_pct": -0.16
+  },
+  {
+   "load": 2.465,
+   "cost_pct": 7.0
+  },
+  {
+   "load": 3.594,
+   "cost_pct": 5.5
+  }
+ ],
+ "alarm": null,
+ "headroom": null,
+ "note": "no swept level cost more than the noise floor; nothing to calibrate against",
+ "run": "20261007-203534_imbalance_deepseek-v2_npu4_bs512_rotating-skew-000",
+ "model": "deepseek-v2",
+ "deployment": {
+  "n_npus": 4,
+  "batch_size": 512,
+  "max_num_batched_tokens": 4096,
+  "enforce_eager": true,
+  "max_new_tokens": 100,
+  "bias_target": "rotate"
+ },
+ "balanced_tpot_ms": 165.7,
+ "loads_from": "this sweep",
+ "margin_sweep": null
+}

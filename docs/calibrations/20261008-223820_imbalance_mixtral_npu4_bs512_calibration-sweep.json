@@ -1,0 +1,143 @@
+{
+ "noise_floor_pct": 0.95,
+ "impact_threshold": 1.42,
+ "benign_ceiling": 1.278,
+ "benign_median": 1.159,
+ "sampling": {
+  "window": 8,
+  "layers": 4,
+  "token_fraction": 0.1,
+  "layer_choice": "random"
+ },
+ "curve": [
+  {
+   "load": 1.112,
+   "cost_pct": 0.0
+  },
+  {
+   "load": 1.133,
+   "cost_pct": -1.09
+  },
+  {
+   "load": 1.195,
+   "cost_pct": -0.25
+  },
+  {
+   "load": 1.273,
+   "cost_pct": 1.95
+  },
+  {
+   "load": 1.365,
+   "cost_pct": 0.15
+  },
+  {
+   "load": 1.758,
+   "cost_pct": 5.83
+  },
+  {
+   "load": 2.618,
+   "cost_pct": 14.45
+  }
+ ],
+ "headroom": 0.142,
+ "alarm": {
+  "level": 1.349,
+  "margin": 0.5,
+  "false_alarm_rate": 0.0,
+  "warns_before_cost": true
+ },
+ "run": "20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep",
+ "model": "mixtral",
+ "deployment": {
+  "n_npus": 4,
+  "batch_size": 512,
+  "max_num_batched_tokens": 4096,
+  "enforce_eager": true,
+  "max_new_tokens": 100,
+  "bias_target": "rank:0"
+ },
+ "balanced_tpot_ms": 169.2,
+ "loads_from": "this sweep",
+ "margin_sweep": [
+  {
+   "margin": 0.0,
+   "alarm": 1.42,
+   "false_alarm_rate": 0.0,
+   "detection": {
+    "1.112": 0.0,
+    "1.133": 0.0,
+    "1.195": 0.0,
+    "1.273": 0.045,
+    "1.365": 0.283,
+    "1.758": 0.997,
+    "2.618": 1.0
+   },
+   "caught_before_cost": 0.066,
+   "caught_once_costly": 0.998
+  },
+  {
+   "margin": 0.25,
+   "alarm": 1.385,
+   "false_alarm_rate": 0.0,
+   "detection": {
+    "1.112": 0.0,
+    "1.133": 0.0,
+    "1.195": 0.005,
+    "1.273": 0.085,
+    "1.365": 0.402,
+    "1.758": 0.998,
+    "2.618": 1.0
+   },
+   "caught_before_cost": 0.098,
+   "caught_once_costly": 0.999
+  },
+  {
+   "margin": 0.5,
+   "alarm": 1.349,
+   "false_alarm_rate": 0.0,
+   "detection": {
+    "1.112": 0.0,
+    "1.133": 0.002,
+    "1.195": 0.022,
+    "1.273": 0.188,
+    "1.365": 0.597,
+    "1.758": 1.0,
+    "2.618": 1.0
+   },
+   "caught_before_cost": 0.162,
+   "caught_once_costly": 1.0
+  },
+  {
+   "margin": 0.75,
+   "alarm": 1.314,
+   "false_alarm_rate": 0.0017,
+   "detection": {
+    "1.112": 0.002,
+    "1.133": 0.002,
+    "1.195": 0.063,
+    "1.273": 0.352,
+    "1.365": 0.763,
+    "1.758": 1.0,
+    "2.618": 1.0
+   },
+   "caught_before_cost": 0.236,
+   "caught_once_costly": 1.0
+  },
+  {
+   "margin": 1.0,
+   "alarm": 1.278,
+   "false_alarm_rate": 0.01,
+   "detection": {
+    "1.112": 0.005,
+    "1.133": 0.028,
+    "1.195": 0.175,
+    "1.273": 0.537,
+    "1.365": 0.875,
+    "1.758": 1.0,
+    "2.618": 1.0
+   },
+   "caught_before_cost": 0.324,
+   "caught_once_costly": 1.0
+  }
+ ]
+}

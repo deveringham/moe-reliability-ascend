@@ -24,6 +24,13 @@
 | execution mode | graph mode | mixtral | 4 | 512 | graph | 1.761 | 3 | 152.1 | 10.7 | 4.06 | 10.37 |
 | execution mode | graph mode | mixtral | 4 | 512 | graph | 2.62 | 3 | 187.7 | 1.9 | 28.46 | 9.16 |
 | execution mode | graph mode | mixtral | 4 | 512 | graph | 3.364 | 3 | 208.9 | 0.4 | 42.96 | 10.09 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.112 | 3 | 169.2 | 1.4 | 0.0 | 1.19 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.133 | 3 | 167.4 | 1.5 | -1.09 | 1.23 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.195 | 3 | 168.8 | 0.6 | -0.25 | 0.9 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.273 | 3 | 172.5 | 3.8 | 1.95 | 2.4 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.365 | 3 | 169.5 | 2.2 | 0.15 | 1.55 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 1.758 | 3 | 179.1 | 3.0 | 5.83 | 2.0 |
+| skew strength | one rank hot, every layer, fine levels | mixtral | 4 | 512 | eager | 2.618 | 3 | 193.7 | 2.3 | 14.45 | 1.64 |
 | skew shape | a different rank hot each layer | deepseek-v2 | 4 | 512 | eager | 1.058 | 3 | 165.7 | 12.9 | 0.0 | 10.97 |
 | skew shape | a different rank hot each layer | deepseek-v2 | 4 | 512 | eager | 1.73 | 3 | 165.4 | 9.3 | -0.16 | 9.56 |
 | skew shape | a different rank hot each layer | deepseek-v2 | 4 | 512 | eager | 2.465 | 3 | 177.3 | 10.4 | 7.0 | 10.39 |
