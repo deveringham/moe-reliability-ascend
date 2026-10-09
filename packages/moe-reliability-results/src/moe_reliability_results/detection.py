@@ -72,23 +72,55 @@ def request_counts(records: Iterable[Mapping], n_experts: int, include_generated
     return c[:, c[:, :, 1:].sum(axis=(0, 2)) > 0]
 
 
-def _per_rank(counts: np.ndarray, n_ranks: int) -> np.ndarray:
+def _per_rank(counts: np.ndarray, n_ranks: int, placement: np.ndarray | None = None) -> np.ndarray:
     """Share of each layer's assignments on each rank: ``(layers, ranks)``.
 
-    Contiguous placement, which is what vLLM does without EPLB.
+    Contiguous placement, which is what vLLM does without EPLB, unless
+    ``placement`` gives the rank each expert sits on per layer.
     """
     totals = counts.sum(axis=1, keepdims=True)
     shares = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
-    return shares.reshape(shares.shape[0], n_ranks, -1).sum(axis=2)
+    if placement is None:
+        return shares.reshape(shares.shape[0], n_ranks, -1).sum(axis=2)
+    out = np.zeros((shares.shape[0], n_ranks))
+    for layer in range(shares.shape[0]):
+        np.add.at(out[layer], placement[layer], shares[layer])
+    return out
 
 
-def busiest_rank(counts: np.ndarray, n_ranks: int) -> float:
+def placement_from_expert_map(expert_map: dict, n_experts: int) -> np.ndarray:
+    """``(layers, experts)`` rank index, from the map EPLB records at ``eplb_record_map``.
+
+    Expert ids in a routing capture are stable; the rank an expert sits on is not,
+    once EPLB is rearranging. Every rank statistic here assumes contiguous
+    placement, so reading an EPLB run's capture without this measures the skew
+    against a layout the server stopped using.
+
+    The map is the placement at the end of the run, so it describes the whole run
+    only for a point whose rearrangements settled. A replicated expert - EPLB may
+    hold one on several ranks when given redundant slots - is attributed to the
+    first rank listed, which undercounts the spreading it bought.
+    """
+    layers = expert_map["layer_list"]
+    out = np.zeros((len(layers), n_experts), dtype=int)
+    for i, layer in enumerate(layers):
+        placed = np.zeros(n_experts, dtype=bool)
+        for device in layer["device_list"]:
+            for expert in device["device_expert"]:
+                if expert < n_experts and not placed[expert]:
+                    out[i, expert], placed[expert] = device["device_id"], True
+    return out
+
+
+def busiest_rank(counts: np.ndarray, n_ranks: int, placement: np.ndarray | None = None) -> float:
     """Busiest rank's load over the mean, per layer, averaged over layers.
 
     ``counts`` is ``(layers, experts)``. 1.0 is perfectly balanced; 2.0 means the
     busiest rank carries twice the mean rank's assignments in the average layer.
+    ``placement`` is needed whenever EPLB was running: see
+    :func:`placement_from_expert_map`.
     """
-    return float((_per_rank(counts, n_ranks).max(axis=1) * n_ranks).mean())
+    return float((_per_rank(counts, n_ranks, placement).max(axis=1) * n_ranks).mean())
 
 
 def pooled_busiest_rank(counts: np.ndarray, n_ranks: int) -> float:

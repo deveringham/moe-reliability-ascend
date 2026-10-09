@@ -557,3 +557,35 @@ def test_margin_sweep_reports_nothing_to_warn_about_when_every_level_costs():
     levels = {1.90: rng.normal(1.90, 0.03, 200)}
     rows = D.margin_sweep(1.35, rng.normal(1.15, 0.03, 200), levels)
     assert all(r["caught_before_cost"] is None for r in rows)
+
+
+def test_placement_from_an_eplb_map_moves_the_load_with_the_experts():
+    # Four experts, two ranks. All the load is on experts 0 and 1, which is
+    # rank 0's half under contiguous placement: maximally skewed.
+    counts = np.array([[10.0, 10.0, 0.0, 0.0]])
+    assert D.busiest_rank(counts, n_ranks=2) == pytest.approx(2.0)
+
+    # EPLB splits them: expert 1 moves to rank 1 and expert 3 takes its slot.
+    expert_map = {"moe_layer_count": 1, "layer_list": [{
+        "layer_id": 0, "device_count": 2, "device_list": [
+            {"device_id": 0, "device_expert": [0, 3]},
+            {"device_id": 1, "device_expert": [2, 1]}]}]}
+    placement = D.placement_from_expert_map(expert_map, n_experts=4)
+    assert placement.tolist() == [[0, 1, 1, 0]]
+    # The same counts now read as balanced, because they are - against the layout
+    # the server is actually using.
+    assert D.busiest_rank(counts, n_ranks=2, placement=placement) == pytest.approx(1.0)
+
+    # Read without the map, an EPLB run's capture measures a layout nobody used.
+    assert D.busiest_rank(counts, n_ranks=2) == pytest.approx(2.0)
+
+
+def test_a_replicated_expert_is_attributed_to_the_first_rank_holding_it():
+    # With redundant slots EPLB may hold one expert on several ranks. The capture
+    # cannot say which copy served a token, so the first is charged the whole lot -
+    # which understates the spreading, and is why the docstring says so.
+    expert_map = {"moe_layer_count": 1, "layer_list": [{
+        "layer_id": 0, "device_count": 2, "device_list": [
+            {"device_id": 0, "device_expert": [0, 1]},
+            {"device_id": 1, "device_expert": [1, 2]}]}]}
+    assert D.placement_from_expert_map(expert_map, n_experts=3).tolist() == [[0, 0, 1]]
