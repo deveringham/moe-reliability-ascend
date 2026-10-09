@@ -142,6 +142,36 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
 - **Flag layers individually, not just the mean.** With a bias on 6 of 26 layers
   the model-wide mean reads 1.40x while the biased layers read 2.58x; per-layer
   flagging recovers exactly those 6 and names the rank. `detection.localise`.
+- **Sample the counted layers randomly, redrawn every window** (2026-10-09).
+  Four evenly spaced layers of 26 catch a skew confined to six layers in 1% of
+  windows - blind, not merely unable to localise. Four redrawn at random catch
+  66% at the same per-window cost, and accumulating across windows names the
+  right six (recall 1.00 after 100 windows). On an all-layer skew the two are
+  within 0.04. `WindowSampler(layer_choice="random")`, and anything that slices
+  the layers once before a stream starts has silently turned it back into fixed
+  sampling - `onset_delay` and `mean_windows_to_false_alarm` both did.
+- **The screen measures skew, not impact, and the gap is model-specific.**
+  DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
+  it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm
+  (1.36x) nearly coincides with its onset. An impact claim comes from the
+  calibration, never from the routing.
+- **Calibrate per deployment, and budget 30 NPU-minutes, not 70**
+  (2026-10-09, `scripts/calibration_cost.py`, `docs/figures/tables/calibration_cost.csv`).
+  Cutting the 21-point sweep every way: 3 levels {0, 0.5, 1} at 3 repeats
+  reproduces the full calibration exactly (onset 1.420x, alarm 1.339x, no false
+  alarms) for 9 points. What cannot be cut is **replication** - at 1 repeat the
+  onset falls 0.27x and the alarm fires on 15% of benign windows, because the
+  noise floor *is* the threshold's definition - and **range**: a sweep that
+  stops below the onset either fails to calibrate or misplaces it badly. The
+  routing capture, by contrast, is nearly free to shorten: 2% of it (about 40
+  requests) gives the same answer as all of it.
+- **Take the onset where the crossing holds, not where it first happens.** A
+  fine sweep spends several levels near the noise floor and one of them clearing
+  it by chance is the likeliest reading there. On the mixtral calibration sweep
+  the first crossing sat at 1.24x with the next level back at +0.15%, which read
+  as negative headroom and "the screen can never warn early"; requiring every
+  higher level to stay above the floor puts it at 1.42x with +0.14x of headroom.
+  Coarse sweeps are unaffected. `detection.impact_threshold`.
 - **Measure natural rank load per layer.** The validation summary's
   `rank_max_over_mean` takes the busiest rank of layer-averaged shares, which
   lets the hot rank cancel across layers: 1.02x where the per-layer form
@@ -175,6 +205,30 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   Mixtral), so makespan and TTFT measure the client and API server. Check the
   log's `Waiting:` counts before trusting a prefill-only latency. Traces are
   unaffected.
+- **Traffic sets the benign baseline, and language moves it** (2026-10-09,
+  `docs/figures/tables/corpus.csv`). With nothing injected, a single-locale
+  corpus concentrates far more than a mix, which averages domains out: on
+  Mixtral, Yoruba reads 1.47x, Swahili 1.35x, Hindi 1.31x against English and
+  German at 1.14-1.15x, and the first three sit above its 1.31x onset in 100%,
+  98% and 55% of 8-request windows - alarms on ordinary traffic. The same
+  corpora on DeepSeek reach 1.38x and 1.32x for Yoruba and Swahili but leave
+  Hindi, Chinese and Arabic near English, and nothing approaches its 2.40x. So
+  the magnitude is a property of the routing topology, not of the language, and
+  a calibration made on English traffic does not describe a deployment serving
+  something else.
+- **A single prompt is not a window.** Across corpora the p99 of one request is
+  1.22-1.55x where the pooled value is 1.07-1.47x; eight requests recover most of
+  the way back. Window length matters more than how much of each window is
+  counted.
+- **To pair router bias with EPLB, target experts, not a rank.** A rank target
+  names the experts a rank holds under contiguous placement, which EPLB is free
+  to change, so the skew wanders off the rank it was aimed at; the config layer
+  refuses that pairing (and `rotate` with it). Rank r holds experts
+  [r*n/ranks, (r+1)*n/ranks), so `experts:0,...,15` is the same skew as
+  `rank:0` on 64 experts at 4 ranks and survives rearrangement. Note that
+  `rank_load` assumes contiguous placement, so an EPLB-on arm's
+  `rank_max_over_mean_per_layer` is not valid - recompute it from the records
+  against the recorded placement.
 - **Alpha is relative to each model's natural CV**, so equal alpha on two models
   is equal *relative* imbalance, not equal rank load. That is why Mixtral's one
   expert per rank behaves like DeepSeek's eight.

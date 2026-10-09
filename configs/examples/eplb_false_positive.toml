@@ -1,0 +1,97 @@
+# What does EPLB do about imbalance that costs nothing, and what does that cost?
+#
+# EPLB rebalances on expert load. It has no notion of latency, so it cannot
+# distinguish a skew that costs from one that does not - it acts on both. This
+# deployment makes that distinction measurable, because DeepSeek-V2-Lite at 4-way
+# expert parallelism has a wide band of imbalance that is free:
+#
+#   offset 0      1.14x busiest rank    the model's own routing
+#   offset 0.5    1.66x                 -1.3% TPOT, inside a 2.75% noise floor
+#   offset 1      2.35x                 +1.0%, still inside it
+#   offset 2      3.45x                 +22.2%, the only level that costs
+#
+# The middle two are the cases of interest. A balance-based policy sees 1.66x and
+# 2.35x and has every reason to act; a calibrated impact-based screen, whose
+# threshold was measured at 2.43x on this deployment, has none. So the question
+# is not whether EPLB *can* rebalance - it demonstrably can, the recorded
+# placement in 20261002-122434 is permuted - but what acting there buys and costs.
+#
+# Read it as a triple, per level:
+#   placement recorded != initial     EPLB acted
+#   TPOT(eplb on) - TPOT(eplb off)    what acting cost or saved, at that level
+#   per-layer load, both arms         whether acting actually reduced the skew
+# A level where EPLB acts, the skew falls, and TPOT does not improve is a false
+# positive in the sense that matters: work done for no latency.
+#
+# Why an expert target rather than rank:0. Under contiguous placement rank 0
+# holds experts 0-15 of 64, so biasing those experts is the same skew as
+# bias_target = "rank:0" - which is what every calibration on this deployment
+# used, so the levels above carry over. The difference is that it survives
+# rearrangement: EPLB may move expert 7 to rank 2, and the skew goes with it.
+# A rank target would be aimed at whatever ended up on rank 0, which is not a
+# controlled quantity, and the config layer refuses that pairing.
+#
+# Why 300 new tokens. Rearrangement is on an iteration counter, not a timer, and
+# the counter clears at the end of each cycle: collect 50 + plan 50 + one
+# iteration per MoE layer = 126 forward iterations minimum. At 100 tokens a point
+# would collect load and never act, which looks exactly like finding nothing to
+# fix. 300 gives two cycles. Both arms pay the same generation length.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_false_positive.toml'
+#
+# Run it through the grid, which adds the EPLB-off control:
+#   ./nrun 'uv run moe-reliability grid configs/grids/eplb_false_positive.toml --dry-run'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-false-positive"
+description = "EPLB on and off across a skew ladder that is mostly free, DeepSeek, NPUs 0-3."
+seed = 47
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off here; the grid turns it on in the second arm. The intervals apply to that
+# arm and are set so a 300-token point completes two full cycles.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+eplb_record_map = true
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+
+[imbalance]
+method = "router_bias"
+# Experts 0-15 are rank 0's under contiguous placement: the same skew every
+# calibration on this deployment measured, in a form EPLB cannot invalidate.
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 800
+validation_save_records = true
+
+[benchmark]
+n_samples = 1200
+repeats = 3
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

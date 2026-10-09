@@ -182,6 +182,11 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
            "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
            "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
            "metrics file."),
+    Option("capture_experts", "bool", False, "Serve the benchmark with --enable-return-routed-experts, so "
+           "every request returns the experts it routed to. This is what a monitor's collection path costs: "
+           "the screen's own arithmetic is negligible beside getting the routing off the device, and that "
+           "cost is otherwise assumed rather than measured. Benchmark it against an otherwise identical "
+           "point with this off - the difference is the ceiling, at every layer and every token."),
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
@@ -243,6 +248,11 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
            "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
            "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
            "metrics file."),
+    Option("capture_experts", "bool", False, "Serve the benchmark with --enable-return-routed-experts, so "
+           "every request returns the experts it routed to. This is what a monitor's collection path costs: "
+           "the screen's own arithmetic is negligible beside getting the routing off the device, and that "
+           "cost is otherwise assumed rather than measured. Benchmark it against an otherwise identical "
+           "point with this off - the difference is the ceiling, at every layer and every token."),
 ))
 
 _ANALYSIS = Section("analysis", "Post-processing of profiler traces.", (
@@ -560,6 +570,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
             errors.append("imbalance.validation_samples must be >= 0")
         if cfg["imbalance"]["method"] == "router_bias":
             from .router_bias import parse_target
+            kind = None
             try:
                 kind, ids = parse_target(cfg["imbalance"]["bias_target"])
                 if kind == "rank" and ids[0] >= cfg["hardware"]["n_npus"]:
@@ -574,9 +585,19 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                 errors.append("imbalance.bias_layers must be layer indices >= 0")
             if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):
                 errors.append("imbalance.bias_layers contains duplicates")
-            if cfg["server"]["enable_eplb"]:
-                errors.append("imbalance.method = 'router_bias' assumes contiguous expert placement; "
-                              "EPLB moves experts between ranks, so a rank target would not stay on one rank")
+            # A rank target names the experts a rank holds *under contiguous
+            # placement*, which EPLB is free to change, so the skew would wander
+            # off the rank it was aimed at and the point would measure nothing
+            # definite. An expert target names experts directly: the skew stays
+            # on them wherever EPLB puts them, which is what makes an EPLB
+            # comparison possible at all. 'rotate' is a rank target per layer.
+            if cfg["server"]["enable_eplb"] and kind not in (None, "experts"):
+                errors.append(f"imbalance.bias_target = {cfg['imbalance']['bias_target']!r} is a rank "
+                              "target, which assumes contiguous expert placement; EPLB moves experts "
+                              "between ranks, so the skew would not stay on the rank it names. Use an "
+                              "'experts:<i>,<j>,...' target with EPLB: under contiguous placement rank r "
+                              "holds experts [r*n/ranks, (r+1)*n/ranks), so naming those experts is the "
+                              "same skew and survives rearrangement")
             if probe_family is None:
                 errors.append("imbalance.method = 'router_bias' needs the expert count: set model.probe "
                               f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")

@@ -93,6 +93,27 @@ def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
     assert ctx.stage_status("hta") == schema.STATUS_SKIPPED
 
 
+def test_benchmark_capture_reaches_the_benchmark_pass_only_when_asked(deployment, forced_config_data):
+    """The capture is what a monitor's collection path costs, so it has to be switchable.
+
+    Validation always captures - that is where the routing comes from - so the
+    benchmark pass is the only one whose timings can be compared with and
+    without it. Leaving it off by default keeps every existing sweep's TPOT
+    measured on an uninstrumented server.
+    """
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    benchmark = [c for c in deployment.calls if not c["capture"]]
+    assert benchmark and all(not c["capture"] for c in benchmark)
+
+    forced_config_data["benchmark"]["capture_experts"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert all(c["capture"] for c in deployment.calls[len(deployment.calls) - len(benchmark):])
+
+
 def test_separate_profiling_run_serves_each_point_twice(deployment, forced_config_data):
     """Timings must come from an unprofiled pass, traces from a profiled one."""
     forced_config_data["benchmark"]["enable_profiling"] = True

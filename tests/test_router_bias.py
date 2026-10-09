@@ -166,6 +166,13 @@ def test_router_bias_config_is_checked(router_bias_config):
     router_bias_config["server"]["enable_eplb"] = True
     with pytest.raises(ConfigError, match="contiguous expert placement"):
         ExperimentConfig.from_dict(router_bias_config)
+    router_bias_config["imbalance"]["bias_target"] = "rotate"
+    with pytest.raises(ConfigError, match="contiguous expert placement"):
+        ExperimentConfig.from_dict(router_bias_config)
+    # An expert target names experts rather than a rank, so the skew stays on
+    # them wherever EPLB moves them. That is the pairing an EPLB comparison needs.
+    router_bias_config["imbalance"]["bias_target"] = "experts:0,1,2,3"
+    ExperimentConfig.from_dict(router_bias_config)
 
 
 def test_moe_layers_skip_dense_placeholders():

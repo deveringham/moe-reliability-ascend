@@ -249,6 +249,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         server_env = p.get("server_env") or None
         results = serve_and_measure(cfg, model_path, prompts,
                                     trace_dir=None if separate else trace_path,
+                                    enable_expert_capture=cfg.benchmark.capture_experts,
                                     eplb_record_path=eplb_path, server_env=server_env)
 
         if results is None:
@@ -262,6 +263,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         if separate:
             log(f"{label}: profiling pass")
             profiled = serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
+                                         enable_expert_capture=cfg.benchmark.capture_experts,
                                          eplb_record_path=eplb_path, server_env=server_env)
             if profiled is None:
                 # The measurements stand on their own; only the traces are lost.
