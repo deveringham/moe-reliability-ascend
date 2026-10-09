@@ -66,6 +66,10 @@
 | screen | deepseek-v2 | 512 | 4 | spaced | 0.0154 | 1.717 | False | 1.0 |  |
 | screen | deepseek-v2 | 512 | 4 | spaced | 0.0154 | 2.427 | True | 1.0 |  |
 | screen | deepseek-v2 | 512 | 4 | spaced | 0.0154 | 3.536 | True | 1.0 |  |
+| screen | deepseek-v2 | 8 | 4 | random | 0.0154 | 1.35 | False | 0.943 |  |
+| screen | deepseek-v2 | 8 | 4 | random | 0.0154 | 1.717 | False | 1.0 |  |
+| screen | deepseek-v2 | 8 | 4 | random | 0.0154 | 2.427 | True | 1.0 |  |
+| screen | deepseek-v2 | 8 | 4 | random | 0.0154 | 3.536 | True | 1.0 |  |
 | screen | mixtral | 1 | all | spaced | 1.0 | 1.205 | False | 0.098 |  |
 | screen | mixtral | 1 | all | spaced | 1.0 | 1.391 | True | 0.625 |  |
 | screen | mixtral | 1 | all | spaced | 1.0 | 1.798 | True | 1.0 |  |
@@ -146,6 +150,11 @@
 | screen | mixtral | 512 | 4 | spaced | 0.0125 | 1.798 | True | 1.0 |  |
 | screen | mixtral | 512 | 4 | spaced | 0.0125 | 2.688 | True | 1.0 |  |
 | screen | mixtral | 512 | 4 | spaced | 0.0125 | 3.444 | True | 1.0 |  |
+| screen | mixtral | 8 | 4 | random | 0.0125 | 1.205 | False | 0.085 |  |
+| screen | mixtral | 8 | 4 | random | 0.0125 | 1.391 | True | 0.682 |  |
+| screen | mixtral | 8 | 4 | random | 0.0125 | 1.798 | True | 1.0 |  |
+| screen | mixtral | 8 | 4 | random | 0.0125 | 2.688 | True | 1.0 |  |
+| screen | mixtral | 8 | 4 | random | 0.0125 | 3.444 | True | 1.0 |  |
 | layer sampling | deepseek-v2 |  | 26 | spaced | 0.1 |  |  | 1.0 | 6/6 |
 | layer sampling | deepseek-v2 |  | 13 | spaced | 0.05 |  |  | 1.0 | 2/6 |
 | layer sampling | deepseek-v2 |  | 4 | spaced | 0.0154 |  |  | 0.013 | 0/6 |
