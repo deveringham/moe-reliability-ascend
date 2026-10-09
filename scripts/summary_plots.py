@@ -1,10 +1,11 @@
-"""Bare plots of the summary tables: a title, axes, the data, nothing else.
+"""Bare plots of the summary tables: axes, the data, nothing else.
 
     uv run python scripts/summary_plots.py [<dir>]
 
 Reads the CSVs that scripts/summary_tables.py writes and draws them into the
-same directory, so a plot and the numbers behind it stay together. No captions
-and no callouts: these are for a slide the speaker talks over.
+same directory, so a plot and the numbers behind it stay together. No titles,
+no captions and no callouts: these are for a slide the speaker talks over, and
+anything that has to be said about a plot is said beside it, not on it.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ def num(value, default=float("nan")):
         return default
 
 
-def axes(ax, xlabel, ylabel, title):
+def axes(ax, xlabel, ylabel):
     ax.set_facecolor(SURFACE)
     ax.grid(axis="y", color=GRID, lw=0.8)
     ax.set_axisbelow(True)
@@ -50,7 +51,6 @@ def axes(ax, xlabel, ylabel, title):
     ax.tick_params(colors=INK2, labelsize=9, length=0)
     ax.set_xlabel(xlabel, color=INK2, fontsize=10)
     ax.set_ylabel(ylabel, color=INK2, fontsize=10)
-    ax.set_title(title, color=INK, fontsize=12, fontweight="bold", loc="left", pad=10)
 
 
 def save(fig, out, name):
@@ -77,8 +77,7 @@ def plot_cost_vs_load(table, out):
         series.setdefault((r["model"], shape), []).append(
             (num(r["busiest_rank"]), num(r["cost_pct"]), num(r["cost_sd_pct"], 0.0)))
     fig, ax = plt.subplots(figsize=(8.0, 5.0), facecolor=SURFACE)
-    axes(ax, "Load on the busiest rank (1.0 = balanced)", "Change in TPOT (%)",
-         "Cost of imbalance, by model and shape")
+    axes(ax, "Load on the busiest rank (1.0 = balanced)", "Change in TPOT (%)")
     ax.axhline(0, color=GRID, lw=1)
     for (model, shape), pts in sorted(series.items()):
         pts.sort()
@@ -116,8 +115,7 @@ def plot_batch(table, out):
     if not points:
         return
     fig, ax = plt.subplots(figsize=(8.0, 5.0), facecolor=SURFACE)
-    axes(ax, "Decode batch (sequences in flight)", "Change in TPOT per +1x of load (ms)",
-         "At natural imbalance, only a large batch pays")
+    axes(ax, "Decode batch (sequences in flight)", "Change in TPOT per +1x of load (ms)")
     ax.axhline(0, color=INK3, lw=1.2)
     ax.errorbar([p[0] for p in points], [p[1] for p in points], yerr=[p[2] for p in points],
                 ls="-", marker="o", ms=7, lw=2, capsize=4, elinewidth=1, color=ORANGE,
@@ -140,8 +138,8 @@ def plot_detection(table, out):
     if not want:
         return
     fig, ax = plt.subplots(figsize=(8.0, 5.0), facecolor=SURFACE)
-    axes(ax, "Load on the busiest rank", "Share of windows that alarm",
-         "What the screen catches (8 requests, ~1% of routing)")
+    axes(ax, "Load on the busiest rank (window of 8 requests, 4 layers, a tenth of the tokens)",
+         "Share of windows that alarm")
     for model in sorted({r["model"] for r in want}):
         pts = sorted((num(r["busiest_rank"]), num(r["detection_rate"]),
                       r.get("costs_latency") == "True") for r in want if r["model"] == model)
@@ -164,8 +162,8 @@ def plot_layer_sampling(table, out):
         return
     want.sort(key=lambda r: (-int(num(r["layers"], 0)), r["layer_choice"]))
     fig, ax = plt.subplots(figsize=(8.0, 5.0), facecolor=SURFACE)
-    axes(ax, "", "Share of windows that alarm",
-         "A skew in 6 of 26 layers: fixed layers miss it")
+    axes(ax, "Layers counted per window, on a skew confined to 6 of 26 layers",
+         "Share of windows that alarm")
     labels = [f"{r['layers']} layers\n{r['layer_choice']}" for r in want]
     values = [num(r["detection_rate"]) for r in want]
     ax.bar(range(len(values)), values, 0.6,
@@ -194,13 +192,18 @@ def plot_margin(table, out):
     for r in want:
         by_run.setdefault(r["run"], []).append(
             (num(r["margin"]), num(r["false_alarm_rate"]), num(r["warns_before_cost"])))
-    fig, axs = plt.subplots(1, len(by_run), figsize=(8.0, 5.0), facecolor=SURFACE, squeeze=False)
+    fig, axs = plt.subplots(1, len(by_run), figsize=(5.5 * len(by_run), 5.0),
+                            facecolor=SURFACE, squeeze=False)
     for ax, (run, pts) in zip(axs[0], sorted(by_run.items())):
         pts.sort()
         model = "mixtral" if "mixtral" in run else "deepseek-v2"
         batch = run.split("_bs")[-1].split("_")[0] if "_bs" in run else "?"
-        axes(ax, "Alarm margin (0 = at the cost, 1 = at benign traffic)", "Share of windows",
-             f"{LABEL[model]}, batch {batch}: what a margin buys")
+        shape = "a different rank hot each layer" if "rotating" in run else "one rank hot"
+        # The run goes on the axis rather than in a title: with more than one
+        # panel there is otherwise nothing saying which is which, and the two
+        # calibrated so far are the same model at the same batch.
+        axes(ax, f"Alarm margin (0 = alarm at the cost, 1 = at benign traffic)\n"
+                 f"{LABEL[model]}, batch {batch}, {shape}", "Share of windows")
         x = [p[0] for p in pts]
         ax.plot(x, [p[2] for p in pts], "-o", ms=7, lw=2, color=BLUE, mec=SURFACE, mew=1.4,
                 label="skew caught while still harmless")
