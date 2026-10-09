@@ -280,7 +280,13 @@ def plot_corpus_alarm(table, out):
     thresholds = {r["model"]: num(r["impact_threshold"]) for r in table}
     if not by_model:
         return
-    models = sorted(by_model)
+    # A model gets a panel only if it was measured on every corpus that reaches
+    # the threshold somewhere. Otherwise its bars are all zero because the
+    # concentrating corpora were never run on it, which reads as a null it never
+    # tested. The panel returns on its own once those captures are analysed.
+    reaching = {c for pts in by_model.values() for c, *_rest, over in pts if over > 0}
+    models = sorted(m for m, pts in by_model.items()
+                    if reaching <= {c for c, *_rest in pts})
     heights = [len(by_model[m]) for m in models]
     fig, axs = plt.subplots(1, len(models), figsize=(5.8 * len(models), 0.42 * max(heights) + 2.2),
                             facecolor=SURFACE, squeeze=False, sharex=True)
