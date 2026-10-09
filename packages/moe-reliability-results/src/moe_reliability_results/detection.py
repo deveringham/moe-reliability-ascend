@@ -263,6 +263,22 @@ def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler:
     return stream_loads(pools, n_ranks, sampler, rng) >= alarm
 
 
+def _counted(*pools: np.ndarray, sampler: WindowSampler):
+    """The arrays a stream should draw from, and the sampler to score them with.
+
+    Restricting to the counted layers once is the cheap arrangement and the right
+    one for fixed sampling: the draws then copy only what is counted. Random
+    sampling has to keep the full layer axis, because choosing the layers before
+    the stream starts is fixed sampling under another name - which is what these
+    two functions were quietly doing.
+    """
+    if sampler.layer_choice == "random" and sampler.layers is not None:
+        return (*pools, sampler)
+    layers = sampler._layer_index(pools[0].shape[1])
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    return (*(p[:, layers] for p in pools), flat)
+
+
 def _first_run(flags: np.ndarray, consecutive: int) -> int | None:
     """Index of the first window completing ``consecutive`` alarms in a row."""
     run = 0
@@ -285,10 +301,7 @@ def onset_delay(balanced: np.ndarray, skewed: np.ndarray, n_ranks: int, sampler:
     """
     rng = np.random.default_rng(seed)
     pre_requests = pre_windows * sampler.window
-    layers = sampler._layer_index(balanced.shape[1])
-    # Restrict to the counted layers once; the draws then copy only what is counted.
-    pre, post = balanced[:, layers], skewed[:, layers]
-    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    pre, post, flat = _counted(balanced, skewed, sampler=sampler)
     delays, false_starts, misses = [], 0, 0
     for _ in range(draws):
         flags = alarm_stream([(pre, pre_requests), (post, post_windows * sampler.window)],
@@ -320,8 +333,7 @@ def mean_windows_to_false_alarm(balanced: np.ndarray, n_ranks: int, sampler: Win
     tuning knob an operator actually has.
     """
     rng = np.random.default_rng(seed)
-    pre = balanced[:, sampler._layer_index(balanced.shape[1])]
-    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    pre, flat = _counted(balanced, sampler=sampler)
     runs, survived = [], 0
     for _ in range(draws):
         flags = alarm_stream([(pre, horizon * sampler.window)], n_ranks, flat, alarm, rng)
@@ -370,23 +382,35 @@ def threshold_at_fpr(benign: Sequence[float], fpr: float) -> float:
 
 
 def impact_threshold(loads: Sequence[float], costs: Sequence[float], noise_pct: float) -> float | None:
-    """The lowest measured load whose cost clears ``noise_pct``, by linear interpolation.
+    """The lowest measured load whose cost clears ``noise_pct`` and stays clear.
 
     ``costs`` are percentage changes in latency against the balanced point and
     ``noise_pct`` is the run-to-run drift between identical points - the floor
     below which a cost is not distinguishable. Returns None when no measured
     point reaches it, which is the honest answer for a model swept only below
     its threshold.
+
+    The crossing has to be *sustained*: every higher level must also be above the
+    floor. A fine sweep spends several levels near the floor and one of them
+    clearing it by chance is the likeliest reading there, not the onset - on the
+    mixtral calibration sweep the first crossing sat at 1.24x and the next level
+    fell back to +0.15%, while the sustained crossing is at 1.45x. On a coarse
+    sweep, where every level above the first crossing is well past the floor,
+    this is the same answer as taking the first.
     """
     order = np.argsort(np.asarray(loads, dtype=float))
     x, y = np.asarray(loads, dtype=float)[order], np.asarray(costs, dtype=float)[order]
-    for i in range(1, len(x)):
-        if y[i] >= noise_pct > y[i - 1]:
-            span = y[i] - y[i - 1]
-            # Interpolate so a coarse sweep does not round the threshold up to its
-            # next measured level.
-            return float(x[i - 1] + (x[i] - x[i - 1]) * ((noise_pct - y[i - 1]) / span)) if span else float(x[i])
-    return float(x[0]) if len(y) and y[0] >= noise_pct else None
+    above = y >= noise_pct
+    for i in range(len(x)):
+        if not above[i] or not above[i:].all():
+            continue
+        if i == 0:
+            return float(x[0])
+        span = y[i] - y[i - 1]
+        # Interpolate so a coarse sweep does not round the threshold up to its
+        # next measured level.
+        return float(x[i - 1] + (x[i] - x[i - 1]) * ((noise_pct - y[i - 1]) / span)) if span else float(x[i])
+    return None
 
 
 def calibrate(loads: Sequence[float], costs: Sequence[float], balanced_repeats: Sequence[float],

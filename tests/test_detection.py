@@ -139,6 +139,21 @@ def test_impact_threshold_interpolates_between_measured_levels():
     assert D.impact_threshold(ds_loads[:4], ds_costs[:4], noise_pct=2.2) is None
 
 
+def test_impact_threshold_ignores_a_crossing_that_falls_back():
+    # The mixtral calibration sweep's shape: fine levels around the floor, one of
+    # which clears it, then a higher level back below. The onset is the crossing
+    # that holds, not the first one.
+    loads = [1.11, 1.13, 1.20, 1.27, 1.37, 1.76, 2.62]
+    costs = [0.0, -1.09, -0.25, 1.95, 0.15, 5.83, 14.45]
+    threshold = D.impact_threshold(loads, costs, noise_pct=0.95)
+    assert 1.37 < threshold < 1.76
+
+    # With the fall-back level removed the two rules agree: nothing above the
+    # first crossing dips back under the floor.
+    assert D.impact_threshold(loads[:4] + loads[5:], costs[:4] + costs[5:],
+                              noise_pct=0.95) == pytest.approx(1.246, abs=0.01)
+
+
 def test_step_cost_fit_compares_like_steps_and_reports_per_bin():
     rng = np.random.default_rng(6)
 
@@ -360,6 +375,21 @@ def test_random_sampling_sees_a_layer_local_skew_that_spaced_sampling_misses():
 
     assert detection("spaced") < 0.1     # blind to it
     assert detection("random") > 0.5     # sees it, at the same per-window cost
+
+
+def test_streaming_timers_redraw_random_layers_rather_than_fixing_them_once():
+    # onset_delay and mean_windows_to_false_alarm used to pick the layers before
+    # the stream started, which is fixed sampling wearing the random label - and
+    # on a layer-local skew it makes them blind in exactly the way above.
+    balanced = _layered(seed=0)
+    skewed = _layered(hot=set(range(9, 15)), seed=1)
+    sampler = D.WindowSampler(window=8, layers=4, layer_choice="random")
+    alarm = D.threshold_at_fpr(D.estimate_loads(balanced, N_RANKS, sampler, seed=0), 0.01)
+
+    found = D.onset_delay(balanced, skewed, N_RANKS, sampler, alarm, pre_windows=5, draws=200)
+    assert found["detected_fraction"] > 0.8
+    quiet = D.mean_windows_to_false_alarm(balanced, N_RANKS, sampler, alarm, draws=80)
+    assert quiet["windows_to_false_alarm_p50"] is None or quiet["windows_to_false_alarm_p50"] > 10
 
 
 def test_accumulation_places_the_skew_without_counting_every_layer_at_once():
