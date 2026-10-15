@@ -73,3 +73,33 @@ def test_itl_sum_is_consistent_with_the_tpot_it_should_decompose():
     res = _run([0.0, 0.03, 0.03, 0.03], n_output=4, collect_itl=True)
     mean_itl_s = sum(res["itl_ms"]) / len(res["itl_ms"]) / 1000
     assert abs(mean_itl_s - res["tpot"]) < 0.01
+
+
+class _Completion:
+    def __init__(self, n_output, n_input=7):
+        usage = types.SimpleNamespace(completion_tokens=n_output, prompt_tokens=n_input)
+        message = types.SimpleNamespace(content="done")
+        self.choices = [types.SimpleNamespace(message=message)]
+        self.usage = usage
+
+
+def test_unstreamed_request_is_timed_end_to_end_only():
+    """The arm a capturing one is compared against: same transport, no capture fields."""
+    client = _Client(_Completion(n_output=5))
+    res = asyncio.run(measure_request(client, "m", 0, "hello", max_new_tokens=5, stream=False))
+    assert client._kwargs["stream"] is False
+    assert res["ttft"] is None and res["tpot"] is None
+    assert res["num_output_tokens"] == 5 and res["total_time"] >= 0
+    assert "routed_experts" not in res and "itl_ms" not in res
+
+
+def test_ignore_eos_is_sent_only_when_asked_for():
+    """Off, the request is the one every earlier run sent; on, vLLM gets ignore_eos."""
+    for stream, reply in ((True, lambda: _Stream([0.0], 1)), (False, lambda: _Completion(n_output=1))):
+        client = _Client(reply())
+        asyncio.run(measure_request(client, "m", 0, "hello", max_new_tokens=1, stream=stream))
+        assert "extra_body" not in client._kwargs
+
+        client = _Client(reply())
+        asyncio.run(measure_request(client, "m", 0, "hello", max_new_tokens=1, stream=stream, ignore_eos=True))
+        assert client._kwargs["extra_body"] == {"ignore_eos": True}

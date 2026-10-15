@@ -159,6 +159,23 @@ _CLIENT = Section("client", "Load generation against the server.", (
     Option("concurrency_limit", "int", 700, "Maximum number of in-flight requests "
            "(should exceed batch_size to saturate the server)."),
     Option("n_warmup_samples", "int", 10, "Number of warm-up requests before measurement."),
+    Option("stream", "bool", True, "Stream responses, which is what gives TTFT, TPOT and inter-token "
+           "latencies. Off, each request is timed end to end only. Expert capture is never streamed, so an arm "
+           "compared against benchmark.capture_experts has to turn this off too: streaming costs the client "
+           "and API server per token, and with 2000 prompts in flight that difference is larger than the "
+           "capture (the capturing arm finished 15% sooner than a streaming one on 2026-10-09)."),
+    Option("ignore_eos", "bool", False, "Generate exactly max_new_tokens per request, ignoring "
+           "end-of-sequence (vLLM's ignore_eos). Holds output length fixed across sweep points: a strong router "
+           "bias degrades DeepSeek-V2-Lite enough that some answers end early (205 of 300 tokens on average at "
+           "offset 2, 84 of 100), and with length held the skew costs nothing - the ~20-30% read as its cost "
+           "came with the early stops. Applies to warm-up, benchmark and the validation capture alike."),
+    Option("lengths_from", "str", "", "Replay another point's output lengths: a metrics file "
+           "(<run>/metrics/<label>.json.gz) whose requests give each prompt the number of tokens it generated "
+           "there, matched by prompt content. Needs ignore_eos, so each request generates exactly that many, "
+           "and max_new_tokens at least the longest. Separates *how many* tokens a point generated from "
+           "*which* requests stopped early: DeepSeek at router-bias offset 2 averages 84 of 100 tokens and "
+           "costs +21% TPOT, while every request held at 84 costs nothing. A prompt missing from the file is "
+           "an error, never a fallback to max_new_tokens."),
 ))
 
 _ACTIVATIONS = Section("activations", "Stage 1 (synthetic workloads): expert activation capture on MMLU prompts.", (
@@ -609,6 +626,12 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                           "(FlashLB) applies its own update trigger internally, so gating it would be "
                           "two triggers in series")
     positive("client", "max_new_tokens")
+    if cfg["client"]["lengths_from"]:
+        if not cfg["client"]["ignore_eos"]:
+            errors.append("client.lengths_from needs client.ignore_eos: without it each replayed length is "
+                          "only a cap, the model stops wherever it likes, and the lengths are not replayed")
+        if not Path(cfg["client"]["lengths_from"]).is_file():
+            errors.append(f"client.lengths_from: no such metrics file {cfg['client']['lengths_from']!r}")
     positive("client", "concurrency_limit")
     positive("client", "n_warmup_samples", allow_zero=True)
     positive("benchmark", "trace_active_iterations")
@@ -663,6 +686,10 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     else:
         levels = cfg["imbalance"]["imbalance_levels"]
         positive("benchmark", "n_samples")
+        if cfg["client"]["lengths_from"] and cfg["imbalance"]["validate_imbalance"]:
+            errors.append("client.lengths_from with imbalance.validate_imbalance: the validation capture "
+                          "serves its own prompts, which the replayed point never saw, so they have no "
+                          "length to replay")
         if not levels or any(level < 0 for level in levels):
             errors.append("imbalance.imbalance_levels must be a non-empty list of numbers >= 0")
         if len(set(levels)) != len(levels):

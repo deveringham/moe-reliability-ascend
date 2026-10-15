@@ -1,0 +1,99 @@
+# Does DeepSeek pay for skew at 100 tokens once its answers stop shortening?
+#
+# fixed_length.toml settled this at 300 tokens: with every request held to 300,
+# a 3.64x skew costs -0.27% +-1.84 TPOT where the same skew at natural length
+# read +30.86% (the model wrote 205 of 300 tokens there). The 100-token results
+# rest on the same kind of point and have not been tested:
+#
+#   rbias-controlled-000 (this run's settings)   offset 2, 3.45x   84 of 100   +22%
+#   rbias-graph-threshold-002                    offset 1.75 / 2   92 / 84     +17% / +19%
+#
+# and on them stand DeepSeek's 2.43x impact threshold, the graph-mode slope and
+# the rotating-versus-fixed contrast (the rotating arm kept its length, 99.3).
+#
+# Three arms in shared rounds, so drift falls alike on all of them:
+#
+#   natural    ignore_eos off. rbias-controlled-000 again: offset 2 should cost
+#              ~+22% and shorten to ~84 tokens. The positive control - if it does
+#              not reproduce, nothing else here can be read.
+#   held-100   every request exactly 100 tokens. The cost of skew at 100 tokens
+#              with the prefill/decode mix held. Flat at offset 2 withdraws the
+#              threshold, and the rotating contrast with it (both arms flat).
+#   held-84    every request exactly 84 tokens, offset 2's natural length. At
+#              offset 0 against held-100 it is the cost of the shorter text alone,
+#              with no skew; at offset 2 against natural, the same length with and
+#              without the model choosing it. Together they say whether the +22%
+#              was the text alone or the text and the skew together.
+#
+# Offset 1 (2.34x) is kept for the small cost both 300-token runs saw at 2.48x
+# (~+2.5%) while 3.64x saw none.
+#
+# Everything else is rbias-controlled-000's, including its seed, so the natural
+# arm serves the same prompts: rank-0 target, gpu_memory_utilization 0.6, 3000
+# prompts, 10 warm-up, eager. Repeats go from 3 to 4.
+#
+# Validation runs once per level on the configuration as written (held-100), so
+# the loads describe forced-length traffic. The natural arm's generated tokens
+# differ after offset 2's early stops, which is a property of the text, not of
+# the routing of any one token; rbias-controlled-000 read 3.45x at offset 2.
+#
+# Cost: 3 offsets x 3 arms x 4 repeats = 36 points at ~4 min (rbias-controlled's
+# 4.0; held-84 points are shorter, held-100 at offset 2 a little longer) = ~2.4 h,
+# plus ~10 min of validation, on NPUs 0-3: ~10 NPU-hours.
+#
+#   ./nrun 'npu-smi info'
+#   ./nrun 'uv run moe-reliability validate configs/examples/length_held_100.toml'
+#   ./nrun -t held100 'uv run moe-reliability run configs/examples/length_held_100.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "length-held-100"
+description = "rbias-controlled at 100 tokens with three arms - natural length, held at 100, held at 84 - to separate DeepSeek's cost of skew from the shorter text it causes."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.6
+enable_eplb = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+# As written: held. The natural arm turns it off.
+ignore_eos = true
+n_warmup_samples = 10
+stream = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 3000
+repeats = 4
+arms = [
+    "natural: client.ignore_eos=false",
+    "held-100",
+    "held-84: client.max_new_tokens=84",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import random
 import re
 import shutil
@@ -114,17 +115,49 @@ def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
             + n_moe_layers)
 
 
+def replay_lengths(path: str | Path, prompts: Sequence[Any]) -> list[int]:
+    """Each prompt's output length in the point recorded at ``path``.
+
+    Matched by prompt content rather than position, so warm-up (a prefix of the
+    benchmark prompts) and the benchmark itself both find theirs, and a prompt
+    list that differs from the recorded one is refused rather than paired with
+    another prompt's length.
+    """
+    import gzip
+
+    records = json.load(gzip.open(path, "rt"))["requests"]
+    lengths = {json.dumps(r["prompt"], sort_keys=True): r["num_output_tokens"] for r in records}
+    out, missing = [], 0
+    for prompt in prompts:
+        n = lengths.get(json.dumps(prompt, sort_keys=True))
+        if n is None:
+            missing += 1
+        else:
+            out.append(max(1, int(n)))
+    if missing:
+        raise ValueError(f"client.lengths_from: {missing} of {len(prompts)} prompts have no recorded length "
+                         f"in {path}; it must come from a point that served these prompts")
+    return out
+
+
 def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[Any],
                        trace_dir: str | None, enable_expert_capture: bool = False,
                        eplb_record_path: str | None = None,
                        server_env: dict[str, str] | None = None) -> list[dict] | None:
     from ..core.vllm_serving import measure_vllm_throughput
 
+    max_new_tokens: int | list[int] = cfg.client.max_new_tokens
+    if cfg.client.lengths_from:
+        max_new_tokens = replay_lengths(cfg.client.lengths_from, prompts)
+        if max(max_new_tokens) > cfg.client.max_new_tokens:
+            raise ValueError(f"client.lengths_from replays up to {max(max_new_tokens)} tokens, above "
+                             f"client.max_new_tokens = {cfg.client.max_new_tokens}")
+
     return asyncio.run(measure_vllm_throughput(
         model_path,
         list(prompts),
         seed=cfg.experiment.seed,
-        max_new_tokens=cfg.client.max_new_tokens,
+        max_new_tokens=max_new_tokens,
         max_model_len=cfg.server.max_model_len,
         batch_size=cfg.server.batch_size,
         max_num_batched_tokens=cfg.server.max_num_batched_tokens,
@@ -144,7 +177,9 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
         extra_env=server_env,
-        collect_itl=cfg.benchmark.save_itl,
+        collect_itl=cfg.benchmark.save_itl and cfg.client.stream,
+        stream=cfg.client.stream,
+        ignore_eos=cfg.client.ignore_eos,
     ))
 
 # Runs and records metrics for all pending sweep points

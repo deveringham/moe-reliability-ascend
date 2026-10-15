@@ -1,0 +1,131 @@
+# Does EPLB buy anything at 8-way expert parallelism?
+#
+# Every EPLB result so far is at 4 NPUs, and every one is a null: on DeepSeek it
+# takes a 3.63x skew that costs the unbalanced server +31% TPOT down to ~1.1x and
+# recovers nothing (eplb-fp2, eplb-gated), and on Mixtral it recovers nothing and
+# cannot even balance the model (eplb-mixtral). Width is the one lever that has
+# moved the straggler - busiest rank 1.04x at 2 ranks, 1.13x at 4, 1.31x at 8 for
+# the same workloads - so it is the direction in which that null is most likely
+# to break, and the result that could reverse the "do not enable EPLB" advice.
+#
+# One thing changes from the 4-way runs: the width. Model, bias, arms, traffic
+# and EPLB settings are eplb-fp2's, and fixed-length output and the longer
+# warm-up are fixed_length.toml's, so each level pairs with a 4-way row from
+# that run (levels 0, 1, 2) or from eplb-fp2 (0.5).
+#
+# The bias target is unchanged on purpose: the same 16 experts (0-15). The router
+# bias acts on expert logits, so the routing and the generated text are the same
+# as at 4-way; only where the experts live differs. At 4-way those 16 are rank
+# 0's, at 8-way they are ranks 0 and 1's, so the skew is two hot ranks rather
+# than one. Busiest-rank load comes out near the 4-way figures if the hot share
+# splits evenly between experts 0-7 and 8-15, and above them where it does not,
+# per layer - which is why validate_imbalance is on: this run reads its own
+# loads rather than carrying 4-way ones over. EPLB has room to work: 16 hot
+# experts over 8 ranks of 8 slots each is 2 per rank, a placement that can be
+# made balanced, unlike Mixtral's 8 experts over 4 ranks.
+#
+# The alternative, experts 0-7 (rank 0 alone, as "rank:0" means at 8-way), gives
+# up to 8x on one rank but changes the routing and the text, has no calibration
+# at this width, and offset 2 would collapse DeepSeek to a handful of live
+# experts. It is the follow-up if this run finds a cost to recover.
+#
+# Steady state is the second fix. In eplb-fp2 and eplb-gated, 600 warm-up
+# requests (~50 s) ended before EPLB had converged: at level 2 its fourth plan,
+# the one that reaches ~1.09x, landed ~35 s into a ~140 s measured window, so
+# a quarter of the window was pre-convergence. Convergence takes four 50+50
+# cycles, ~90 s from server start. 1800 warm-up requests (~150 s at this rate)
+# puts it well before measurement. Check this when the run lands: in each
+# eplb-on point, the last plan before the measured batch starts should already
+# read ~1.1x. If 8-way cycles run slower and it does not, the window is still
+# partly convergence and says so.
+#
+# Every request generates exactly 300 tokens (client.ignore_eos). At offset 2
+# DeepSeek otherwise stops at 205 of 300, which moves the prefill/decode mix with
+# the skew; configs/examples/fixed_length.toml tests whether that, rather than
+# the skew, is what offset 2 costs at 4-way, and its rows are the 4-way pairs
+# for this run. Run it first: if the cost turns out to be the text, the levels
+# here want rethinking before 32 NPU-hours go on them.
+#
+# Traffic stays at 300 generated tokens, as in eplb-fp2, so the 4-way rows are
+# comparable. That is the decode-heavy regime, where skew costs least (it cut
+# Mixtral's cost ~5x against 100 tokens). If this run finds nothing, a 100-token
+# run is the place EPLB has the best remaining chance, and it changes one thing
+# at a time only if this one comes first.
+#
+# Cost: 4 levels x 2 arms x 4 repeats = 32 points at ~7 min (eplb-gated's ~5.5
+# min plus ~1.7 min more warm-up) = ~3.8 h, plus ~15 min of validation: ~4 h of
+# wall time holding all 8 NPUs, ~32 NPU-hours. Dropping level 1 (24 points)
+# saves ~1 h, but 2.49x is where an 8-way threshold would most plausibly move.
+#
+# Launch only with all eight NPUs empty in `npu-smi info`. The 4-NPU runs
+# tolerated another user's jobs on NPUs 4-5; here those NPUs are the run's own,
+# so a neighbour would share devices, not just the host.
+#
+#   ./nrun 'npu-smi info'
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_npu8.toml'
+#   ./nrun -t npu8 'uv run moe-reliability run configs/examples/eplb_npu8.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-npu8"
+description = "EPLB off and on at 8-way expert parallelism, eplb-fp2's bias and traffic, measured past convergence."
+seed = 48
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 8
+visible_devices = "0,1,2,3,4,5,6,7"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; the eplb-on arm turns it on.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only.
+eplb_record_map = false
+# Plain upstream EPLB: the gate patch stays inert without this.
+eplb_min_imbalance = 0.0
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# ~150 s, past EPLB's ~90 s convergence at level 2 (see above).
+n_warmup_samples = 1800
+stream = true
+# Fixed length, as in fixed_length.toml: the mix must not move with the level.
+ignore_eos = true
+
+[imbalance]
+method = "router_bias"
+# Experts 0-15: rank 0's at 4-way, ranks 0 and 1's at 8-way. Same routing as
+# eplb-fp2, and an expert target, so EPLB cannot invalidate it by moving experts.
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5, 1, 2]
+bias_plugin_at_zero = true
+# On: busiest-rank load at 8-way is this run's to measure, not 4-way's to lend.
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 4
+arms = [
+    "eplb-off",
+    "eplb-on: server.enable_eplb=true",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

@@ -71,6 +71,9 @@ Load generation against the server.
 | `max_new_tokens` | int | `100` | Maximum number of generated tokens per request. |
 | `concurrency_limit` | int | `700` | Maximum number of in-flight requests (should exceed batch_size to saturate the server). |
 | `n_warmup_samples` | int | `10` | Number of warm-up requests before measurement. |
+| `stream` | bool | `true` | Stream responses, which gives TTFT, TPOT and ITLs. Off, requests are timed end to end only. Expert capture is never streamed, so an arm compared against `benchmark.capture_experts` must turn this off too, or the cost of streaming reads as (negative) capture overhead. |
+| `ignore_eos` | bool | `false` | Generate exactly `max_new_tokens` per request, ignoring end-of-sequence (vLLM's `ignore_eos`). Holds output length fixed across sweep points: a strong router bias degrades DeepSeek-V2-Lite enough that some answers end early (205 of 300 tokens on average at offset 2, 84 of 100), and with length held the skew costs nothing - the ~20-30% read as its cost came with the early stops. Applies to warm-up, benchmark and the validation capture alike. |
+| `lengths_from` | str | `""` | Replay another point's output lengths: a metrics file (`<run>/metrics/<label>.json.gz`) whose requests give each prompt the number of tokens it generated there, matched by prompt content. Needs `ignore_eos`, `max_new_tokens` at least the longest, and `imbalance.validate_imbalance` off (the validation capture's prompts have no recorded length). Separates *how many* tokens a point generated from *which* requests stopped early. A prompt missing from the file is an error, never a fallback. |
 
 ### `[activations]`
 
@@ -204,6 +207,9 @@ Load generation against the server.
 | `max_new_tokens` | int | `100` | Maximum number of generated tokens per request. |
 | `concurrency_limit` | int | `700` | Maximum number of in-flight requests (should exceed batch_size to saturate the server). |
 | `n_warmup_samples` | int | `10` | Number of warm-up requests before measurement. |
+| `stream` | bool | `true` | Stream responses, which gives TTFT, TPOT and ITLs. Off, requests are timed end to end only. Expert capture is never streamed, so an arm compared against `benchmark.capture_experts` must turn this off too, or the cost of streaming reads as (negative) capture overhead. |
+| `ignore_eos` | bool | `false` | Generate exactly `max_new_tokens` per request, ignoring end-of-sequence (vLLM's `ignore_eos`). Holds output length fixed across sweep points: a strong router bias degrades DeepSeek-V2-Lite enough that some answers end early (205 of 300 tokens on average at offset 2, 84 of 100), and with length held the skew costs nothing - the ~20-30% read as its cost came with the early stops. Applies to warm-up, benchmark and the validation capture alike. |
+| `lengths_from` | str | `""` | Replay another point's output lengths: a metrics file (`<run>/metrics/<label>.json.gz`) whose requests give each prompt the number of tokens it generated there, matched by prompt content. Needs `ignore_eos`, `max_new_tokens` at least the longest, and `imbalance.validate_imbalance` off (the validation capture's prompts have no recorded length). Separates *how many* tokens a point generated from *which* requests stopped early. A prompt missing from the file is an error, never a fallback. |
 
 ### `[imbalance]`
 
