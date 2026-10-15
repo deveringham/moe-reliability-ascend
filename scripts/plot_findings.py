@@ -1330,6 +1330,429 @@ def fig_timeline(out, store):
                          "window_loads": [round(float(v), 3) for v in loads]}
 
 
+EPLB_FP = "*_eplb-fp2"
+#: Routing captures at the same levels. Routing does not depend on placement, so
+#: an EPLB-off run's captures score the gate for both arms.
+EPLB_FP_TRAFFIC = "*_eplb-fp-000"
+#: Mixtral's captures at the same offsets, from its calibration sweep.
+EPLB_MIXTRAL = "*_eplb-mixtral"
+EPLB_MIXTRAL_TRAFFIC = "*_mixtral*_calibration-sweep"
+SCREEN_COUNTING = "*_screen-counting-*"
+#: What rearranging for nothing costs, from eplb-fp2 at 1.73x: the bar to come under.
+EPLB_FALSE_POSITIVE = 4.73
+CALIBRATION_JSON = os.path.join("docs", "calibrations",
+                                "20261006-155755_imbalance_deepseek-v2_npu4_bs512_rbias-controlled-000.json")
+MIXTRAL_CALIBRATION_JSON = os.path.join("docs", "calibrations",
+                                        "20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep.json")
+#: The screen, the traffic and the expert count that go with each model. The
+#: alarm is calibrated per model and the expert count decides which experts a
+#: rank holds, so scoring one model's gate with another's is not a near miss.
+GATE_SOURCES = {
+    "deepseek-v2": {"traffic": EPLB_FP_TRAFFIC, "calibration": CALIBRATION_JSON, "n_experts": 64},
+    "mixtral": {"traffic": EPLB_MIXTRAL_TRAFFIC, "calibration": MIXTRAL_CALIBRATION_JSON, "n_experts": 8},
+}
+
+
+def load_label(x):
+    """Busiest-rank load as the findings tables write it: 2 places, half up."""
+    from decimal import Decimal, ROUND_HALF_UP
+    return f"{Decimal(repr(float(x))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}x"
+
+
+def eplb_arms(pattern=EPLB_FP):
+    """Per level: paired TPOT by repeat, EPLB's own reading, and cycles applied."""
+    (d, m), = list(manifests(pattern))
+    tpot, hot, applied = {}, {}, {}
+    for p in m["points"]:
+        if p.get("status") != "completed":
+            continue
+        level = float(p["value"])
+        tpot[(level, p["arm"], p["repeat"])] = p["request_summary"]["tpot_ms_mean"]
+        if p["arm"] == "eplb-on":
+            a = p.get("eplb_activity") or {}
+            applied.setdefault(level, []).append(a.get("applied_cycles", 0))
+            if a.get("hotness"):
+                hot.setdefault(level, []).append((a["hotness"][0][0], a["hotness"][-1][0]))
+    rows = []
+    for level in sorted({k[0] for k in tpot}):
+        off, on = [], []
+        for r in sorted({k[2] for k in tpot if k[0] == level}):
+            a, b = tpot.get((level, "eplb-off", r)), tpot.get((level, "eplb-on", r))
+            if a is not None and b is not None:
+                off.append(a)
+                on.append(b)
+        if not off:
+            continue
+        off, on = np.array(off), np.array(on)
+        rows.append({"level": level, "off_ms": off, "on_ms": on,
+                     "diff_pct": 100 * (on / off - 1),
+                     "hot": hot.get(level, []), "applied": applied.get(level, [])})
+    return rows
+
+
+_GATE_CACHE: dict = {}
+
+
+def eplb_gate(levels, pattern=None, windows=2000, model="deepseek-v2"):
+    """{level: (busiest-rank load, share of windows the screen's rule would open on)}.
+
+    The screen is the named model's calibrated one: alarm at a 1% benign
+    false-alarm rate, raised only after `consecutive` alarming windows of
+    `window` requests, counting four randomly redrawn layers and a tenth of their
+    tokens. The traffic, the calibration and the expert count all come from
+    `GATE_SOURCES[model]`, because a gate scored with another model's alarm and
+    expert count is a number with no referent.
+
+    Cached: scoring 2000 windows per level off the raw captures takes minutes,
+    and both EPLB figures want the same answer (as does the bare pass).
+    """
+    source = GATE_SOURCES[model]
+    pattern = pattern or source["traffic"]
+    key = (pattern, frozenset(levels), windows, model)
+    if key in _GATE_CACHE:
+        return _GATE_CACHE[key]
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    screen = D.Screen.from_calibration(json.load(open(source["calibration"])))
+    out = {}
+    for d, m in manifests(pattern):
+        if m["config"]["model"]["model_name"] != model:
+            continue
+        for p in m["points"]:
+            level = float(p["value"])
+            if level not in levels or not p.get("validation_file"):
+                continue
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            counts = D.request_counts((json.loads(line) for line in gzip.open(path, "rt")),
+                                      source["n_experts"])
+            loads = D.stream_loads([(counts, windows * screen.sampler.window)], N_RANKS,
+                                   screen.sampler, np.random.default_rng(0))
+            k = screen.consecutive
+            raised = np.convolve(loads >= screen.alarm, np.ones(k, int), "valid") == k
+            out[level] = (D.busiest_rank(counts.sum(axis=0), N_RANKS), float(raised.mean()))
+    _GATE_CACHE[key] = out
+    return out
+
+
+def fig_eplb_cost(out, store):
+    """Q1: EPLB rearranges where there is nothing to win, and never wins where there is."""
+    rows = eplb_arms()
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows})
+    loads = [gate.get(r["level"], (r["level"], None))[0] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load, injected", "Mean TPOT (ms)",
+          "EPLB removes the imbalance and not the latency",
+          "DeepSeek-V2-Lite, 4 NPUs, 4 repeats per point")
+    for key, colour, label in (("off_ms", INK2, "EPLB off"), ("on_ms", MODEL_COLOUR["deepseek-v2"], "EPLB on")):
+        means = [r[key].mean() for r in rows]
+        sds = [r[key].std(ddof=1) for r in rows]
+        left.errorbar(xs, means, yerr=sds, fmt="-o", ms=6.5, lw=1.8, color=colour,
+                      ecolor=colour, elinewidth=1.2, capsize=3, mec=SURFACE, mew=1.4,
+                      zorder=3, label=label)
+    lo = min(r["off_ms"].mean() for r in rows)
+    hi = max(r["on_ms"].mean() for r in rows)
+    left.set_ylim(lo - 0.30 * (hi - lo), hi + 0.10 * (hi - lo))
+    for i, r in enumerate(rows):
+        left.annotate(f"{r['off_ms'].mean():.0f}", xy=(i, r["off_ms"].mean()), xytext=(0, -12),
+                      textcoords="offset points", ha="center", va="top", color=INK2, fontsize=8.5)
+        left.annotate(f"{r['on_ms'].mean():.0f}", xy=(i, r["on_ms"].mean()), xytext=(0, 13),
+                      textcoords="offset points", ha="center", va="bottom",
+                      color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold")
+    # What EPLB itself thinks it achieved, which is the point: it worked.
+    for i, r in enumerate(rows):
+        if r["hot"]:
+            first = float(np.mean([h[0] for h in r["hot"]]))
+            last = float(np.mean([h[1] for h in r["hot"]]))
+            # The leftmost label is pushed clear of the y axis rather than centred.
+            left.annotate(f"EPLB: {first:.2f}→{last:.2f}x",
+                          xy=(-0.42 if i == 0 else i, 0.015), xycoords=("data", "axes fraction"),
+                          ha="left" if i == 0 else "center", va="bottom", color=INK3, fontsize=7.8)
+    left.set_xlim(-0.5, len(rows) - 0.5)
+    left.set_xticks(xs, labels)
+    left.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
+
+    style(right, "Busiest-rank load, injected", "TPOT with EPLB on, against off (%)",
+          "What rearranging costs", "each ring is one round; the bar is their mean")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, r in enumerate(rows):
+        d = r["diff_pct"]
+        right.bar(i, d.mean(), 0.52, color=MODEL_COLOUR["deepseek-v2"], alpha=0.33, zorder=2)
+        right.plot(np.full(len(d), i), d, "o", ms=6, mfc="none", mew=1.4,
+                   color=MODEL_COLOUR["deepseek-v2"], zorder=4)
+        right.annotate(f"{d.mean():+.1f}%", xy=(i, max(d.max(), d.mean())), xytext=(0, 8),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold", zorder=5)
+    right.set_xticks(xs, labels)
+    right.set_xlim(-0.6, len(rows) - 0.4)
+    span = max(r["diff_pct"].max() for r in rows) - min(r["diff_pct"].min() for r in rows)
+    right.set_ylim(min(r["diff_pct"].min() for r in rows) - 0.08 * span,
+                   max(r["diff_pct"].max() for r in rows) + 0.20 * span)
+
+    heading(fig, "EPLB: what rearranging costs, and what it buys",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: the skew costs the unbalanced server 31% TPOT at 3.63x. EPLB drives its own busiest-rank "
+            "reading to about 1.0x at every level and the latency does not follow.\nRight: rearranging where "
+            "there is nothing to win costs at most +4.7% (at 1.73x, which is free), about two sigma against "
+            "the rounds' own spread. At 3.63x convergence took ~85 s of a\n127 s batch, so the steady state "
+            "is not what was measured.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.10, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_cost.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_cost"] = [{"level": r["level"], "load": loads[i],
+                           "off_ms": r["off_ms"].tolist(), "on_ms": r["on_ms"].tolist(),
+                           "diff_pct": r["diff_pct"].tolist(),
+                           "applied_cycles": r["applied"],
+                           "eplb_hotness": [list(h) for h in r["hot"]]}
+                          for i, r in enumerate(rows)]
+
+
+def fig_eplb_gate(out, store):
+    """Q2: the screen is shut exactly where rearranging is pure loss."""
+    rows = eplb_arms()
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows})
+    if not gate:
+        return
+    loads = [gate.get(r["level"], (r["level"], 0.0))[0] for r in rows]
+    opens = [gate.get(r["level"], (0.0, float("nan")))[1] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+    base = rows[0]["off_ms"].mean()
+    skew_cost = [100 * (r["off_ms"].mean() / base - 1) for r in rows]
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load", "Windows where the gate opens",
+          "The screen as an EPLB gate", "3 consecutive alarming windows of 8 requests")
+    colours = [GRID if o < 0.5 else MODEL_COLOUR["deepseek-v2"] for o in opens]
+    left.bar(xs, opens, 0.56, color=colours, zorder=3)
+    for i, o in enumerate(opens):
+        left.annotate(f"{o:.0%}", xy=(i, o), xytext=(0, 5), textcoords="offset points",
+                      ha="center", color=INK, fontsize=9.5, fontweight="bold")
+    left.set_xticks(xs, labels)
+    left.set_ylim(0, 1.18)
+    left.set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
+
+    style(right, "Busiest-rank load", "TPOT against the 1.09x point (%)",
+          "Whether the skew costs anything", "EPLB off, so this is the skew alone")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, c in enumerate(skew_cost):
+        right.bar(i, c, 0.56, color=INK2 if c > 10 else GRID, zorder=3)
+        right.annotate(f"{c:+.0f}%", xy=(i, max(c, 0.0)), xytext=(0, 5),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold")
+    right.set_xticks(xs, labels)
+
+    heading(fig, "The screen gates EPLB: shut where the skew is free, open where it costs",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: the gate opens on 0% of windows at 1.09x and 1% at 1.73x - the two levels where EPLB has "
+            "nothing to win and costs up to +4.7% - and on 100% at 2.49x and 3.63x.\nRight: only 3.63x "
+            "actually costs latency. 2.49x sits on DeepSeek's unresolved onset, so the gate opening there is "
+            "neither right nor wrong. Scored offline on routing captured at\nthe same levels; routing does "
+            "not depend on placement.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.10, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_gate.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_gate"] = [{"load": loads[i], "gate_open": opens[i], "skew_cost_pct": skew_cost[i]}
+                          for i in range(len(rows))]
+
+
+def fig_screen_overhead(out, store):
+    """Q3: the screen costs nothing to run; capture, which is not the same thing, costs 6%."""
+    ARMS = (("count-on", "the screen\n4 random layers,\na tenth of their tokens"),
+            ("capture-on", "full capture\nevery expert id,\nin the response body"))
+    series = {}
+    for d, m in manifests(SCREEN_COUNTING):
+        model = m["config"]["model"]["model_name"]
+        pts = [p for p in m["points"] if p.get("status") == "completed"]
+        if not pts:
+            continue
+        e2e = {(p["arm"], p["repeat"]): p["request_summary"]["e2e_s_mean"] for p in pts}
+        baseline = [v for (a, _), v in e2e.items() if a == "count-off"]
+        spread = 100 * float(np.std(baseline, ddof=1) / np.mean(baseline)) if len(baseline) > 1 else float("nan")
+        row = {"spread_pct": spread, "arms": {}}
+        for arm, _ in ARMS:
+            d_pct = [100 * (e2e[(arm, r)] / e2e[("count-off", r)] - 1)
+                     for r in sorted({k[1] for k in e2e}) if (arm, r) in e2e and ("count-off", r) in e2e]
+            if d_pct:
+                row["arms"][arm] = np.array(d_pct)
+        series[model] = row
+    if not series:
+        return
+
+    # Mixtral first: it is the one that resolves. DeepSeek's interval is ten times
+    # wider, so a shared y-axis would flatten the measurement into the non-result.
+    models = [m for m in ("mixtral", "deepseek-v2") if m in series]
+    fig, axes = plt.subplots(1, len(models), figsize=(11.0, 5.0), facecolor=SURFACE)
+    axes = np.atleast_1d(axes)
+    rows = []
+    for ax, model in zip(axes, models):
+        row = series[model]
+        # The model name goes on the axis, not in the title: two panels mean two
+        # models, and bare mode drops titles, which would leave them unidentified.
+        style(ax, MODEL_LABEL[model],
+              "End-to-end latency against collecting nothing (%)" if model == models[0] else "",
+              MODEL_LABEL[model],
+              f"5 repeats; the baseline itself varies {row['spread_pct']:.2f}%")
+        ax.xaxis.labelpad = 10
+        xs = np.arange(len(ARMS))
+        # The baseline's own spread: a cost smaller than this is not a measured cost.
+        ax.axhspan(-row["spread_pct"], row["spread_pct"], color=GRID, alpha=0.8, lw=0, zorder=1)
+        ax.axhline(0, color=GRID, lw=1.2, zorder=2)
+        for ai, (arm, _) in enumerate(ARMS):
+            d = row["arms"].get(arm)
+            if d is None:
+                continue
+            # n = 5, so the 95% interval is t(4) = 2.776 standard errors.
+            ci = 2.776 * float(d.std(ddof=1) / np.sqrt(len(d)))
+            ax.bar(ai, d.mean(), 0.5, color=COND[ai], zorder=3)
+            ax.errorbar(ai, d.mean(), yerr=ci, fmt="none", ecolor=INK, elinewidth=1.3,
+                        capsize=4, zorder=4)
+            ax.annotate(f"{d.mean():+.2f}%", xy=(ai, d.mean() + ci), xytext=(0, 6),
+                        textcoords="offset points", ha="center", va="bottom", color=INK,
+                        fontsize=10, fontweight="bold", zorder=5)
+            rows.append({"model": model, "arm": arm, "mean_pct": float(d.mean()),
+                         "ci95_pct": ci, "per_round_pct": d.tolist(),
+                         "baseline_spread_pct": row["spread_pct"]})
+        # What a false positive costs: the bar the screen has to come in under.
+        ax.axhline(EPLB_FALSE_POSITIVE, color=MODEL_COLOUR["mixtral"], lw=1.4, ls="--", zorder=2)
+        if model == models[0]:
+            # Labelled once: the same line is drawn on both panels.
+            ax.annotate(f"EPLB's false positive, +{EPLB_FALSE_POSITIVE:.2f}%",
+                        xy=(-0.55, EPLB_FALSE_POSITIVE), xytext=(0, 4),
+                        textcoords="offset points", ha="left", va="bottom",
+                        color=MODEL_COLOUR["mixtral"], fontsize=8.5, fontweight="bold")
+        ax.set_xticks(xs, [label for _, label in ARMS], fontsize=8.5)
+        ax.tick_params(axis="x", labelcolor=INK2)
+        ax.set_xlim(-0.6, len(ARMS) - 0.4)
+        ax.annotate(f"baseline varies {row['spread_pct']:.2f}%", xy=(-0.55, -row["spread_pct"]),
+                    xytext=(0, -4), textcoords="offset points", ha="left", va="top",
+                    color=INK3, fontsize=8)
+
+    heading(fig, "The screen is far cheaper than the false positive it averts",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Counting on the device costs +0.28% +-0.71 on Mixtral, inside the baseline's own 0.44% spread; "
+            "returning every token's expert ids instead costs +6.38%. The sampled\nscreen is a cheaper "
+            "mechanism, not a fraction of that one. DeepSeek resolves neither arm - note its axis - because "
+            "its baseline spreads 3.75% in this prefill-bound regime,\nwhere the engine queue sits empty "
+            "83-90% of the time and host-side work hides in the idle time.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 0.93)))
+    fig.savefig(os.path.join(out, "screen_overhead.png"), dpi=200, facecolor=SURFACE)
+    store["screen_overhead"] = rows
+
+
+def fig_eplb_regime(out, store):
+    """Mixtral: the null holds where there was something to win, and the threshold went stale."""
+    rows = eplb_arms(EPLB_MIXTRAL)
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows}, model="mixtral")
+    loads = [gate.get(r["level"], (r["level"], 0.0))[0] for r in rows]
+    opens = [gate.get(r["level"], (0.0, float("nan")))[1] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+    colour = MODEL_COLOUR["mixtral"]
+
+    # The cost of the same skew in the 300-token traffic, paired within each round
+    # against that run's own balanced point.
+    off0 = rows[0]["off_ms"]
+    long_cost = [100 * (r["off_ms"] / off0 - 1) for r in rows]
+    # And in the 100-token traffic the threshold was calibrated on.
+    calibration = json.load(open(MIXTRAL_CALIBRATION_JSON))
+    short = [(c["load"], c["cost_pct"]) for c in calibration["curve"]]
+    threshold = calibration.get("impact_threshold")
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load, injected", "Cost of the skew, TPOT (%)",
+          "The same skew, two traffic mixes",
+          "Mixtral 8x7B, 4 NPUs, EPLB off: this is the skew alone")
+    left.axhline(0, color=GRID, lw=1.2, zorder=1)
+    left.plot([x for x, _ in short], [y for _, y in short], "-o", ms=5.5, lw=1.8,
+              color=INK2, mec=SURFACE, mew=1.2, zorder=3,
+              label="100 tokens/request (calibrated here)")
+    left.errorbar(loads, [d.mean() for d in long_cost],
+                  yerr=[d.std(ddof=1) if len(d) > 1 else 0.0 for d in long_cost],
+                  fmt="-o", ms=6.5, lw=1.8, color=colour, ecolor=colour, elinewidth=1.2,
+                  capsize=3, mec=SURFACE, mew=1.4, zorder=4,
+                  label="300 tokens/request (measured here)")
+    if threshold:
+        left.axvline(threshold, color=INK3, lw=1.1, ls=(0, (4, 3)), zorder=2)
+        # Below the legend, which sits upper left and would otherwise overlap it.
+        left.annotate(f"impact threshold {threshold:.2f}x", xy=(threshold, 0.60),
+                      xycoords=("data", "axes fraction"), xytext=(4, 0),
+                      textcoords="offset points", ha="left", va="center", color=INK3, fontsize=7.8)
+    for x, d in zip(loads, long_cost):
+        left.annotate(f"{d.mean():+.1f}%", xy=(x, d.mean()), xytext=(0, -13),
+                      textcoords="offset points", ha="center", va="top",
+                      color=colour, fontsize=8.5, fontweight="bold")
+    left.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="upper left")
+
+    style(right, "Busiest-rank load, injected", "TPOT with EPLB on, against off (%)",
+          "What EPLB buys, and where the gate opens",
+          "each ring is one round; the bar is their mean")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, r in enumerate(rows):
+        d = r["diff_pct"]
+        right.bar(i, d.mean(), 0.52, color=colour, alpha=0.33, zorder=2)
+        right.plot(np.full(len(d), i), d, "o", ms=6, mfc="none", mew=1.4, color=colour, zorder=4)
+        right.annotate(f"{d.mean():+.1f}%", xy=(i, max(d.max(), d.mean())), xytext=(0, 8),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold", zorder=5)
+        if r["hot"]:
+            first = float(np.mean([h[0] for h in r["hot"]]))
+            last = float(np.mean([h[1] for h in r["hot"]]))
+            right.annotate(f"EPLB: {first:.2f}\u2192{last:.2f}x", xy=(i, 0.015),
+                           xycoords=("data", "axes fraction"), ha="center", va="bottom",
+                           color=INK3, fontsize=7.8)
+    for i, o in enumerate(opens):
+        right.annotate(f"gate {o:.0%}", xy=(i, 0.085), xycoords=("data", "axes fraction"),
+                       ha="center", va="bottom",
+                       color=colour if o >= 0.5 else INK3, fontsize=7.8,
+                       fontweight="bold" if o >= 0.5 else "normal")
+    right.set_xticks(xs, labels)
+    right.set_xlim(-0.6, len(rows) - 0.4)
+    span = max(r["diff_pct"].max() for r in rows) - min(r["diff_pct"].min() for r in rows)
+    right.set_ylim(min(r["diff_pct"].min() for r in rows) - 0.30 * span,
+                   max(r["diff_pct"].max() for r in rows) + 0.20 * span)
+
+    heading(fig, "Mixtral: the balancer still buys nothing, and the gate opens where it loses",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: same model, hardware, batch size and bias, and the same realised load - generating 300 "
+            "tokens per request instead of 100 cuts the cost of a 2.62x skew from +14.5% to\n+3.0%, and 1.76x "
+            "to nothing. The cost lives in prefill-heavy steps, so the impact threshold belongs to the "
+            "traffic mix and not only to the model.\nRight: EPLB takes 2.62x only to 1.58x - eight experts "
+            "over four ranks leaves two per rank - and recovers nothing at any level. The gate, calibrated "
+            "on the 100-token\ntraffic, is open on 100% of windows at 1.76x, which is where rearranging "
+            "costs the most.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.13, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_regime.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_regime"] = [{"load": loads[i], "gate_open": opens[i],
+                             "skew_cost_pct": long_cost[i].tolist(),
+                             "eplb_diff_pct": rows[i]["diff_pct"].tolist(),
+                             "eplb_hotness": [list(h) for h in rows[i]["hot"]],
+                             "applied_cycles": rows[i]["applied"]} for i in range(len(rows))]
+    store["eplb_regime_short_tokens"] = [{"load": x, "cost_pct": y} for x, y in short]
+
+
 def main(out="docs/figures", also_bare=True):
     global BARE
     os.makedirs(out, exist_ok=True)
@@ -1351,6 +1774,13 @@ def main(out="docs/figures", also_bare=True):
         fig_detection(out, store)
         fig_detection_cost(out, store)
         fig_timeline(out, store)
+    if list(manifests(EPLB_FP)):
+        fig_eplb_cost(out, store)
+        fig_eplb_gate(out, store)
+    if list(manifests(EPLB_MIXTRAL)):
+        fig_eplb_regime(out, store)
+    if list(manifests(SCREEN_COUNTING)):
+        fig_screen_overhead(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
     if also_bare:
         # The same figures with nothing that argues, for slides that are narrated.
@@ -1359,7 +1789,7 @@ def main(out="docs/figures", also_bare=True):
             main(os.path.join(out, "bare"), also_bare=False)
         finally:
             BARE = False
-    print(f"wrote {out}/regimes.png, natural_batch.png, language.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    print(f"wrote {out}/regimes.png, natural_batch.png, language.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, eplb_cost.png, eplb_gate.png, eplb_regime.png, screen_overhead.png, figures.json")
 
 
 if __name__ == "__main__":
