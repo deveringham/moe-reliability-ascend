@@ -76,6 +76,12 @@ per-request lengths at offset 0, with no skew: **+19.55% +-5.64** TPOT against
 every request held at 85, the same mean (6 of 6 rounds; makespan +8%). The
 scattered stops are the whole cost, and every uniform-length baseline in the
 project is ~20% optimistic about traffic with a spread of answer lengths.
+`length-replay-profiled` (4/4) then located the cost: 63% of it is the step mix.
+With stops scattered a slot frees almost every step, so the same prompt tokens
+are admitted in 2.4x as many chunks (1027 per prefill-carrying step against
+2457), and a step costs nearly the same whether it carries 300 prompt tokens or
+4000. It is scheduling, not imbalance - the straggler reading is 1.05x in both
+arms.
 Detail in [router-bias-findings.md](router-bias-findings.md#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew).
 
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
@@ -191,10 +197,14 @@ touches hardware, which goes through `./nrun`.
 
 ## Open, in the order I would take them
 
-0. **Why scattered early stops cost ~20% TPOT** (2026-10-15). `length-replay`
-   reproduced the cost with no bias (+19.55% +-5.64 against uniform 85), so it is
-   the length spread, not skew. Next: step-profile replayed against uniform 85.
-   Real traffic always has a spread of answer lengths, so this outlives the
+0. **Can the scattered-stop cost be scheduled away** (2026-10-15).
+   `length-replay` reproduced the cost with no bias (+19.55% +-5.64 against
+   uniform 85) and `length-replay-profiled` put 63% of it in the step mix: the
+   same prompt tokens admitted in 2.4x as many chunks, each chunk costing a step
+   nearly the same whether it carries 300 tokens or 4000. Next: does raising
+   `max_num_batched_tokens`, which sets the chunk, shrink the gap, and does the
+   remaining 14.9 ms of per-step rate survive at matched chunk count? Real
+   traffic always has a spread of answer lengths, so this outlives the
    router-bias question.
 1. **The pace-setter.** Partly explained 2026-10-06: in DeepSeek decode (eager)
    the pace-setting rank's device idles 130-150 ms of a ~175-230 ms step,

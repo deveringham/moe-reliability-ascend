@@ -196,7 +196,12 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   puts prompt tokens in most steps and the mix moves with the swept parameter
   (45% to 87% of token-time), which made window averages disagree with TPOT by
   1.5-3x. A saturated decode step is the same length at every eager offset, and
-  the two models put their cost in different kinds of step.
+  the two models put their cost in different kinds of step. The table's `reqs`
+  column was one too high until 2026-10-15 (the step kernel's first input shape
+  is `query_start_loc`, of length `num_reqs + 1`), so `tokens == reqs` selected
+  no decode-only step at all; `plot_findings.py` and `detection_eval.py`
+  compensated and their figures stand, but check for `tokens < reqs` rows before
+  trusting a direct read of an old CSV.
 - **Step wall does not reconstruct TPOT** (-45% to +19% against the twin run).
 - **Client-side ITLs (`benchmark.save_itl`) are sound in the mean only.** Pooled
   mean sits within 3% of TPOT, but at 3000-way concurrency 62-70% of gaps are
@@ -303,8 +308,17 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   **The spread alone does it** (2026-10-15, `length-replay` 18/18): offset 2's
   per-request lengths replayed at offset 0, no skew, cost **+19.55% +-5.64** TPOT
   against all held at 85 (6 of 6; makespan +8%, TTFT -7%). So uniform-length
-  baselines are ~20% optimistic about real traffic, and the mechanism - not an
-  imbalance question any more - is open (step profile next). The graph-mode slope rests on the same shortened point
+  baselines are ~20% optimistic about real traffic, and it is **scheduling, not
+  imbalance** (2026-10-15, `length-replay-profiled` 4/4, reproduced at +19.42%
+  +-9.72): 63% of the gap is the step mix. A ragged batch frees a slot almost
+  every step, so the same prompt tokens are admitted in 2.4x as many chunks
+  (1027 prefill tokens per prefill-carrying step against 2457; 71-74% of steps
+  carry prefill against 30-35%), and a full-batch step costs nearly the same
+  carrying 300 prompt tokens as 4000 (242.5 vs 237.8 ms held) - the overhead is
+  per chunk, not per token. GEMM time *falls* while idle and collective time
+  rise, and the straggler reading is 1.05x in both arms. Open: whether a coarser
+  `max_num_batched_tokens` recovers the 27 ms, and what the remaining 14.9 ms of
+  per-step rate is. The graph-mode slope rests on the same shortened point
   and was not re-run. The 300-token run's +2.5% at 2.48x did not recur at 100.
   Set `client.ignore_eos` on any sweep that compares levels, and check
   `output_tokens_mean`; comparisons across arms *within* a level are safe

@@ -798,9 +798,13 @@ retracted on further measurement.
 skew at either length tested once answer length is held; what cost ~20% was a
 spread of requests ending early, which the router-bias knob causes as a side
 effect. That spread alone, replayed with no skew, reproduces the cost (+19.6%
-against uniform lengths at the same mean). A step profile against uniform lengths
-is the next measurement. It matters beyond this project: real traffic always has
-a spread of answer lengths, so every uniform-length benchmark here is optimistic.
+against uniform lengths at the same mean), and a step profile locates 63% of it
+in the step mix: a ragged batch frees a slot almost every step, so the same
+prompt tokens enter in 2.4x as many chunks, and a step costs nearly as much
+carrying 300 prompt tokens as 4000. The unexplained remainder is 14.9 ms of
+per-step rate, and whether a coarser chunk recovers the rest is untested. It
+matters beyond this project: real traffic always has a spread of answer lengths,
+so every uniform-length benchmark here is optimistic.
 
 **The monitor's own cost on the device.** We can price the whole pipeline from one
 number — the cost of incrementing a counter per routing decision — and that number

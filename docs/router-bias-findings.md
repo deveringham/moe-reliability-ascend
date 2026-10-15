@@ -705,9 +705,90 @@ Paired by round (± is the sd of the six paired differences):
   largest single effect on latency the project has measured, and it is not
   imbalance.
 
-The mechanism is the open question it was before, now without skew in it: a step
-profile of replayed against held-85 (`scripts/step_profile.py`) says whether the
-extra time sits in mixed prefill/decode steps.
+### The cost is the step mix, not the step (2026-10-15)
+
+`length-replay-profiled` (`20261015-110149`,
+`configs/examples/length_replay_profiled.toml`) serves held-85 and replayed at
+offset 0 with the profiler on, 2 repeats, 4/4 points, replaying the same source
+file. Each point is served twice: unprofiled for timings, profiled for the
+trace.
+
+The unprofiled passes reproduce the effect in shared rounds: TPOT **+19.42%
+±9.72** (both rounds positive, +26.29 and +12.55), makespan +7.17% ±1.07, p99
++34.30%. The profiled passes keep it (201.5 → 245.2 ms, +21.7%), so the trace
+describes the effect rather than a profiler artefact. Profiling itself costs
++5.6 to +21.9% on the same point, so only within-pass contrasts are comparable.
+Both arms do the same work: ~247k decode tokens and 401-434k prompt tokens per
+point, 3000 requests, mean output 85.00 against 85.21.
+
+**The mix moves, not the rate.** Taking one arm's distribution of step kinds and
+substituting the other's per-step times (cells are batch bin x prefill-token
+bin, 100% of each arm's steps covered):
+
+| mean step wall | held-85 rates | replayed rates |
+|---|---|---|
+| **held-85 mix** | 198.5 ms | 213.4 ms |
+| **replayed mix** | 225.7 ms | 241.8 ms |
+
+Of the 43.3 ms gap, **27.3 ms (63%) is the step mix** and 14.9 ms the per-step
+rate.
+
+**Prompts arrive in dribbles instead of bursts.** Prefill-carrying steps are
+30-35% of held-85's steps and 71-74% of replayed's, for the same prompt tokens:
+2457 and 2191 prompt tokens per prefill-carrying step held, 1027 and 1069
+replayed. Held at one length a batch finishes together, so prompts enter in a
+few large chunks; with stops scattered a slot frees almost every step, so
+prefill is admitted continuously. The longest unbroken run of prefill-carrying
+steps is 117 in replayed against 23 in held-85.
+
+**A step pays for carrying prefill nearly regardless of how much.** Full batch
+(>480 requests), mean wall in ms with step count in brackets:
+
+| Prefill tokens in step | held-85 | replayed |
+|---|---|---|
+| decode only | 175.8 (451) | 183.0 (62) |
+| 1-256 | 229.3 (20) | 227.2 (94) |
+| 257-1024 | 242.5 (32) | 253.1 (411) |
+| 1025-2500 | 243.9 (70) | 279.6 (180) |
+| 2501-4096 | 237.8 (140) | 249.5 (55) |
+
+A full-batch decode-only step is the same length in both arms (175.8 against
+183.0) and so is one carrying a full 2501-4096 token chunk (237.8 against
+249.5). But a step carrying 300 prompt tokens costs about what a step carrying
+4000 costs, so the overhead is nearly fixed per chunk rather than per token -
+and replayed buys it 2.4x as often for the same prompt tokens. That is chunked
+prefill's granularity meeting a ragged batch.
+
+**It is waiting, not compute.** On full-batch steps carrying more than 512
+prompt tokens, replayed's GEMM time is *lower* (10.1 against 14.4 ms) while
+idle rises (98.7 against 76.7) and collective time rises (122.6 against 101.4).
+Per rank on those steps, replayed's rank 0 sits idle 162.9 ms of a 269.8 ms step
+with 106.9 ms busy while ranks 1 and 3 run 205-212 ms busy; held-85's spread is
+narrower. Each rank's share of a prefill chunk differs, and the ranks that
+finish early wait inside the collective, which is the reading the
+`collective_wait` split above warns about. The straggler metric is 1.049-1.051x
+held against 1.058-1.061x replayed, so this is not router imbalance.
+
+So the ~20% is scheduling: the same work admitted in 2.4x as many pieces, each
+piece paying a nearly fixed per-step price and leaving ranks unevenly loaded
+within the step. What is *not* settled is the remaining 14.9 ms of per-step
+rate, and whether a scheduler that batched admissions - or a larger
+`max_num_batched_tokens`, which sets the chunk - recovers the 27 ms. Both are
+testable on this run's config.
+
+### `step_profile.py` counted one request too many until 2026-10-15
+
+The step kernel's first input shape is `query_start_loc`, which is
+`[num_reqs + 1]`, and the script recorded it as `reqs`. So every decode-only
+step read as having fewer tokens than requests, which is impossible, and a
+`tokens == reqs` test for decode-only steps selected **nothing** - 2896 to 4804
+impossible rows per run, and no decode-only step in any of the ten runs with
+step tables. `plot_findings.py` and `detection_eval.py` both subtracted the 1
+when reading the CSV, so the figures and the 2026-10-06 table below are
+unaffected: that table reproduces to the digit through the corrected reader.
+Anything reading the CSVs directly was wrong. The column is now the request
+count, the two readers no longer compensate, and all ten runs' tables were
+regenerated from the traces on the node.
 
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
@@ -795,6 +876,7 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261014-115455` fixed-length | DeepSeek, eplb-fp2 with `ignore_eos`: 3 offsets x EPLB off/on x 4, 300 tokens every request |
 | `20261014-160027` length-held-100 | DeepSeek, 3 offsets x natural / held-100 / held-84 x 4, 100 tokens |
 | `20261014-222445` length-replay | DeepSeek, offset 0 x held-100 / held-85 / offset 2's lengths replayed x 6 |
+| `20261015-110149` length-replay-profiled | DeepSeek, offset 0 x held-85 / replayed x 2, profiled, for the step mix |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
@@ -809,12 +891,17 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
-0. **What about scattered early stops costs ~20% TPOT** (2026-10-15). Held at
-   any length, DeepSeek's skew is free, so items 1 and 6 lapse. `length-replay`
-   reproduced the cost with no skew (+19.55% ±5.64 against held-85), so what is
-   left is not an imbalance question: why a server whose requests end at
-   scattered points is slower for every request in it. A step profile of
-   replayed against held-85 is the next measurement.
+0. **Can the scattered-stop cost be scheduled away** (2026-10-15). Held at any
+   length, DeepSeek's skew is free, so items 1 and 6 lapse. `length-replay`
+   reproduced the cost with no skew (+19.55% ±5.64 against held-85) and
+   `length-replay-profiled` located 63% of it in the step mix: the same prompt
+   tokens admitted in 2.4x as many chunks, each chunk costing a step nearly the
+   same whether it carries 300 tokens or 4000. Two measurements follow from
+   that, both on this config. Does raising `max_num_batched_tokens` (4096 here,
+   which sets the chunk) shrink the gap? And does the remaining 14.9 ms of
+   per-step rate survive at matched chunk count, or is it the same effect
+   leaking through the binning? Until one of those lands, "scheduling" names
+   where the time is, not a fix.
 1. **Replicate DeepSeek's eager curve between 2.3x and 3.5x.** Two sweeps
    disagree there and neither resolves the shape. The prior question is why the
    same configuration gives a repeat spread of 2-5 ms in one run and 9-14 ms in
