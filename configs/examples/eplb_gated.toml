@@ -1,0 +1,146 @@
+# Does asking first make EPLB worth running?
+#
+# eplb-fp2 measured what EPLB costs where there is nothing to win: on DeepSeek at
+# 1.73x busiest-rank load - free, well under this model's 2.43x impact threshold -
+# it applied 11-12 cycles per point and cost +4.73% +-4.84 TPOT. At 3.63x, where
+# the unbalanced server pays +31%, it removed the skew (3.49x -> 1.09x by its own
+# reading) and recovered +1.07%, i.e. nothing. So "always on" loses at the free
+# levels and does not win at the costly one.
+#
+# This run adds the arm that was missing: EPLB that applies a plan only once the
+# imbalance it measured reaches the load at which imbalance costs latency. The
+# gate is a patch on vllm-ascend (src/moe_reliability/eplb_gate.py,
+# scripts/apply_node_patch.py) rather than anything of ours in the serving path,
+# because the question is whether upstream should do this.
+#
+#   server.eplb_min_imbalance = 2.43
+#
+# 2.43x is DeepSeek-V2-Lite's calibrated impact threshold - the load at which
+# injected skew starts costing TPOT (docs/detection-findings.md; 1.42x on
+# Mixtral, so this number is a per-deployment input, not a constant). The gate
+# reads EPLB's own per-layer statistic, so it measures nothing new: EPLB's heat
+# collection reuses the expert_tokens group list the fused MoE op already
+# produces, which is cheaper than the screen we priced at +0.28%.
+#
+# Three levels, chosen so the gate has to be right in both directions, with
+# EPLB's own readings from eplb-fp2 in brackets:
+#
+#   0     1.09x busiest rank [EPLB reads 1.12x]  free       gate must SHUT
+#   0.5   1.73x              [1.68x]             free       gate must SHUT
+#   2     3.63x              [3.49x]             +31% TPOT  gate must OPEN
+#
+# Level 1 (2.49x, EPLB reads 2.39x) is left out on purpose: it sits 0.04x under
+# the threshold, so it would test the calibration's precision rather than the
+# gate, and a shut gate there would be unreadable - is the threshold wrong or is
+# the gate working? The two directions are what this run is for. A better reason
+# arrived on 2026-10-14: 2.43x was calibrated at 100 generated tokens and this
+# run generates 300, where the cost starts higher (2.49x is free in eplb-fp2),
+# so the gate would open at level 1 and be wrong to. The two levels kept fall
+# either side of both numbers.
+#
+# Predictions, which is what makes it worth 3.6 NPU-hours: at levels 0 and 0.5
+# the gated arm lands on the EPLB-off arm (recovering the +4.73%) and every
+# rank's log says "EPLB gate shut"; at level 2 it lands on the EPLB-on arm and
+# opens. If the gated arm opens at level 0.5, or never opens at level 2, the
+# threshold is in the wrong units and the contribution does not stand up.
+#
+# Result (2026-10-14, 36/36 points, docs/findings.md "A live gate"): the gate
+# behaved as predicted - shut 48/48 at levels 0 and 0.5, opened at level 2 and
+# stopped at ~1.73x average - but the latency prediction failed at level 0.5:
+# the gated arm did not land on EPLB-off. It cost +3.23% TPOT against EPLB-on's
+# +5.52% while moving nothing, so most of the false positive is EPLB being on.
+#
+# Read gate_shut/gate_open, NOT applied_cycles. Corrected against the live run:
+# a shut gate keeps the placement, which still walks the loader's state machine
+# and still logs a completed weight-update cycle having transferred nothing, so
+# level 0.5 reports 12 applied cycles with the gate shut 12 times out of 12. And
+# a correct gate at level 2 opens only until the placement is balanced - the
+# first point there opened 2 of 8 decisions and shut the other 6, which is the
+# gate converging rather than failing. gate_consistent is the one that must
+# hold: ranks disagreeing would mean a divergent placement, not a gate.
+#
+# Not measured here: server.eplb_honor_changed, the other half of the patch,
+# which honours the 'changed' verdict EplbWorker.do_update currently discards.
+# It is a real upstream bug and worth a PR, but it cannot produce a latency
+# result - its 5% threshold is denominated in balance improvement, and EPLB's
+# plans improve its own metric by 9-69% at these four levels, so it reads
+# 'changed' even at 1.09x where rearranging is pure loss. Spending NPU time on
+# an arm whose prediction is "identical to eplb-on" buys nothing.
+#
+# Settings are eplb-fp2's unchanged apart from the arms and the levels, so the
+# deltas go in one table with the ones already published. Streaming stays on, so
+# the measure is TPOT. Four repeats, because three single points have looked
+# like effects in this project and dissolved under replication.
+#
+# Cost: 3 levels x 3 arms x 4 repeats = 36 points at ~6 min = ~3.6 NPU-hours on
+# NPUs 0-3, plus ~10 min of validation.
+#
+#   ./nrun 'uv run python scripts/apply_node_patch.py'
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_gated.toml'
+#   ./nrun -t gated 'uv run moe-reliability run configs/examples/eplb_gated.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-gated"
+description = "EPLB off, always on, and applying a plan only once the imbalance reaches the impact threshold."
+seed = 47
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; two arms turn it on. A cycle is 50 + 50 + 26 = 126 forward
+# iterations, ~20 s at this load.
+enable_eplb = false
+# SwiftBalanceEplb, as in eplb-fp2. It is one of the two policies that return the
+# 'changed' verdict, which the gate falls back on when no threshold is set.
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only.
+eplb_record_map = false
+# 0 as written, so the eplb-on arm is plain upstream EPLB; the gated arm sets it.
+eplb_min_imbalance = 0.0
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# Long enough for EPLB to converge before the measured window starts.
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+# Experts 0-15 are rank 0's under contiguous placement: a skew EPLB cannot
+# invalidate by moving experts, unlike a rank target.
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5, 2]
+bias_plugin_at_zero = true
+# On: this run's own loads, so the levels are read here rather than carried over.
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 4
+arms = [
+    "eplb-off",
+    "eplb-on: server.enable_eplb=true",
+    "eplb-gated: server.enable_eplb=true; server.eplb_min_imbalance=2.43",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

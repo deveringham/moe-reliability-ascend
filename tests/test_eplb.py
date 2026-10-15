@@ -119,3 +119,30 @@ def test_server_runs_eagerly_unless_told_otherwise(launched):
     assert "--enforce-eager" in launched["cmd"]
     vllm_serving.start_vllm_server("some/model", enforce_eager=False)
     assert "--enforce-eager" not in launched["cmd"]
+
+
+_PLAN = ("INFO 10-09 21:30:47 [eplb_worker.py:94] [eplb/worker] Expert hotness imbalance, "
+         "current: mean={c:.3f} max=3.678, updated: mean={u:.3f} max=2.615\n")
+_DONE = ("(Worker_TP{r}_EP{r} pid=1) INFO 10-09 21:30:56 [eplb_device_transfer_loader.py:130] "
+         "[eplb/d2d_loader] Full expert weight update cycle completed, total_layers=26\n")
+_STALL = ("(Worker_TP0_EP0 pid=1) WARNING 10-09 21:46:21 [eplb_device_transfer_loader.py:49] "
+          "[eplb/d2d_loader] Current D2D weight update is on-going, cannot accept new update task\n")
+
+
+def test_eplb_activity_tells_applied_plans_from_planned_ones():
+    """Taken from the 2026-10-09 logs: the validation server converged, the benchmark one never moved."""
+    from moe_reliability.pipelines.common import describe_eplb_activity, eplb_activity
+
+    applied = "".join(_PLAN.format(c=c, u=u) + "".join(_DONE.format(r=r) for r in range(4))
+                      for c, u in [(3.485, 2.408), (2.785, 1.663), (1.739, 1.066), (1.052, 1.010)])
+    a = eplb_activity(applied, n_ranks=4)
+    assert a["plans"] == 4 and a["applied_cycles"] == 4 and not a["stalled"]
+    assert a["hotness"][0][0] == 3.485 and a["hotness"][-1][0] == 1.052
+    assert "applied 4" in describe_eplb_activity(a)
+
+    stuck = _PLAN.format(c=3.504, u=2.435) + _STALL + _PLAN.format(c=3.791, u=2.561)
+    s = eplb_activity(stuck, n_ranks=4)
+    assert s["plans"] == 2 and s["applied_cycles"] == 0 and s["stalled"]
+    assert describe_eplb_activity(s).startswith("warning: EPLB planned 2 times and applied none")
+
+    assert "never planned" in describe_eplb_activity(eplb_activity("", n_ranks=4))

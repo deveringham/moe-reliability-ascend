@@ -246,6 +246,13 @@ class Run:
             for item in _arm_overrides(self.config, p.get("arm")):
                 key, _, raw = item.partition("=")
                 row[key.strip().split(".", 1)[1]] = _toml_scalar(raw.strip())
+            activity = p.get("eplb_activity")
+            if activity:
+                hot = activity.get("hotness") or []
+                row.update({"eplb_plans": activity.get("plans"), "eplb_applied_cycles": activity.get("applied_cycles"),
+                            "eplb_stalled": activity.get("stalled"),
+                            "eplb_hotness_first": hot[0][0] if hot else None,
+                            "eplb_hotness_last": hot[-1][0] if hot else None})
             req = p.get("request_summary")
             if req is None and p.get("metrics_file"):
                 req = summarize_requests(self.request_records(p["label"]))

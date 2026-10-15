@@ -409,3 +409,32 @@ def test_an_arm_may_not_change_what_validation_shares(forced_config_data):
     forced_config_data["benchmark"]["arms"] = ["a", "b: imbalance.imbalance_levels=[0]"]
     with pytest.raises(ConfigError, match="may only change"):
         ExperimentConfig.from_dict(forced_config_data)
+
+
+def test_eplb_activity_is_read_from_the_point_s_own_log(deployment, forced_config_data, monkeypatch):
+    """Only the log says whether a plan was applied; the map says what was planned."""
+    from moe_reliability.pipelines import common
+
+    forced_config_data["benchmark"]["arms"] = ARMS
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    log_path = ctx.abspath(schema.LOG_FILE)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("Expert hotness imbalance, current: mean=9.000 max=9.0, updated: mean=1.0 max=1.0\n")
+
+    def serve(cfg, *args, **kwargs):
+        if cfg.server.enable_eplb:
+            with open(log_path, "a") as f:
+                f.write("Expert hotness imbalance, current: mean=2.000 max=2.5, updated: mean=1.000 max=1.1\n")
+                f.write("Full expert weight update cycle completed, total_layers=26\n" * cfg.hardware.n_npus)
+        return deployment(cfg, *args, **kwargs)
+
+    monkeypatch.setattr(common, "serve_and_measure", serve)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    for p in ctx.points:
+        if p["arm"] == "eplb-on":
+            # only this point's lines, not the one written before it
+            assert p["eplb_activity"]["plans"] == 1 and p["eplb_activity"]["applied_cycles"] == 1
+            assert p["eplb_activity"]["hotness"][0][0] == 2.0
+        else:
+            assert "eplb_activity" not in p

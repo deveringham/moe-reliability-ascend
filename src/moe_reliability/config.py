@@ -129,8 +129,29 @@ _SERVER = Section("server", "vLLM server deployment.", (
            "are cleared at the end of it, so a run shorter than one cycle never rearranges at all."),
     Option("eplb_algorithm_execution_interval", "int", 50, "Iterations the planner is given before the "
            "new placement is applied."),
-    Option("eplb_record_map", "bool", False, "Write the placement EPLB chose to eplb_expert_map.json in "
-           "the run directory."),
+    Option("eplb_record_map", "bool", False, "Record-only mode: EPLB collects load and plans, and the "
+           "placement it planned is written to <label>_eplb_expert_map.json, but it is never applied. "
+           "vllm-ascend 0.23 skips the weight update whenever a record path is set (EplbUpdator.forward_end), "
+           "so the first layer's transfer is launched, never completed, and every later one is refused "
+           "('D2D weight update is on-going'). The layout stays contiguous for the whole point. That makes "
+           "this the collect-and-plan arm of an overhead decomposition, never an EPLB-on arm: every EPLB run "
+           "before 2026-10-12 had it on and measured no rearrangement at all."),
+    Option("eplb_min_imbalance", "float", 0.0, "Apply a planned placement only once the measured "
+           "per-layer imbalance (busiest rank over the mean, worst MoE layer - EPLB's own "
+           "_compute_imbalance statistic) reaches this load. 0 disables the gate, which is what vllm-ascend "
+           "and vLLM both do today: they rearrange on an iteration counter without asking whether the "
+           "imbalance costs anything. Set it to the deployment's calibrated impact threshold - the load at "
+           "which skew starts costing latency, 2.43x on DeepSeek-V2-Lite and 1.42x on Mixtral 8x7B. Needs "
+           "the node patch (scripts/apply_node_patch.py); the run refuses to start without it, since an "
+           "unpatched server ignores it and quietly measures plain EPLB again."),
+    Option("eplb_honor_changed", "bool", False, "Apply a planned placement only when EPLB's own policy "
+           "says it is worth applying. Policies 1 and 2 return a 'changed' flag - set when the plan "
+           "improves the summed per-layer max heat by at least 5% - and EplbWorker.do_update discards it, "
+           "so placements are applied whatever the policy concluded. This honours it, and is worth fixing "
+           "upstream, but do not expect a latency result from it: the flag asks whether the plan improves "
+           "balance, not whether the imbalance cost anything, and at every level measured in eplb-fp2 "
+           "(1.09x to 3.63x) the plan improved EPLB's own metric by 9-69%, so it reads 'changed' even at "
+           "the pure false positive. Ignored when eplb_min_imbalance is set. Needs the same node patch."),
 ))
 
 _CLIENT = Section("client", "Load generation against the server.", (
@@ -563,6 +584,30 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
         errors.append("server.gpu_memory_utilization must be in (0, 1]")
     if not 1 <= cfg["server"]["port"] <= 65535:
         errors.append("server.port must be in [1, 65535]")
+    if cfg["server"]["eplb_min_imbalance"] < 0:
+        errors.append("server.eplb_min_imbalance is a busiest-rank-over-mean load, so it must be >= 1 "
+                      "(or 0 to disable the gate)")
+    elif 0 < cfg["server"]["eplb_min_imbalance"] < 1:
+        errors.append(f"server.eplb_min_imbalance = {cfg['server']['eplb_min_imbalance']} is below 1, "
+                      "which no imbalance can be under: the busiest rank is never under the mean. A "
+                      "threshold under 1 gates nothing. Use 0 to disable the gate.")
+    gated = cfg["server"]["eplb_min_imbalance"] or cfg["server"]["eplb_honor_changed"]
+    if gated:
+        which = "eplb_min_imbalance" if cfg["server"]["eplb_min_imbalance"] else "eplb_honor_changed"
+        # The gate decides whether a *planned* placement is applied, so without
+        # EPLB there is nothing to gate and the arm would silently be a second
+        # EPLB-off arm. Record-only mode never applies a placement either.
+        if not cfg["server"]["enable_eplb"]:
+            errors.append(f"server.{which} needs server.enable_eplb: it gates whether a planned "
+                          "placement is applied, so with EPLB off it measures nothing")
+        if cfg["server"]["eplb_record_map"]:
+            errors.append(f"server.{which} with server.eplb_record_map: record-only mode never applies a "
+                          "placement, so the gate cannot change what the point measures")
+        if cfg["server"]["eplb_policy_type"] not in (1, 2):
+            errors.append(f"server.{which} needs eplb_policy_type 1 or 2, not "
+                          f"{cfg['server']['eplb_policy_type']}: policy 0 is a shuffle, and policy 3 "
+                          "(FlashLB) applies its own update trigger internally, so gating it would be "
+                          "two triggers in series")
     positive("client", "max_new_tokens")
     positive("client", "concurrency_limit")
     positive("client", "n_warmup_samples", allow_zero=True)
