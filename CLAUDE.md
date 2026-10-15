@@ -107,9 +107,10 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   `docs/router-bias-findings.md`). With `imbalance.method = "router_bias"` on
   4 NPUs and the plugin in every arm, 100-token TPOT on Mixtral rises linearly,
   +19.9 ms (+12%) per +1x busiest-rank load, in eager and graph mode alike.
-  DeepSeek's cost is large by 3.2-3.5x but its shape below that is unresolved:
-  two eager sweeps disagree at 2.34x (+1.0% against +6.5%), by more than either
-  one's spread, so do not quote a DeepSeek threshold. Natural traffic reaches 1.09-1.25x
+  **DeepSeek has no measured cost of skew** (2026-10-14/15, bullet "Strong
+  router bias changes the text" below): its +22% / +31% points are the ones
+  whose answers ended early, and with `client.ignore_eos` the skew is free at
+  100 and 300 tokens. Do not quote a DeepSeek cost or threshold. Natural traffic reaches 1.09-1.25x
   even per single prompt, where the null above still holds. The *mechanism* is
   not established on either model, and two accounts have already been retracted.
 - **The detection screen works at ~1% of routing counted** (2026-10-07,
@@ -126,7 +127,10 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   while DeepSeek stays flat (174.8 ms at 3.59x) where a fixed target costs +22%
   (212.6 ms at 3.45x). DeepSeek pays only for a persistently hot rank; Mixtral
   pays per layer. Natural traffic rotates, so this is a second reason DeepSeek's
-  null holds and Mixtral's rests only on the skew being small.
+  null holds and Mixtral's rests only on the skew being small. **DeepSeek's half
+  is withdrawn** (2026-10-15): the fixed arm's 3.45x point wrote 84 of 100
+  tokens, the rotating arm 99.3, and with length held a fixed 3.53x is free too,
+  so there is no contrast. Mixtral's half stands.
 - **A rotating skew is invisible to the pooled statistic** (2026-10-08).
   `imbalance.bias_target = "rotate"` biases rank (layer mod n_npus): the per-layer
   load matches a fixed rank target to within 3% (1.71 / 2.40 / 3.53x at offsets
@@ -154,7 +158,9 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm
   (1.36x) nearly coincides with its onset. An impact claim comes from the
-  calibration, never from the routing.
+  calibration, never from the routing. (DeepSeek's 2.43x is withdrawn,
+  2026-10-15: it was interpolated to a point whose cost was early stops, not
+  skew. DeepSeek has no impact threshold below 3.5x at either length.)
 - **Calibrate per deployment, and budget 30 NPU-minutes, not 70**
   (2026-10-09, `scripts/calibration_cost.py`, `docs/figures/tables/calibration_cost.csv`).
   Cutting the 21-point sweep every way: 3 levels {0, 0.5, 1} at 3 repeats
@@ -227,8 +233,163 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   [r*n/ranks, (r+1)*n/ranks), so `experts:0,...,15` is the same skew as
   `rank:0` on 64 experts at 4 ranks and survives rearrangement. Note that
   `rank_load` assumes contiguous placement, so an EPLB-on arm's
-  `rank_max_over_mean_per_layer` is not valid - recompute it from the records
-  against the recorded placement.
+  `rank_max_over_mean_per_layer` is not valid. A map is only recorded in
+  record-only mode (below), so for an arm that rearranges use EPLB's own
+  per-plan reading in `eplb_activity.hotness`.
+- **`eplb_record_map` makes EPLB record-only - never set it on an EPLB-on arm**
+  (2026-10-12). vllm-ascend 0.23 applies a placement only when no record path is
+  set, so every EPLB run before 2026-10-12 planned and never moved an expert
+  (0 completed weight-update cycles; `D2D weight update is on-going` in every
+  server). The "EPLB rearranges correctly and buys nothing" result is withdrawn.
+  Trust `eplb_activity` on the point (plans, applied cycles, EPLB's own load per
+  plan, read from the server log), not the map. Without record mode, EPLB takes
+  DeepSeek at offset 2 from 3.49x to 1.01x in about four 50+50 cycles (~80 s).
+  The mechanism, for the upstream report: `forward_before` starts the transfer
+  and sets the loader to `TRANSFERRING`, but `forward_end` skips
+  `update_expert_map_and_weight` when a record path is set - the only thing that
+  waits the P2P requests and returns the state to `WAITING`. So the loader wedges
+  for the life of the server, the first cycle's `isend`/`irecv` are never waited,
+  and the recorded file is a plan that was never applied.
+- **EPLB rearranges correctly and still buys nothing** (2026-10-12, `eplb-fp2`,
+  4 repeats, arms in shared rounds, 7-12 applied cycles per point). It takes
+  DeepSeek's 3.63x skew to 1.09x by its own reading and changes TPOT by +1.07%.
+  The +31% that skew appeared to cost was early stops: in `fixed-length`
+  (length held) it costs -0.27% and EPLB there costs **+3.83% +-1.02**, all four
+  pairs positive - a false positive, not a failure to recover. Rearranging where there is
+  nothing to win costs at most +4.73% +-4.84 (at 1.73x, free); a single pair
+  there read +10.8% and dissolved under replication. The calibrated screen's gate
+  is shut on 0-1% of windows at the two free levels and open on 100% at the two
+  costly ones, so gating EPLB works. What is *not* measured is EPLB's benefit in
+  steady state: at 3.63x convergence took ~85 s of a 127 s batch. The +4.73%
+  replicated in TPOT (+5.52% in `eplb-gated`; pooled +5.12%, [+1.7, +8.5]) - see
+  the live-gate bullet below.
+- **The null holds on Mixtral too, and EPLB cannot even balance it** (2026-10-13,
+  `eplb-mixtral`, 3 levels x 2 arms x 4 repeats, 24/24 points, neighbour on NPUs 4-5
+  throughout, alike in every arm).
+  Recovers nothing at 1.11x / 1.76x / 2.62x (-0.18% / +1.85% / -0.99% TPOT, every
+  interval spanning zero), so the DeepSeek null is not an artefact of DeepSeek's
+  threshold. It takes 2.62x only to **1.58x**, where on DeepSeek's 64 experts it
+  reaches ~1.0x: 8 experts over 4 ranks is 2 per rank, so moving the hot expert
+  onto another rank lands it on the second-hottest pair. Coarse MoE bounds the
+  best possible plan, before any implementation gets a turn.
+- **The cost of skew is a property of the prefill/decode mix, so an impact
+  threshold goes stale on output length alone** (2026-10-14). Mixtral at the same
+  measured loads, same model, hardware, batch size and bias: 1.76x costs +5.83%
+  TPOT at `max_new_tokens=100` (1.72 prompt tokens per generated token) and
+  -0.98% at 300 (0.59); 2.62x goes +14.45% to +2.95%. The cost lives in
+  prefill-heavy steps - a saturated decode step is the same length at every eager
+  offset - and a decode-dominated workload dilutes it ~5x. The two runs' differing
+  `gpu_memory_utilization` (0.6/0.85) is not the cause: `max_num_seqs` 512 binds
+  in both (the KV caches hold 1630 and 1934 requests of this length), so the
+  resident batch is identical and prompts are the same 171 tokens. Both calibrations in
+  `docs/calibrations/` were made at 100 tokens, so **both impact thresholds
+  (DeepSeek 2.43x, Mixtral 1.42x) are too low for the 300-token EPLB runs**: on
+  Mixtral the gate opens on 100% of windows at 1.76x where EPLB loses, and gating
+  is 0.3-0.6pp worse than leaving EPLB on. Recalibrate when the traffic mix
+  changes, not just the model or the hardware.
+- **Strong router bias changes the text, and on DeepSeek that was the whole
+  cost** (2026-10-14/15, `fixed-length` 24/24, `length-held-100` 36/36,
+  `docs/router-bias-findings.md`). Past ~3x the bias degrades DeepSeek enough
+  that some answers end early (205 of 300, 84 of 100 on average), and every
+  costly DeepSeek point is one of those. With `client.ignore_eos` the skew is
+  free: 300 tokens, 3.64x, +30.86% -> **-0.27% +-1.84**; 100 tokens, 3.53x,
+  natural +20.58% against held **-2.13% +-3.91** in the same rounds. It is
+  **not the mean length**: every request held at 84 (offset 2's average) is free,
+  and natural is +17.70% above it at the same skew and mean - so do not explain
+  it as "more prompt per generated token". What differs is the spread: 28% of
+  requests stop early at scattered points, and the whole server slows (natural
+  requests that ran the full 100 were as slow as the rest: 198.8 against 174.3 ms
+  held). Not an averaging artefact (token-weighted 199.2 against 201.1). The
+  mechanism is open; `length-replay` (`client.lengths_from`) replays those
+  lengths with no bias. The graph-mode slope rests on the same shortened point
+  and was not re-run. The 300-token run's +2.5% at 2.48x did not recur at 100.
+  Set `client.ignore_eos` on any sweep that compares levels, and check
+  `output_tokens_mean`; comparisons across arms *within* a level are safe
+  (output lengths match to 0.25%). The run's baseline TPOT sits ~8% below
+  eplb-fp2's at the same length (longer warm-up suspected, unverified), so its
+  absolute levels are not comparable to earlier runs.
+- **Score a model's gate with that model's calibration and expert count.**
+  `scripts/eplb_false_positive.py` and `plot_findings.eplb_gate` both defaulted to
+  DeepSeek's calibration, DeepSeek's captures and 64 experts, and printed a
+  plausible gate column for a Mixtral run (1.093x/2.485x/3.634x - DeepSeek's
+  loads). Both now select by `model_name` and refuse a mismatch. A gate scored
+  with the wrong alarm and the wrong rank-to-expert mapping is not a near miss.
+- **EPLB measures what our screen measures, more cheaply, and never asks**
+  (2026-10-14, read against vllm-ascend 0.23.0 and `main`; `docs/upstream-eplb.md`).
+  Its heat collection reuses the `expert_tokens` group list the fused MoE op
+  already produced - one device-side `add_` per layer per step - so it is cheaper
+  than the +0.28% `count_experts` screen, and `_compute_imbalance` already
+  computes busiest-rank-over-mean *per layer*, the form this project argues for.
+  So there is nothing to contribute on the measurement side; the gap is that
+  rearrangement fires on an iteration counter with no imbalance condition, in
+  vllm-ascend and in vLLM core alike. `server.eplb_min_imbalance` is that gate,
+  as a patch on the installed package (`scripts/apply_node_patch.py`, reverted by
+  `uv sync`, inert without its env var so arms can differ inside one run).
+- **A balance-improvement threshold cannot see a false positive.** Policies 1 and
+  2 return a `changed` flag - set when the plan improves the summed per-layer max
+  heat by 5% - and `EplbWorker.do_update` discards it (`_, _, new_placement`),
+  along with `per_layer_priority`. Worth an upstream PR, but not a gate: across
+  eplb-fp2's four levels the plans improved EPLB's own metric by 9/39/57/69%, so
+  the flag reads `changed` even at 1.09x where rearranging is pure loss. Gate on
+  the *measured imbalance* against a calibrated impact threshold (1.42x Mixtral;
+  DeepSeek's 2.43x is unsupported since 2026-10-14) - skew, not the planner's
+  opinion of its own plan.
+- **The screen costs under 1% to run, and capture is not its proxy** (2026-10-12/13,
+  `screen-counting`). `server.count_experts` counts 4 random layers redrawn per
+  window and a tenth of their tokens with a device-side `bincount`, copying out
+  once per window, on one rank only: +0.28% +-0.71 e2e on Mixtral against a 0.44%
+  baseline spread. `benchmark.capture_experts` costs +6.38% on the same rounds,
+  because it returns every token's expert ids in the response body (~41k ids per
+  request on DeepSeek). Do not scale the capture number by the sampling fraction
+  to price the screen - they are different mechanisms, and that would over-count
+  transport the screen never does. DeepSeek is unmeasurable in the prefill-bound
+  regime (baseline spread 3.75%, se 4.11%: ~85 repeats to resolve 1%).
+- **Run the positive control, and in a quieter regime** (2026-10-13,
+  `gate-closure`, 4 arms x 2 levels x 5 repeats, 40/40 points, neighbour throughout). On
+  DeepSeek with `client.stream = false` in every arm and eplb-fp2's settings,
+  capture reads **+6.38% / +9.51%** e2e (+9.8% / +17.5% makespan) against baseline
+  spreads of 3.41% / 2.39%: the control fires, so the regime can see ~6% and the
+  screen's +1.65% / +1.71% is a bound rather than a blind reading. Lengthening the
+  point from 70 s to 134 s was the fix the config predicted. What the run did
+  *not* close is the gating sum: EPLB read +1.52% median e2e at 1.73x - but that
+  is e2e with streaming off, not the TPOT the +4.73% was, and in TPOT it did
+  replicate (live-gate bullet below).
+- **A shut gate is not free: most of EPLB's false positive is EPLB being on**
+  (2026-10-14, `eplb-gated`, 3 arms x 3 levels x 4 repeats, 36/36, neighbour on
+  NPUs 4-5 throughout, alike in every arm). The `eplb_min_imbalance=2.43` patch
+  decides correctly on hardware: shut 48/48 at 1.09x and 1.73x, opens at 3.63x
+  (twice per point, then shuts at ~1.73x average - a threshold gate stops at the
+  threshold, not at balance), identical on all four ranks. But at 1.73x TPOT,
+  EPLB-on costs +5.52% +-3.80 and the gated arm, moving nothing, still +3.23%
+  +-0.42 (all 4 pairs +2.7 to +3.7). Pooled with eplb-fp2 the false positive is
+  +5.12% [+1.7, +8.5], the first reading to exclude zero. So the gate averts ~2
+  of ~5 points; the rest is heat collection / all-gather / planner / empty loader
+  cycles, unattributed, one level only (1.09x is too noisy to tell). The patch
+  gates on EPLB's *worst-layer* reading against a *layer-averaged* calibration -
+  worst runs ~0.4x above average - fix the units before sending upstream. Its
+  open-at-3.63x arm is no longer a true positive: with length held that level
+  is free too (`fixed-length`), so on DeepSeek every gate decision measured has
+  been one where the right answer was "shut".
+- **The contention check in `screen_overhead.py` was dead until 2026-10-14.** It
+  read `p["warnings"]`, which points never carry, so every run it printed was
+  "clean". Read `host_before`/`host_after.foreign_npu_processes` (as
+  `regime_summary.contended` does). eplb-mixtral, gate-closure, eplb-gated and
+  Mixtral screen-counting all ran beside another user's jobs on NPUs 4-5; only
+  eplb-fp2 was quiet. Every affected run had the neighbour alike in every arm of
+  a round, so paired comparisons stand; absolute levels and noise floors do not
+  describe a quiet node.
+- **A vLLM general plugin cannot tell the ranks apart at load time.** Plugins load
+  in every worker before the process group exists and without `RANK` set, so a
+  rank check there answers the same in all of them - `expert_counter` installed
+  four counters writing one file before this was fixed. Decide at the first
+  forward, when `torch.distributed` is initialised.
+- **Compare arms inside one run** (`benchmark.arms`), never as separate grid
+  entries. Entries run back to back, so drift aliases onto the arm: on
+  2026-10-09 a neighbour grew from one process to eight during the EPLB-on entry
+  and read as +10%. Arms share the shuffled rounds.
+- **Capture is never streamed, so its control must not be.** A capturing arm
+  finished 15% sooner than a streaming one, which is the cost of streaming. Set
+  `client.stream = false` on both arms and compare e2e latency and makespan.
 - **Alpha is relative to each model's natural CV**, so equal alpha on two models
   is equal *relative* imbalance, not equal rank load. That is why Mixtral's one
   expert per rank behaves like DeepSeek's eight.

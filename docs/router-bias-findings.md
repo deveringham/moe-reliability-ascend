@@ -24,6 +24,12 @@ regime, with the instrument present in every arm (the controlled sweep,
   The two disagree by more than either one's spread, so "a threshold, not a
   slope" is withdrawn pending replication. The gradual rise first reported
   *below* 2.34x was the instrument, and that still stands.
+  **Withdrawn, 2026-10-14/15:** every costly DeepSeek point is one where the
+  model's answers ended early (84 of 100 tokens at 3.45x), and with length held
+  the same skew costs nothing at 100 tokens (-2.13% ±3.91 at 3.53x) and at 300
+  (-0.27% ±1.84 at 3.64x). See
+  [Fixed-length output](#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew).
+  DeepSeek has no measured cost of skew that survives that control.
 
 Natural traffic reaches 1.09-1.25x on the same load measure, even for a single
 prompt (`docs/figures/impact_map.png`). Mixtral's first cost beyond run-to-run
@@ -484,7 +490,8 @@ calibrate to 2.67x, 2.95x and 3.21x, inside the gap the controlled sweep left:
   9.9 ms**, and the sequence is non-monotone (2.95x reads below 2.67x). Three
   repeats are not enough to resolve the shape at this noise level.
 - **What is settled:** DeepSeek's cost is real and large by 3.2-3.5x, and absent
-  at natural load. **What is not:** whether it begins near 2.3x or only above
+  at natural load. *(Not settled after all, 2026-10-14: the 3.21x and 3.45x points
+  wrote 92 and 84 of 100 tokens - see "Fixed-length output".)* **What is not:** whether it begins near 2.3x or only above
   3x, and therefore whether it is a threshold or a slope. Resolving it needs more
   repeats in 2.3-3.5x, and an explanation for why eager DeepSeek's repeat spread
   is 2-5 ms in one run and 9-14 ms in another of the same configuration.
@@ -536,6 +543,124 @@ leads 34-35% of layers. On DeepSeek that is a second reason its natural imbalanc
 is free: not only is the skew small, it is also the kind that costs nothing even
 when large. On Mixtral that reasoning does not hold, and only the smallness
 protects it.
+
+> **Withdrawn for DeepSeek, 2026-10-15** (next section). The fixed arm's costly
+> point is the one where DeepSeek's answers ended early (84 of 100 tokens); the
+> rotating arm kept its length (99.3). With length held, a fixed 3.53x skew at 100
+> tokens costs nothing either, so both arms are flat and there is no contrast:
+> "DeepSeek pays only for a persistently hot rank" has no cost behind it. The
+> Mixtral half stands.
+
+## Fixed-length output: DeepSeek's cost was its early stops, not the skew
+
+2026-10-14 (300 tokens) and 2026-10-15 (100 tokens).
+
+Every DeepSeek point that ever cost heavily is one where the model wrote shorter
+answers, and every full-length point is cheap or noisy:
+
+| Run (max tokens) | Offset | Busiest rank | Tokens / request | TPOT |
+|---|---|---|---|---|
+| rbias-controlled (100) | 0-1 | 1.14-2.34x | 100.0 | 171.8-175.8 ms |
+| | 2 | 3.45x | **84.2** | **212.6 ms** |
+| rbias-graph-threshold-002 (100) | 1-1.5 | 2.35-2.95x | 99.7-100.0 | 184.8-194.8 ms |
+| | 1.75 / 2 | 3.21 / 3.45x | **91.8 / 83.9** | **205.3 / 209.3 ms** |
+| rbias-graph, graph mode (100) | 2 | 3.45x | **84.0** | **174.1 ms** (139.5 balanced) |
+| rotating-skew (100) | 2 | 3.59x | 99.3 | 174.8 ms (free) |
+| eplb-fp2 (300) | 2 | 3.63x | **205.2** | **202.1 ms** (+30.9%) |
+
+The first suspicion was the prefill/decode mix: shorter answers raise the prompt
+tokens carried per generated token (0.55 to 0.79 in eplb-fp2), and the mix moves
+TPOT on its own (Mixtral at 100 against 300 tokens). **That account is withdrawn**
+(100-token section below): holding every request at offset 2's *average* length
+moves the mix the same way and costs nothing.
+
+`fixed-length` (`20261014-115455`, `configs/examples/fixed_length.toml`) is
+eplb-fp2 with `client.ignore_eos = true`: every request generates exactly 300
+tokens, at every level and in both arms. 3 offsets x 2 arms (EPLB off / on) x 4
+repeats, 24 of 24 points, shuffled shared rounds, warm-up 1800 requests. The
+validation capture ran with the same forced length and reads the same skew as
+eplb-fp2: 1.05x / 2.48x / 3.64x, 64 / 64 / 58 experts live.
+
+TPOT with EPLB off, paired by round against offset 0 (± is the sd of the four
+paired differences):
+
+| Busiest rank | eplb-fp2 (natural length) | fixed-length (300 every request) |
+|---|---|---|
+| 2.48x | +2.18% ±2.80 | +2.56% ±1.89 (+3.8 / +2.9 / +3.7 / -0.2) |
+| 3.64x | **+30.86% ±3.46** (205 tokens) | **-0.27% ±1.84** (-0.1 / -2.8 / +1.5 / +0.4) |
+
+- **At 300 tokens DeepSeek's skew is free up to 3.64x once length is held.**
+  e2e agrees (-0.51% ±1.87). The +31% required the early stops; what about them
+  costs is the 100-token run's question, below.
+- **Offset 1 reads ~+2.5% in both runs** (8 pairs, 6 positive), and offset 2,
+  with more skew, reads nothing. Non-monotone and small; unexplained.
+- **EPLB at 3.64x is now a false positive:** +3.83% ±1.02 TPOT, all four pairs
+  +2.8 to +5.1, while taking EPLB's own reading from 3.49x to 1.07x (14 of 15
+  plans applied at every point). At offset 0 it is +0.42% ±1.56 and at offset 1
+  +3.01% ±4.91 (one pair +9.6%).
+- **Baseline TPOT is lower than eplb-fp2's** (141.1-143.4 ms at offset 0 against
+  148.7-159.5) at nearly the same length (300 against 298) and despite a
+  neighbour. The longer warm-up is the obvious difference and is not verified.
+  Paired comparisons are unaffected.
+- **Contention:** other users' processes on NPUs 4, 5 and 7 throughout, never on
+  0-3, and their mix varied between points within a round (4 only, 4+5, 4+7), so
+  "alike in every arm" holds only approximately. TPOT shows no pattern against it.
+
+**What this withdraws, on DeepSeek only** (Mixtral's lengths never moved):
+
+- *At 300 tokens, tested:* "the skew costs +31% at 3.63x", and with it the EPLB
+  null at 3.63x ("balances and recovers nothing") - there was nothing to recover.
+- *At 100 tokens, tested 2026-10-15 (below):* the +22% at 3.45x and the 2.43x
+  impact threshold interpolated across it. The rotating contrast lapses with them
+  (both arms are flat once length is held). The graph-mode slope rests on the same
+  shortened point (84 tokens) and was not re-run in graph mode.
+
+### At 100 tokens, and it is not the mean length (2026-10-15)
+
+`length-held-100` (`20261014-160027`, `configs/examples/length_held_100.toml`) is
+rbias-controlled-000 again - same seed, prompts and settings - with three arms in
+shared shuffled rounds: **natural** (model stops where it likes), **held-100**
+(`ignore_eos`, every request 100) and **held-84** (`ignore_eos`, every request 84,
+offset 2's natural average). 3 offsets x 3 arms x 4 repeats, 36 of 36 points.
+Validation (held-100 traffic) reads 1.04x / 2.39x / 3.53x, 64 experts live at
+every level. Other users' processes on NPUs 4-7 throughout, varying by round,
+never on 0-3.
+
+TPOT within each arm, paired by round against that arm's own offset 0:
+
+| Arm | Tokens / request | 2.39x | 3.53x |
+|---|---|---|---|
+| natural | 100 / 100 / 84.4 | -0.19% ±2.12 | **+20.58% ±3.69** (+15.7 to +24.5) |
+| held-100 | 100 | -2.45% ±4.87 | **-2.13% ±3.91** |
+| held-84 | 84 | +0.60% ±6.91 | -1.04% ±4.06 |
+
+| Contrast, paired by round | TPOT |
+|---|---|
+| held-84 vs held-100, offset 0 (fewer tokens, no skew) | +3.28% ±4.82 |
+| natural vs held-84, offset 2 (same skew, same mean length) | **+17.70% ±6.40** (4 of 4 positive) |
+
+- **The positive control reproduces**: natural reads +20.6% and 84.4 tokens at
+  offset 2, against rbias-controlled's +22% and 84.2.
+- **Held at either length, the skew is free at 100 tokens too.** DeepSeek has no
+  measured cost of skew at any length, up to 3.5-3.6x.
+- **The mean length is not the cause.** held-84 carries the same tokens per
+  request, so the same prompt per generated token, as natural at offset 2, and
+  costs nothing; fewer tokens on their own cost at most a few percent.
+- **The spread is what differs.** At natural offset 2, 28% of requests stop
+  before 100, at scattered points (p1 11, p10 31 tokens). It is not a
+  per-request averaging artefact (token-weighted TPOT 199.2 against 201.1 ms),
+  and the cost falls on the whole server: natural requests that ran the full 100
+  tokens still averaged 198.8 ms, against 174.3 ms held. The suspicion is that
+  scattered completions change how admissions, and so prompt-reading, interleave
+  with generation. The engine's 10 s log cannot show it - prefill is present in
+  every full-batch interval in every arm - and it is not established.
+  `length-replay` (`configs/examples/length_replay.toml`) tests it with no bias at
+  all: offset 2's per-request lengths replayed at offset 0 (`client.lengths_from`).
+- **Offset 1's small cost did not reappear** at 100 tokens in any arm.
+- **So router bias is a flawed instrument on DeepSeek**: past ~3x it degrades the
+  model enough that some answers end early, and that, not the hot rank's load,
+  is what cost latency. Natural imbalance does not change the text. Mixtral's
+  lengths never moved (99.6-100 of 100, 286-291 of 300), so its results stand.
 
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
@@ -620,6 +745,7 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261007-123441` rbias-graph-threshold-002 | Eager DeepSeek threshold sweep, quiet node |
 | `20261007-202156` rotate-calibration | Rotating bias: per-layer load against the fixed target's |
 | `20261007-203534`, `-214459` rotating-skew-000, -001 | Rotating skew, DeepSeek and Mixtral, 4 offsets x 3 |
+| `20261014-115455` fixed-length | DeepSeek, eplb-fp2 with `ignore_eos`: 3 offsets x EPLB off/on x 4, 300 tokens every request |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
@@ -634,6 +760,11 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
+0. **What about scattered early stops costs ~20% TPOT** (2026-10-15). Held at
+   any length, DeepSeek's skew is free, so items 1 and 6 lapse; what is left is
+   why a server whose requests end at scattered points is slower for every
+   request in it. `length-replay` replays offset 2's lengths at offset 0. If that
+   reproduces the cost, a step profile of it against held-85 is the mechanism.
 1. **Replicate DeepSeek's eager curve between 2.3x and 3.5x.** Two sweeps
    disagree there and neither resolves the shape. The prior question is why the
    same configuration gives a repeat spread of 2-5 ms in one run and 9-14 ms in

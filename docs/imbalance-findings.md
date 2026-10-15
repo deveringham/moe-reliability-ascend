@@ -279,7 +279,89 @@ bound the profiler window as its name suggests; the spans are ~34 s, essentially
 the whole serving period, which is what made this analysis possible but should be
 understood before relying on the option.
 
-## EPLB: it works, and it buys nothing here
+## EPLB, re-measured 2026-10-12: it rearranges, and it still buys nothing
+
+Run `eplb-fp2`, DeepSeek-V2-Lite on 4 NPUs, router bias on `experts:0,...,15` so
+the skew survives rearrangement, `eplb-off` and `eplb-on` interleaved in shared
+rounds, 4 repeats, 32/32 points completed, no contention warnings.
+
+This is the replacement for the retracted section below. `eplb_record_map` is
+off, so EPLB applies what it plans: 7 to 12 completed weight-update cycles per
+point, with its own busiest-rank reading driven to about 1.0x from every starting
+skew. `eplb_activity` on each point carries the plans, the applied cycles and
+that reading, read from the server log.
+
+| level | load | gate open | applied | EPLB's own load | TPOT off | TPOT on-off | off spread |
+|---|---|---|---|---|---|---|---|
+| 0 | 1.09x | 0% | 11-12 | 1.12 -> 1.02x | 154.5 ms | -0.47% +-5.45 | 2.99% |
+| 0.5 | 1.73x | 1% | 11-12 | 1.68 -> 1.02x | 152.8 ms | **+4.73% +-4.84** | 2.31% |
+| 1 | 2.49x | 100% | 11-12 | 2.39 -> 1.03x | 157.8 ms | +1.42% +-1.99 | 1.06% |
+| 2 | 3.63x | 100% | 7 | 3.49 -> 1.09x | 202.1 ms | +1.07% +-2.47 | 1.88% |
+
+- **Rearranging for nothing costs a few percent at most.** The worst case is
+  level 0.5 - a 1.73x skew that costs no latency at all - at +4.73%, about two
+  sigma against the pairs' own spread. A single pair there read +10.8% and
+  dissolved under replication; that is the fourth single point in this project to
+  do so, and the reason `benchmark.repeats` is never 1.
+- **EPLB rearranges correctly and recovers nothing.** Level 2's skew costs the
+  off arm +31% TPOT (202.1 ms against 154.5 ms at level 0). EPLB takes its own
+  reading from 3.49x to 1.09x and the latency does not move (+1.07%). The
+  retracted section reached this conclusion from a non-event; it now holds on a
+  run where the transfers completed. *(2026-10-14: the +31% was the model's answers
+  ending early - 205 of 300 tokens at level 2. With length held (`fixed-length`) the skew costs
+  -0.27% and EPLB there costs +3.83%, so there was nothing to recover; see
+  router-bias-findings.md, "Fixed-length output".)*
+- **Level 2's *benefit* is still not really tested.** Convergence took 5 cycles,
+  about 85 s of a 127 s batch, so two thirds of the measured window is
+  pre-convergence. This design cannot show a steady-state gain even if there is
+  one. Measuring that needs a batch long enough to discard the first 80 s, which
+  is the open question this run leaves behind.
+- **The screen would have blocked the costly false positive.** Scored offline on
+  the same levels' captured traffic with DeepSeek's calibrated screen (alarm
+  1.788x, 3 consecutive windows of 8 requests, 4 random layers, a tenth of the
+  tokens): the gate opens on 0% of windows at 1.09x and 1% at 1.73x, and on 100%
+  at 2.49x and 3.63x. It is shut exactly where EPLB has nothing to win. Level 1
+  sits on DeepSeek's unresolved onset, so the gate opening there is neither right
+  nor wrong. The screen itself costs at most about 1% to run
+  (`docs/detection-findings.md` G), so gating EPLB on it is net-positive.
+- The EPLB intervals are aggressive (50 + 50), so the overhead is better read per
+  applied cycle than per point. `eplb-fp2` takes its loads from `eplb-fp-000`'s
+  validation captures, since routing does not depend on placement.
+- A rank target would not have worked here: it names the experts a rank holds
+  under contiguous placement, which EPLB is free to change, so the skew wanders
+  off the rank it was aimed at. `experts:0,...,15` is the same skew on 64 experts
+  at 4 ranks and survives rearrangement. For the same reason
+  `rank_max_over_mean_per_layer` is not valid on an EPLB-on arm.
+
+## EPLB: retracted 2026-10-12 - it never rearranged
+
+**Everything in this section measured EPLB in record-only mode, not EPLB.** Every
+EPLB run here set `server.eplb_record_map = true`, which passes
+`expert_map_record_path` to vllm-ascend. In 0.23 that path turns the updator into
+a dry run: `EplbUpdator.forward_end` applies a new placement only when
+`expert_map_record_path is None`. The first layer's transfer is launched, never
+completed, and every later one is refused with `Current D2D weight update is
+on-going, cannot accept new update task`. The layout stays contiguous for the
+whole point; the recorded map is what EPLB *planned*.
+
+The logs agree. `eplb-eval-001` (below): 84 plans, 0 completed weight-update
+cycles, the stall warning in all 12 server instances. `eplb-fp-001`
+(2026-10-09): 12 benchmark servers, the same. Its validation servers, which ran
+without the record path, did rearrange - EPLB's own busiest-rank reading fell
+3.49x -> 2.41x -> 1.66x -> 1.07x -> 1.01x over consecutive cycles at offset 2. The
+caveat below that "the realised imbalance (1.139) never approaches the predicted
+(1.007)" was this bug showing: nothing predicted was ever applied.
+
+What survives: the numbers below are the overhead of collecting load and planning
+(plus one stalled transfer), with the layout unchanged - the 0.77pp fall in MoE
+share is that cost. What does not: "EPLB rearranges correctly", "it buys
+nothing", and the token-count-versus-time explanation of why, which explained a
+non-event. `eplb_record_map` is now documented as record-only, each EPLB point
+records what EPLB actually did (`eplb_activity`, read from the server log), and
+`configs/examples/eplb_false_positive.toml` measured it again with EPLB applying -
+the section above.
+
+The original section follows unchanged.
 
 Run 2026-10-02, grid `eplb-eval`, DeepSeek-V2-Lite at 4-way expert parallelism,
 alphas 0.8/1.0/1.6, two repeats per point, EPLB off and on with shared workloads
@@ -357,11 +439,9 @@ are cleared at the end of each cycle rather than decayed.
    one expert on each rank instead of eight and changes nothing, because alpha is
    relative to a natural CV that is three times lower. To make granularity bite you
    would have to drive absolute CV, not alpha.
-3. **Does EPLB change anything? Answered: no, and for an instructive reason.** It
-   rearranges as designed and removes the token imbalance it measures, but token
-   imbalance is six times larger than the time imbalance, so there is nothing left
-   to win. See the EPLB section above. What remains open is its overhead at a
-   realistic cadence, which these aggressive intervals overstate.
+3. **Does EPLB change anything? Reopened 2026-10-12.** The earlier "no" measured
+   EPLB in record-only mode, which never moves an expert (see the EPLB section
+   above). Being re-measured with EPLB applying, arms interleaved in one run.
 4. **Where the step time actually goes.** The traces now report it: about 74%
    occupancy by wall time, with collectives dominating summed kernel duration
    because they block. Worth separating transfer from wait inside the collectives,

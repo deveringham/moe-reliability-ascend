@@ -61,7 +61,14 @@ runs. Requiring three consecutive alarming windows takes the amortised pipeline
 cost from 6.1% to 0.2% *and* raises detection from 0.50 to 1.00, for 24-40
 requests of delay (C5).
 
-**What is still unmeasured:** the screen's own cost on the device, behaviour
+**The screen's own cost is now measured, and it is nothing.** Counting the way a
+deployment would - 4 random layers redrawn per window, a tenth of their tokens,
+bincounted on device - costs +0.28% +-0.71 of end-to-end latency on Mixtral
+against a 0.44% baseline spread, bounded above by +1.2%. Capture, which returns
+every token's expert ids in the response body, costs +6.38% on the same traffic:
+the screen is a cheaper mechanism, not a fraction of that one (G).
+
+**What is still unmeasured:** the screen's cost under saturation (G), behaviour
 under a skew that ramps or flickers rather than switching on (every capture is a
 server whose bias is fixed for its lifetime), and stage 3's ability to attribute
 (the balanced case already has a pace setter).
@@ -80,6 +87,15 @@ DeepSeek's threshold falls in the gap between its swept levels (2.34x and
 3.45x), so it is an interpolation across a jump, not a measured point; the
 `rbias-graph-threshold-002` run fills that gap. Mixtral's is interpolated
 between measured levels 0.25 and 0.5.
+
+> **DeepSeek's threshold is withdrawn (2026-10-14/15).** The 3.45x point it
+> interpolates to cost latency because the model's answers ended early (84 of 100
+> tokens), not because of the skew: with length held a 3.53x skew costs nothing at
+> 100 tokens, and 3.64x nothing at 300
+> ([router-bias-findings.md](router-bias-findings.md#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew)).
+> Read every DeepSeek "\*" (at or above threshold) below as not mattering. The
+> detection rates themselves are routing measurements and are unaffected; only
+> which levels count as mattering changes. Mixtral's lengths never moved.
 
 **These are not the same kind of number.** Mixtral's cost rises linearly from
 the first offset, so its threshold is where the line crosses the noise floor.
@@ -304,10 +320,11 @@ unmeasured):
   24-40 requests of delay, no false alarm within the simulated horizon, and no
   confirmation cost to amortise.
 
-The unmeasured number remains the screen's own device cost. Everything above
-treats it as 0.2%; `detection.monitoring_overhead` prices it from one
-measurement - the per-assignment cost of a `scatter_add_` into a resident buffer
-- which has to be taken on the device.
+The 0.2% the table charges for the screen is now measured rather than assumed,
+and it is the right order: +0.28% +-0.71 on Mixtral at 1.26% of assignments
+counted, inside the baseline's own spread (G). `detection.monitoring_overhead`
+still prices it from an assumed per-assignment `scatter_add_`; the measurement
+supersedes it.
 
 ## D. Stage 2: step time at matched batch size
 
@@ -356,13 +373,109 @@ the timings and profiled for the traces, and the profiled pass's timings were
 discarded. That is now kept (`profiled_request_summary`), so the next profiled
 run measures the profiler's own cost within a point at no extra NPU time.
 
-The screen's cost is not measured either. `detection.monitoring_overhead` prices
-a device-side counter from one number - the per-assignment cost of a
-`scatter_add_` into a resident buffer - which has to be measured on the device.
-What is already known is the shape of the risk: the router-bias plugin's
-per-call tensor add costs 10.0 ms per token on eager DeepSeek, where decode is
-host-bound, and nothing on Mixtral. A monitor doing per-call host work would
-disturb exactly what it measures.
+The screen's cost **is** now measured - see G. The shape of the risk it had to
+clear: the router-bias plugin's per-call tensor add costs 10.0 ms per token on
+eager DeepSeek, where decode is host-bound, and nothing on Mixtral, so a monitor
+doing per-call host work would disturb exactly what it measures. Keeping the
+counting on device, with no copy-out except once per window, is what avoids
+that.
+
+## G. What the screen costs
+
+2026-10-12/13, grid `screen-counting`, 2 models x 3 arms x 5 repeats, 30/30
+points. Another user's jobs held NPUs 4-5 on every Mixtral point and on round 5
+of DeepSeek's, alike in every arm of a round (first recorded as "no contention
+warnings", which was wrong). Arms interleaved in shared rounds, so a pair
+differs in the instrument and in nothing that drifted.
+
+The screen's device cost was the placeholder in C5 and the first item under Open.
+It is measured here with the counting done the way a deployment would do it,
+which is **not** the way a calibration does it:
+
+- `benchmark.capture_experts` (`--enable-return-routed-experts`) returns every
+  token's expert ids in the HTTP response body - about 41k ids per request on
+  DeepSeek, base64 npy through JSON, parsed by the client. It is the right
+  instrument for building a calibration, because it keeps the whole trace, and
+  the wrong one for costing a screen, which never needs the trace.
+- `server.count_experts` (`src/moe_reliability/expert_counter.py`) counts 4 MoE
+  layers redrawn every window, every tenth of their tokens, with one `bincount`
+  and one add into a device-side `[layer, expert]` table and a copy-out once per
+  window. One rank counts: expert selection is replicated, so the other three
+  would recount the same routing.
+
+| model | arm | e2e median | mean +-sd | 95% CI | baseline spread |
+|---|---|---|---|---|---|
+| Mixtral | count-on | +0.13% | +0.28% +-0.71 | [-0.61, +1.16] | 0.44% |
+| | capture-on | +6.04% | +6.38% +-0.61 | [+5.62, +7.14] | |
+| DeepSeek | count-on | -0.35% | +0.45% +-9.19 | [-10.97, +11.88] | 3.75% |
+| | capture-on | -0.34% | +0.84% +-5.33 | [-5.78, +7.47] | |
+
+DeepSeek's row was a non-measurement, and `gate-closure` (2026-10-13) establishes
+that it was blindness rather than a null, by running the control in a regime
+chosen to be quieter: eplb-fp2's settings unchanged, `client.stream = false` in
+every arm, 5 repeats, two free skew levels, 40 of 40 points, with another
+user's jobs on NPUs 4-5 throughout and alike in every arm (not "no contention"
+as first recorded). Medians against the `base` arm:
+
+| level | screen | capture (control) | EPLB | baseline spread |
+|---|---|---|---|---|
+| 1.09x | +1.65% | **+6.38%** | +0.71% | 3.41% |
+| 1.73x | +1.71% | **+9.51%** | +1.52% | 2.39% |
+
+Capture is now the largest effect at both levels (+9.8% and +17.5% of makespan),
+and at 1.73x its interval excludes zero, so the instrument works here. The
+screen's +1.7% is therefore a bound of about that size rather than a reading of
+nothing - about six times tighter than the +-11% interval above, and still under
+the baseline's own spread. Shortening the point was the fix the config predicted:
+the earlier regime's 70 s makespan averaged less than this one's 134 s.
+
+The headline is the median paired difference, declared in the grid config before
+the run because DeepSeek's baseline has a heavy tail at this concurrency: in
+`screen-overhead2` one point in four ran 15% slow with no foreign NPU process and
+a *lower* loadavg than its siblings.
+
+- **The screen is free to within the measurement.** On Mixtral, where the
+  baseline's own spread is 0.44%, counting costs +0.28% +-0.71 and is bounded
+  above by +1.2% at 95%; four of five rounds fall inside +-0.26%. The 0.2% C5
+  charges for it is the right order.
+- **Capture is not free.** +6.38% on the same traffic in the same rounds, every
+  round between +5.85% and +7.22%. That also reproduces `screen-overhead2`'s
+  independent +5.38% within about a point, which is what makes the two runs
+  comparable and lets `count-on` be read beside that earlier number.
+- **So the ceiling is about twenty times the thing, and scaling it down would
+  have been wrong.** The sampled screen is not 1.5% of capture's cost: it is a
+  different mechanism, with no per-request payload, no serialisation, no
+  client-side parse and one counting rank instead of four returning. Multiplying
+  6.38% by the sampling fraction would over-count transport the screen never does
+  and omit the per-window copy-out it does.
+- **The realised sampling fraction matches the nominal**, read back from what the
+  hook wrote rather than assumed: 1.55% of all expert assignments on DeepSeek
+  (nominal 4/26 x 0.1 = 1.54%) and 1.26% on Mixtral (4/32 x 0.1 = 1.25%).
+- **DeepSeek is unmeasured, and more repeats will not fix it.** Its baseline
+  spreads 3.75% and `count-on`'s per-round differences run -9.22% to +14.59%, a
+  standard error of 4.11%; resolving 1% would take about 85 repeats. This is the
+  prefill-bound regime of the rest of this document - the engine queue sits empty
+  83-90% of the time on DeepSeek - so host-side work hides in the idle time, which
+  is also the likeliest reason capture costs Mixtral 6% and DeepSeek nothing
+  measurable. `count-on`'s spread is *wider* than `capture-on`'s, which is
+  incoherent as signal. The fix is a decode-heavy workload, not more points.
+
+### Against what it averts
+
+EPLB rearranging where it has nothing to win costs **+4.73% +-4.84** TPOT at
+1.73x on DeepSeek, and about +1% at every other level
+(`docs/imbalance-findings.md`). The screen that would have blocked that
+rearrangement - the gate is shut on 0-1% of windows at the two free levels -
+costs **at most about 1%**. So the gating argument closes: the screen is cheaper
+than the false positive it averts, by roughly 4 points on Mixtral's measurement.
+
+Two things that argument rests on. It closes on Mixtral, where both the screen's
+cost and the capture ceiling are measured cleanly; on DeepSeek the screen's cost
+and the false positive are each inside their own noise, so it closes there only by
+assuming the hook behaves as it does on Mixtral. And the costs are measured in
+different units on different models - e2e latency on Mixtral against TPOT on
+DeepSeek - because capture cannot stream, so a capturing arm's control cannot
+either, and TPOT is unavailable without streaming.
 
 ## Workload families
 
@@ -381,11 +494,12 @@ corpus does not transfer exactly to another.
 
 ## Open
 
-1. **Measure the screen's per-assignment cost on the device.** The accuracy side
-   of the frontier is now measured; the cost side is still a placeholder. A
-   `scatter_add_` into a resident counter inside the expert-selection wrapper is
-   the implementation to time, against the same unprofiled twin the profiler
-   overhead will use.
+1. **Measure the screen's cost under saturation.** Answered on Mixtral and not on
+   DeepSeek (G): DeepSeek's engine queue sits empty 83-90% of the time in this
+   prefill-heavy regime, so host-side work hides in the idle time and its off arm
+   spreads 3.75%. Repeats do not fix that - the standard error is 4.11%, so 1%
+   would need about 85 of them. A decode-heavy workload that keeps the queue full
+   would, and is also the regime a deployment screens in.
 2. **A skew that ramps or flickers.** C4 measures an instantaneous onset into a
    standing skew, which is the easy case. The plugin would have to read its bias
    from a tensor updated in place - which also keeps graph mode working, since
