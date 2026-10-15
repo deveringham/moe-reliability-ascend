@@ -367,3 +367,45 @@ def test_runs_differing_only_in_name_are_ordered_independently(deployment, force
         assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
         orders.add(tuple(p["label"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])))
     assert len(orders) > 1
+
+
+ARMS = ["eplb-off", "eplb-on: server.enable_eplb=true; server.eplb_heat_collection_interval=1"]
+
+
+def test_arms_are_served_inside_one_run_in_shared_rounds(deployment, forced_config_data):
+    """Arms run as separate grid entries let drift alias onto the arm, as on 2026-10-09."""
+    forced_config_data["benchmark"].update(repeats=2, arms=ARMS)
+    forced_config_data["imbalance"]["validate_imbalance"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    labels = [p["label"] for p in ctx.points]
+    assert labels == ["imbalance_0_eplb-off", "imbalance_0_eplb-off_r2", "imbalance_0_eplb-on",
+                      "imbalance_0_eplb-on_r2", "imbalance_100_eplb-off", "imbalance_100_eplb-off_r2",
+                      "imbalance_100_eplb-on", "imbalance_100_eplb-on_r2"]
+    assert [p["arm"] for p in ctx.points] == ["eplb-off"] * 2 + ["eplb-on"] * 2 + ["eplb-off"] * 2 + ["eplb-on"] * 2
+    # validation once per level, on the configuration as written
+    validation = [c for c in deployment.calls if c["capture"]]
+    assert len(validation) == 2 and all(c["eplb"] is None for c in validation)
+    # each benchmark call is served with its own arm's settings
+    served = [c for c in deployment.calls if not c["capture"]]
+    by_order = sorted(ctx.points, key=lambda p: p["exec_order"])
+    for p, call in zip(by_order, served):
+        assert (call["eplb"] is not None) == (p["arm"] == "eplb-on")
+    # every round holds both arms at every level
+    for r in (1, 2):
+        rnd = [p for p in by_order if p["repeat"] == r]
+        assert {(p["value"], p["arm"]) for p in rnd} == {(v, a) for v in (0, 100) for a in ("eplb-off", "eplb-on")}
+
+    summary = ResultsStore(cfg.output.results_dir).get(ctx.run_id).summary()
+    on = summary[summary["arm"] == "eplb-on"]
+    assert on["enable_eplb"].all() and not summary[summary["arm"] == "eplb-off"]["enable_eplb"].any()
+
+
+def test_an_arm_may_not_change_what_validation_shares(forced_config_data):
+    from moe_reliability.config import ConfigError
+
+    forced_config_data["benchmark"]["arms"] = ["a", "b: imbalance.imbalance_levels=[0]"]
+    with pytest.raises(ConfigError, match="may only change"):
+        ExperimentConfig.from_dict(forced_config_data)

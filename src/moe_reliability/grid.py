@@ -76,7 +76,7 @@ class Grid:
             values = pipeline_for(e.config.experiment_type).sweep_values(e.config)
             if values is None:
                 return None
-            total += len(values) * max(1, e.config.benchmark.repeats)
+            total += len(values) * max(1, e.config.benchmark.repeats) * max(1, len(e.config.arms))
         return total
 
 

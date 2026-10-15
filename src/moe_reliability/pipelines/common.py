@@ -204,8 +204,12 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
-    _warn_if_eplb_cannot_fire(cfg)
-    for order, p in enumerate(_execution_order(ctx, cfg)):
+    for arm in [None] + [name for name, _ in cfg.arms]:
+        _warn_if_eplb_cannot_fire(cfg.for_arm(arm))
+    base_cfg = cfg
+    for order, p in enumerate(_execution_order(ctx, base_cfg)):
+        # Everything below serves this point's arm; the prompts and validation are shared.
+        cfg = base_cfg.for_arm(p.get("arm"))
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
         if status == schema.STATUS_COMPLETED:

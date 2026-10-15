@@ -14,7 +14,7 @@ import datetime as _dt
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from moe_reliability_results import io, schema
 
@@ -165,22 +165,28 @@ class RunContext:
         entry.update(status=schema.STATUS_SKIPPED, note=reason, started_at=None, finished_at=utcnow(), error=None)
         self.save()
         
-    def ensure_points(self, values: list[float | int], repeats: int = 1) -> None:
+    def ensure_points(self, values: list[float | int], repeats: int = 1,
+                      arms: Sequence[str] = ()) -> None:
         """Create the sweep points, or check them against an existing manifest.
 
         With ``repeats`` above 1 every value becomes that many points, each served
         and measured separately. Points that share a value differ only in the state
         of the machine, so their spread is the run's own noise floor - without it a
         difference between values cannot be told from run-to-run variation.
+
+        With ``arms`` every value is served once per arm as well, labelled
+        ``<value label>_<arm>`` and carrying ``arm``, so arms share the run's
+        rounds rather than running one after another.
         """
         parameter = self.manifest["sweep_parameter"]
         repeats = max(1, int(repeats))
-        spec: list[tuple[float | int, int, str]] = []
+        spec: list[tuple[float | int, int, str | None, str]] = []
         for v in values:
-            base = schema.point_label(parameter, v)
-            for r in range(1, repeats + 1):
-                spec.append((v, r, base if r == 1 else f"{base}_r{r}"))
-        labels = [label for _, _, label in spec]
+            for arm in (list(arms) or [None]):
+                base = schema.point_label(parameter, v) + (f"_{arm}" if arm else "")
+                for r in range(1, repeats + 1):
+                    spec.append((v, r, arm, base if r == 1 else f"{base}_r{r}"))
+        labels = [label for *_, label in spec]
         existing = [p["label"] for p in self.manifest["points"]]
         if existing:
             if existing != labels:
@@ -188,8 +194,9 @@ class RunContext:
                                f"points ({labels})")
             return
         self.manifest["points"] = [
-            {"index": i, "value": v, "repeat": r, "label": label, "status": schema.STATUS_PENDING}
-            for i, (v, r, label) in enumerate(spec)
+            {"index": i, "value": v, "repeat": r, "label": label, "status": schema.STATUS_PENDING,
+             **({"arm": arm} if arm else {})}
+            for i, (v, r, arm, label) in enumerate(spec)
         ]
         self.save()
 

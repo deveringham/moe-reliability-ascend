@@ -248,7 +248,8 @@ def _has_capture(records) -> bool:
 
 def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> None:
     ctx.init_stages(STAGES)
-    ctx.ensure_points(cfg.imbalance.imbalance_levels, repeats=cfg.benchmark.repeats)
+    ctx.ensure_points(cfg.imbalance.imbalance_levels, repeats=cfg.benchmark.repeats,
+                      arms=[name for name, _ in cfg.arms])
 
     if common.should_run(ctx, STAGE_CHECKPOINTS):
         with ctx.stage(STAGE_CHECKPOINTS):
@@ -304,6 +305,11 @@ def plan(cfg: ExperimentConfig) -> list[str]:
     lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} "
                  f"{corpus} prompts"
                  f"{common.profiling_note(cfg.benchmark)}")
+    for name, overrides in cfg.arms:
+        lines.append(f"  arm {name}: {'; '.join(overrides) or 'as configured'}")
+    if cfg.arms:
+        lines.append(f"{len(levels) * len(cfg.arms) * max(1, cfg.benchmark.repeats)} points: every level once per "
+                     f"arm and repeat, arms shuffled into the same rounds")
     return lines
 
 

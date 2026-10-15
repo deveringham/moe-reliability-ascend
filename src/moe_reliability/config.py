@@ -235,6 +235,14 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
            "on the traffic that produces it."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
     Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("arms", "list[str]", [], "Serve every level once per arm, inside this run: 'name' or "
+           "'name: section.key=value; section.key=value', e.g. ['eplb-off', 'eplb-on: server.enable_eplb=true']. "
+           "Arms are shuffled into the same rounds as the levels, so anything that drifts during the run "
+           "falls on both. Comparing arms run as separate grid entries aliases drift onto the arm instead: "
+           "on 2026-10-09 a neighbouring job grew from one process to eight during the second entry and "
+           "read as a 10% EPLB cost. Overrides may touch [server], [client] and benchmark.capture_experts; "
+           "an arm with no overrides is the configuration as written. Validation runs once per level, on "
+           "the configuration as written, since no arm setting changes which experts a token routes to.", ),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
@@ -420,11 +428,36 @@ class ExperimentConfig:
     def to_dict(self) -> dict[str, dict[str, Any]]:
         return copy.deepcopy(self._data)
 
+    @property
+    def arms(self) -> list[tuple[str, list[str]]]:
+        """``(name, overrides)`` per benchmark arm; empty when the run has none."""
+        return [parse_arm(spec) for spec in self._data["benchmark"].get("arms", [])]
+
+    def for_arm(self, name: str | None) -> "ExperimentConfig":
+        """This configuration with one arm's overrides applied (itself for ``None``)."""
+        if name is None:
+            return self
+        for arm, overrides in self.arms:
+            if arm == name:
+                data = self.to_dict()
+                data["benchmark"]["arms"] = []
+                return ExperimentConfig(apply_overrides(data, overrides), source=self.source)
+        raise ConfigError(f"no benchmark arm named {name!r}; arms are {[a for a, _ in self.arms]}")
+
     def flat(self) -> dict[str, Any]:
         return {k: v for name, sec in self._data.items() if name != "environment" for k, v in sec.items()}
 
     def to_toml(self, header: str | None = None) -> str:
         return to_toml(self._data, header=header)
+
+
+_ARM_KEYS = ("server.", "client.", "benchmark.capture_experts")
+
+
+def parse_arm(spec: str) -> tuple[str, list[str]]:
+    """``'eplb-on: server.enable_eplb=true; ...'`` -> ``('eplb-on', ['server.enable_eplb=true', ...])``."""
+    name, _, rest = spec.partition(":")
+    return name.strip(), [item.strip() for item in rest.split(";") if item.strip()]
 
 
 def apply_overrides(data: dict[str, Any], overrides: Iterable[str]) -> dict[str, Any]:
@@ -535,6 +568,29 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     positive("client", "n_warmup_samples", allow_zero=True)
     positive("benchmark", "trace_active_iterations")
     positive("benchmark", "trace_start_iteration")
+
+    arm_names = []
+    for spec in cfg["benchmark"].get("arms", []):
+        name, overrides = parse_arm(spec)
+        arm_names.append(name)
+        if not _NAME_RE.match(name):
+            errors.append(f"benchmark.arms: arm name {name!r} may only contain letters, digits, '.', '_' and '-'")
+        bad = [o for o in overrides if not o.split("=", 1)[0].strip().startswith(_ARM_KEYS)]
+        if bad:
+            errors.append(f"benchmark.arms: arm {name!r} overrides {bad}; an arm may only change "
+                          f"[server], [client] and benchmark.capture_experts, since validation and the "
+                          f"prompts are shared between arms")
+            continue
+        # Each arm is a configuration in its own right, so it gets the same checks.
+        data = copy.deepcopy(cfg)
+        data["benchmark"]["arms"] = []
+        try:
+            _resolve(apply_overrides(data, overrides))
+        except ConfigError as e:
+            detail = str(e).removeprefix("invalid configuration:\n  - ").replace("\n  - ", "; ")
+            errors.append(f"benchmark.arms: arm {name!r}: {detail}")
+    if len(set(arm_names)) != len(arm_names):
+        errors.append("benchmark.arms: arm names must be distinct")
 
     etype = cfg["experiment"]["type"]
     probe = cfg["model"]["probe"]
