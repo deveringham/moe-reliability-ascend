@@ -305,7 +305,7 @@ def step_table(run_dir, label):
         i, s = ranks.index(int(r["rank"])), int(r["step"])
         wall[i, s] = float(r["wall_us"])
         if i == 0:
-            reqs[s], tok[s] = int(r["reqs"]) - 1, int(r["tokens"])
+            reqs[s], tok[s] = int(r["reqs"]), int(r["tokens"])
     return reqs, tok, wall.mean(0) / 1e3
 
 

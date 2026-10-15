@@ -7,11 +7,14 @@ it writes ``<run_dir>/step_profile/<point>.csv.gz``: one row per step and rank,
 small enough to pull and analyse anywhere.
 
 A step starts at its ``_compute_slot_mapping_kernel`` launch, whose input
-shapes carry the step's request and token counts (``"<reqs>;<tokens>;..."``).
-A step with as many tokens as requests is decode-only; one with more carries
-prefill chunks. Window averages mix the two kinds in different proportions
-from point to point, which is why they disagree with TPOT; comparing like
-steps does not.
+shapes carry the step's request and token counts. The first shape is
+``query_start_loc``, which is ``[num_reqs + 1]``, so ``reqs`` is that shape
+less one - a step whose ``tokens`` equal its ``reqs`` is decode-only, and one
+with more carries prefill chunks. Taking the shape as the request count reads
+every decode-only step as carrying a prefill token, which is impossible
+(``tokens < reqs``); check for that if the column ever looks wrong again.
+Window averages mix the two kinds in different proportions from point to
+point, which is why they disagree with TPOT; comparing like steps does not.
 
 Columns: step, rank, reqs, tokens, start_us, wall_us (to the next step's
 start on the same rank), busy_us (summed kernel time), gemm_us
@@ -38,8 +41,12 @@ FIELDS = ("step", "rank", "reqs", "tokens", "start_us", "wall_us", "busy_us", "g
 
 
 def _step_counts(shapes: str) -> tuple[int, int]:
+    """(reqs, tokens) from the step kernel's input shapes.
+
+    The first shape is ``query_start_loc``, of length ``num_reqs + 1``.
+    """
     parts = shapes.strip('"').split(";")
-    return int(parts[0]), int(parts[1])
+    return int(parts[0]) - 1, int(parts[1])
 
 
 def rank_steps(path: str) -> list[dict]:
