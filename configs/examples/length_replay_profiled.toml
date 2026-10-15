@@ -1,0 +1,94 @@
+# Where do scattered early stops put their ~20%? Step profile of length-replay.
+#
+# length-replay (20261014-222445) served offset 0 - no skew - with offset 2's
+# per-request output lengths replayed, and it cost +19.55% +-5.64 TPOT against
+# every request held at 85, the same mean (6 of 6 rounds; makespan +8%, TTFT
+# -7%). Requests that ran the full 100 tokens slowed as much as the rest, so the
+# cost is the server's, not the short requests'.
+#
+# The suspicion is admissions. Held at one length, a batch finishes together:
+# one burst of prompt-reading, then steps that only decode. With scattered
+# stops a slot frees almost every step, so a prompt is admitted almost every
+# step and chunked prefill puts prompt tokens into steps that would otherwise
+# only decode. On DeepSeek eager, below-full-batch decode steps and
+# prefill-carrying steps were already the expensive kinds
+# (docs/router-bias-findings.md, step-resolved analysis).
+#
+# This serves the two arms that matter with the profiler on, and
+# scripts/step_profile.py splits each trace into engine steps (batch and token
+# count per step). Read it as:
+#
+#   step mix      share of steps, and of step time, that carry prefill tokens;
+#                 batch-size distribution of decode-only steps
+#   like steps    median wall of matched step kinds (decode-only at full batch,
+#                 prefill-carrying by token bin) across arms
+#
+#   replayed has far more prefill-carrying or below-full-batch steps, like
+#     steps the same length: the mix is the cost, and it is scheduling.
+#   like steps longer in replayed: something per step, e.g. host-side
+#     bookkeeping of per-request state, and step_profile's idle_us says whether
+#     it is the device or the host.
+#
+# Each point is served twice: unprofiled for timings (which also re-measure the
+# +20% in shared rounds) and profiled for the trace. The profiled pass keeps its
+# own request summary, so whether the gap survives profiling is visible.
+#
+# Cost: 1 level x 2 arms x 2 repeats = 4 points, ~10 min each with both passes
+# and trace parsing, ~40-45 min on NPUs 0-3, ~3 NPU-hours. Traces ~25 GB per
+# point on the node. Two repeats so a step-mix difference is seen twice.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/length_replay_profiled.toml'
+#   ./nrun -t replayp 'uv run moe-reliability run configs/examples/length_replay_profiled.toml'
+#   ./nrun 'uv run python scripts/step_profile.py results/<run_dir>'
+
+[experiment]
+type = "forced_imbalance"
+name = "length-replay-profiled"
+description = "Step profile of offset 0 with offset 2's per-request output lengths replayed, against every request held at 85, to find where scattered early stops put their cost."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.6
+enable_eplb = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+ignore_eos = true
+n_warmup_samples = 10
+stream = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 3000
+repeats = 2
+arms = [
+    "held-85: client.max_new_tokens=85",
+    "replayed: client.lengths_from=results/20261014-160027_imbalance_deepseek-v2_npu4_bs512_length-held-100/metrics/imbalance_2_natural.json.gz",
+]
+enable_profiling = true
+separate_profiling_run = true
+trace_start_iteration = 30
+save_request_metrics = true
+
+[output]
+save_figures = false
