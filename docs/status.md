@@ -71,8 +71,11 @@ scattered points, and every request in the server slows. So DeepSeek has no
 measured cost of skew at any length; the router-bias knob degraded the model and
 measured that. Withdrawn: the +22%, the 2.43x threshold, DeepSeek's half of the
 rotating contrast. Mixtral's lengths never moved and its results stand, now the
-only demonstrated cost of skew. `length-replay` tests whether scattered stops
-alone, with no skew, cost the ~20%.
+only demonstrated cost of skew. `length-replay` (18/18) then served offset 2's
+per-request lengths at offset 0, with no skew: **+19.55% +-5.64** TPOT against
+every request held at 85, the same mean (6 of 6 rounds; makespan +8%). The
+scattered stops are the whole cost, and every uniform-length baseline in the
+project is ~20% optimistic about traffic with a spread of answer lengths.
 Detail in [router-bias-findings.md](router-bias-findings.md#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew).
 
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
@@ -189,10 +192,10 @@ touches hardware, which goes through `./nrun`.
 ## Open, in the order I would take them
 
 0. **Why scattered early stops cost ~20% TPOT** (2026-10-15). `length-replay`
-   serves offset 2's per-request lengths at offset 0 with no bias
-   (`client.lengths_from`), against uniform 100 and 85. If that reproduces the
-   cost, step-profile it against uniform 85. Real traffic always has a spread of
-   answer lengths, so this outlives the router-bias question.
+   reproduced the cost with no bias (+19.55% +-5.64 against uniform 85), so it is
+   the length spread, not skew. Next: step-profile replayed against uniform 85.
+   Real traffic always has a spread of answer lengths, so this outlives the
+   router-bias question.
 1. **The pace-setter.** Partly explained 2026-10-06: in DeepSeek decode (eager)
    the pace-setting rank's device idles 130-150 ms of a ~175-230 ms step,
    spread over every kernel transition. It is host-launch-bound. Host CANN API

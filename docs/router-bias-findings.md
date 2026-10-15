@@ -654,13 +654,60 @@ TPOT within each arm, paired by round against that arm's own offset 0:
   scattered completions change how admissions, and so prompt-reading, interleave
   with generation. The engine's 10 s log cannot show it - prefill is present in
   every full-batch interval in every arm - and it is not established.
-  `length-replay` (`configs/examples/length_replay.toml`) tests it with no bias at
-  all: offset 2's per-request lengths replayed at offset 0 (`client.lengths_from`).
+  `length-replay` (below) reproduces the cost with no bias at all.
 - **Offset 1's small cost did not reappear** at 100 tokens in any arm.
 - **So router bias is a flawed instrument on DeepSeek**: past ~3x it degrades the
   model enough that some answers end early, and that, not the hot rank's load,
   is what cost latency. Natural imbalance does not change the text. Mixtral's
   lengths never moved (99.6-100 of 100, 286-291 of 300), so its results stand.
+
+### The scattered stops alone reproduce it, with no skew (2026-10-15)
+
+`length-replay` (`20261014-222445`, `configs/examples/length_replay.toml`) serves
+offset 0 - balanced routing, plugin installed with an all-zero vector - in three
+arms in shared shuffled rounds: **held-100**, **held-85** (every request 85, the
+replayed point's mean) and **replayed** (`client.lengths_from`: each prompt
+generates exactly what it generated at natural offset 2 in `length-held-100`).
+1 level x 3 arms x 6 repeats, 18 of 18 points. The replay is faithful: the same
+length for every prompt in every repeat, mean 85.2, 27.9% of requests under 100,
+p1 11 and p10 32 tokens (source: 28%, 11, 31). Another user's processes on NPUs
+4-5 at every snapshot, never on 0-3, so alike in every arm.
+
+Paired by round (± is the sd of the six paired differences):
+
+| Contrast | TPOT | e2e | Makespan | Output tokens/s |
+|---|---|---|---|---|
+| replayed vs held-85 (same mean, spread vs none) | **+19.55% ±5.64** (+11.8 to +28.5, 6 of 6) | +8.77% ±2.63 | +8.19% ±2.63 | -7.31% ±2.22 |
+| replayed vs held-100 | +20.82% ±5.68 | -2.80% ±3.47 | -3.56% ±3.47 | -11.55% ±3.19 |
+| held-85 vs held-100 (fewer tokens, no spread) | +1.40% ±8.97 | -10.54% ±4.94 | -10.78% ±4.95 | -4.48% ±5.37 |
+
+- **The spread of stops is the whole cost.** With no skew anywhere, replaying
+  offset 2's endings costs +19.6% over a uniform server at the same mean length,
+  against +17.70% ±6.40 for natural over held-84 at offset 2 in
+  `length-held-100`. Skew contributed nothing measurable to DeepSeek's
+  router-bias cost; the knob degraded the model and the degraded model's
+  stopping pattern is what was measured.
+- **It falls on every request again**, as at natural offset 2: replayed requests
+  that ran the full 100 tokens averaged 207.0 ms against 173.9 ms held-100
+  (+9.3 to +23.5 per round). Token-weighted TPOT agrees (207.8 against 209.6 ms
+  per request), and the tail moves more than the mean (p99 +29.1%).
+- **It is a real throughput loss, not TPOT bookkeeping.** The same 255k output
+  tokens take 8% longer to serve; output tokens/s falls 7%.
+- **TTFT falls** (-7.09% ±2.99 against held-85): requests that end early free
+  their slots sooner, so waiting prompts are admitted sooner. That fits the
+  suspicion that the cost is admissions interleaving with decode - every early
+  finish lets a prompt into a running batch - but it does not establish it.
+- **The held-length baselines are optimistic.** Every arm that held length, here
+  and in `fixed-length` and `length-held-100`, served a uniform batch. So did
+  natural traffic at offsets 0-1, because DeepSeek's answers run past the 100-
+  and 300-token caps. Real traffic has a spread of answer lengths, and on this
+  deployment that spread alone is worth ~20% TPOT at 100 tokens. It is the
+  largest single effect on latency the project has measured, and it is not
+  imbalance.
+
+The mechanism is the open question it was before, now without skew in it: a step
+profile of replayed against held-85 (`scripts/step_profile.py`) says whether the
+extra time sits in mixed prefill/decode steps.
 
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
@@ -746,6 +793,8 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261007-202156` rotate-calibration | Rotating bias: per-layer load against the fixed target's |
 | `20261007-203534`, `-214459` rotating-skew-000, -001 | Rotating skew, DeepSeek and Mixtral, 4 offsets x 3 |
 | `20261014-115455` fixed-length | DeepSeek, eplb-fp2 with `ignore_eos`: 3 offsets x EPLB off/on x 4, 300 tokens every request |
+| `20261014-160027` length-held-100 | DeepSeek, 3 offsets x natural / held-100 / held-84 x 4, 100 tokens |
+| `20261014-222445` length-replay | DeepSeek, offset 0 x held-100 / held-85 / offset 2's lengths replayed x 6 |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
@@ -761,10 +810,11 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 ## Open
 
 0. **What about scattered early stops costs ~20% TPOT** (2026-10-15). Held at
-   any length, DeepSeek's skew is free, so items 1 and 6 lapse; what is left is
-   why a server whose requests end at scattered points is slower for every
-   request in it. `length-replay` replays offset 2's lengths at offset 0. If that
-   reproduces the cost, a step profile of it against held-85 is the mechanism.
+   any length, DeepSeek's skew is free, so items 1 and 6 lapse. `length-replay`
+   reproduced the cost with no skew (+19.55% ±5.64 against held-85), so what is
+   left is not an imbalance question: why a server whose requests end at
+   scattered points is slower for every request in it. A step profile of
+   replayed against held-85 is the next measurement.
 1. **Replicate DeepSeek's eager curve between 2.3x and 3.5x.** Two sweeps
    disagree there and neither resolves the shape. The prior question is why the
    same configuration gives a repeat spread of 2-5 ms in one run and 9-14 ms in

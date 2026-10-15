@@ -299,9 +299,12 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   it as "more prompt per generated token". What differs is the spread: 28% of
   requests stop early at scattered points, and the whole server slows (natural
   requests that ran the full 100 were as slow as the rest: 198.8 against 174.3 ms
-  held). Not an averaging artefact (token-weighted 199.2 against 201.1). The
-  mechanism is open; `length-replay` (`client.lengths_from`) replays those
-  lengths with no bias. The graph-mode slope rests on the same shortened point
+  held). Not an averaging artefact (token-weighted 199.2 against 201.1).
+  **The spread alone does it** (2026-10-15, `length-replay` 18/18): offset 2's
+  per-request lengths replayed at offset 0, no skew, cost **+19.55% +-5.64** TPOT
+  against all held at 85 (6 of 6; makespan +8%, TTFT -7%). So uniform-length
+  baselines are ~20% optimistic about real traffic, and the mechanism - not an
+  imbalance question any more - is open (step profile next). The graph-mode slope rests on the same shortened point
   and was not re-run. The 300-token run's +2.5% at 2.48x did not recur at 100.
   Set `client.ignore_eos` on any sweep that compares levels, and check
   `output_tokens_mean`; comparisons across arms *within* a level are safe

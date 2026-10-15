@@ -373,9 +373,10 @@ It is not the *number* of tokens either. Holding every request at 84 - the
 shortened average - costs nothing at the same skew, while letting the model stop
 where it likes costs **+17.7%** more (four of four rounds). At natural length 28%
 of requests stop early at scattered points, and the whole server slows: requests
-that still ran the full 100 tokens were as slow as the rest. Why scattered
-endings cost that much is not established; a run replaying those endings with no
-skew at all is the test.
+that still ran the full 100 tokens were as slow as the rest. Replaying exactly
+those endings on a balanced server, with no skew at all, costs the same:
+**+19.6%** against every request held at the same mean length, in six of six
+rounds. Why scattered endings cost that much is not established.
 
 So on DeepSeek the knob measured a side effect of itself. Natural imbalance does
 not change what the model writes. Mixtral's answers never changed length, so its
@@ -796,10 +797,10 @@ retracted on further measurement.
 **Why scattered early stops slow the whole server.** DeepSeek does not pay for
 skew at either length tested once answer length is held; what cost ~20% was a
 spread of requests ending early, which the router-bias knob causes as a side
-effect. Whether that spread alone, with no skew, reproduces the cost is the
-`length-replay` run; if it does, a step profile against uniform lengths is the
-mechanism. It matters beyond this project: real traffic always has a spread of
-answer lengths.
+effect. That spread alone, replayed with no skew, reproduces the cost (+19.6%
+against uniform lengths at the same mean). A step profile against uniform lengths
+is the next measurement. It matters beyond this project: real traffic always has
+a spread of answer lengths, so every uniform-length benchmark here is optimistic.
 
 **The monitor's own cost on the device.** We can price the whole pipeline from one
 number — the cost of incrementing a counter per routing decision — and that number
