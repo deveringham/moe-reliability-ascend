@@ -24,7 +24,7 @@ from typing import Any, Callable, Sequence
 from moe_reliability_results import schema
 from moe_reliability_results.metrics import summarize_requests, trace_scalars
 
-from .. import eplb_gate
+from .. import eplb_gate, expert_counter
 from ..config import ExperimentConfig
 from ..environment import contention_warning, host_snapshot
 from ..logs import log
@@ -113,6 +113,37 @@ def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
     return (cfg.server.eplb_heat_collection_interval
             + cfg.server.eplb_algorithm_execution_interval
             + n_moe_layers)
+
+
+def counting_config(cfg: ExperimentConfig, out: str | None) -> expert_counter.CountConfig | None:
+    """The screen's counting knobs, or None when the arm does not count."""
+    if not cfg.server.count_experts:
+        return None
+    return expert_counter.CountConfig(layers=cfg.server.count_layers,
+                                      token_fraction=cfg.server.count_token_fraction,
+                                      window_steps=cfg.server.count_window_steps,
+                                      out=out)
+
+
+def counting_summary(path: Path) -> dict | None:
+    """What the counting hook actually wrote: windows, layers drawn, tokens counted.
+
+    A counting arm that wrote nothing measured nothing, the same way an EPLB arm
+    that applied nothing did, so this is read back rather than assumed.
+    """
+    if not path.exists():
+        return None
+    windows = 0
+    layers: set[int] = set()
+    counted = 0
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        windows += 1
+        layers.update(record.get("layers") or ())
+        counted += sum(sum(row) for row in record.get("counts") or ())
+    return {"windows": windows, "distinct_layers": len(layers), "assignments_counted": counted}
 
 
 def replay_lengths(path: str | Path, prompts: Sequence[Any]) -> list[int]:
@@ -311,6 +342,11 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         eplb_path = str(ctx.abspath(eplb_rel)) if eplb_rel else None
         # Per-point server environment, e.g. an injected router bias.
         server_env = dict(p.get("server_env") or {})
+        # The screen's counting runs inside the server, so its output is a server
+        # artefact like the EPLB map, not something the client can see.
+        counts_rel = f"{label}_expert_counts.jsonl" if cfg.server.count_experts else None
+        if counts_rel:
+            server_env.update(expert_counter.server_env(counting_config(cfg, str(ctx.abspath(counts_rel)))))
         # Arms the node patch for this point only, which is what lets an EPLB-on
         # and an EPLB-gated arm share one run's shuffled rounds.
         server_env.update(eplb_gate.server_env(cfg.server.eplb_min_imbalance,
@@ -354,6 +390,15 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
             # The *planned* placement: in record mode vllm-ascend never applies it
             # (see server.eplb_record_map), so it is not the layout that served.
             fields["eplb_expert_map"] = eplb_rel if ctx.abspath(eplb_rel).exists() else None
+        if counts_rel:
+            summary = counting_summary(ctx.abspath(counts_rel))
+            fields["expert_counts"] = counts_rel if summary else None
+            fields["counting_summary"] = summary
+            if summary:
+                log(f"{label}: counted {summary['assignments_counted']} expert assignments over "
+                    f"{summary['windows']} windows, {summary['distinct_layers']} distinct layers drawn")
+            else:
+                log(f"{label}: warning: counting was on but no counts were written - the hook did not run")
         if cfg.server.enable_eplb and log_offset is not None:
             with open(log_path, "rb") as f:
                 f.seek(log_offset)

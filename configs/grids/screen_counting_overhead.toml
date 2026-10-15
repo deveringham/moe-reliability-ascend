@@ -1,0 +1,95 @@
+# What does the screen itself cost, counted the way a deployment would count it?
+#
+#   2 models x 3 arms x 5 repeats = 30 points, ~4 min each, ~2.0 NPU-hours
+#
+# screen-overhead2 (2026-10-12) measured the *ceiling*: --enable-return-routed-experts
+# returns every token's expert ids in the response body, about 41k ids per request
+# on DeepSeek, base64 through JSON and parsed by the client. It read +5.4% e2e on
+# Mixtral against a 0.64% off-arm spread, and failed to measure DeepSeek at all
+# (-1.45% +-7.71, from one off-arm point 15% slower than its three siblings).
+#
+# That ceiling cannot be scaled down to the screen. The screen does not need the
+# trace, only per-expert counts over a window, so it is a different mechanism and
+# not a fraction of the same one: no per-request payload, no serialisation, no
+# client-side parse, and one rank counting instead of four returning. Multiplying
+# 5.4% by the 1.5% sampling fraction would be wrong in both directions - it
+# over-counts transport the screen never does and omits the per-window copy-out
+# it does.
+#
+# So this measures the real thing (server.count_experts, src/moe_reliability/expert_counter.py):
+# 4 MoE layers redrawn every window, every tenth of their tokens, bincounted into
+# a device-side per-layer table, copied out once per window. The per-call path is
+# one bincount and one add with no device-to-host copy and no sync.
+#
+# Three arms in one run, sharing rounds, so the two instruments are measured
+# against the same baseline and against each other with nothing drifting between
+# them:
+#
+#   count-off    nothing collected - the baseline
+#   count-on     the screen as calibrated
+#   capture-on   the ceiling again, which doubles as the bridge to
+#                screen-overhead2: if it reproduces Mixtral's +5.4%, this run is
+#                comparable to that one and count-on is interpretable next to it
+#
+# Workload, concurrency and token counts are identical to screen-overhead2 for
+# that reason. Repeats go from 4 to 5 because DeepSeek's off arm has a heavy tail
+# at this concurrency.
+#
+# Declared before the run, so it is not a choice made after seeing the numbers:
+# the headline is the MEDIAN paired difference per model, with the mean reported
+# beside it. On DeepSeek one off-arm point in four was 15% slow for no reason
+# visible in host_before - no foreign NPU process, lower loadavg than the fast
+# points - and a mean over 5 points cannot survive one of those.
+#
+# What this still does not answer: whether the cost holds under saturation.
+# DeepSeek's engine queue sits empty 83-90% of the time in this prefill-heavy
+# regime, so host-side work can hide in the idle time; that is the likeliest
+# reason capture cost Mixtral 5.4% and DeepSeek nothing measurable. If counting
+# reads near zero on both models here, the next question is a saturated one, not
+# a sampled one.
+#
+# server.count_window_steps = 10: at 512-way concurrency the screen's 8-request
+# window is a fraction of one engine step, so a literal window would mean a
+# copy-out every step. Ten steps is about 50 requests' worth of decode here,
+# which is the same order as the calibrated window, and it keeps the copy-out
+# from being measured at an unrealistic cadence in either direction.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/screen_counting_overhead.toml --dry-run'
+#   ./nrun -t counting 'uv run moe-reliability grid configs/grids/screen_counting_overhead.toml'
+
+[grid]
+name = "screen-counting"
+base = "../examples/router_bias_sweep.toml"
+share_workloads = true
+
+[set]
+"client.max_new_tokens" = 100
+"server.batch_size" = 512
+"server.max_num_batched_tokens" = 4096
+"server.gpu_memory_utilization" = 0.85
+"benchmark.repeats" = 5
+# Unstreamed in every arm: capture cannot stream, so neither may its controls.
+# TTFT and TPOT are then unavailable; e2e latency and makespan are the measures.
+"client.stream" = false
+"benchmark.arms" = [
+    "count-off",
+    "count-on: server.count_experts=true",
+    "capture-on: benchmark.capture_experts=true",
+]
+# The calibrated screen's own sampling: 4 of 26 layers, a tenth of their tokens.
+"server.count_layers" = 4
+"server.count_token_fraction" = 0.1
+"server.count_window_steps" = 10
+"benchmark.n_samples" = 2000
+# One level, unbiased: the question is what the instrument costs, not what
+# imbalance costs. The plugin stays installed so this is the same serving path
+# every calibration ran on.
+"imbalance.imbalance_levels" = [0]
+"imbalance.bias_plugin_at_zero" = true
+"imbalance.validate_imbalance" = false
+
+[matrix]
+"model.model_id,model.model_name,model.probe" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", "deepseek"],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", "mistral"],
+]

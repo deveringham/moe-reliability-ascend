@@ -1,0 +1,139 @@
+# The gating argument, closed on one model in one regime.
+#
+# Three results have to be compared to decide whether screening before EPLB acts
+# is worth it, and until now they did not live together:
+#
+#   Q1  EPLB's false positive, +4.73% TPOT at 1.73x     eplb-fp2    DeepSeek
+#   Q2  the gate: shut on 0-1% of windows there          offline     DeepSeek
+#   Q3  the screen's own cost, +0.28% +-0.71             screen-counting  MIXTRAL
+#
+# So "the screen costs less than the false positive it averts" subtracted a
+# Mixtral number from a DeepSeek one. On DeepSeek, Q3 was a non-measurement: the
+# baseline spread 3.75% and the 95% interval ran [-11%, +12%], which excludes
+# nothing. The positive control settles that it was blindness rather than a null -
+# full capture, which costs a clear +6.38% on Mixtral, read +0.84% +-5.33 there.
+#
+# This run puts all three on DeepSeek, in one regime, in one set of shuffled
+# rounds.
+#
+# Why this regime. screen-counting's noise was not the engine queue: it sat empty
+# 40% of samples against eplb-fp2's 50%, so occupancy is not what differed. Point
+# *length* is - 70 s makespan against 144 s - and the shorter window averages less.
+# So the client and server settings here are eplb-fp2's unchanged, which is also
+# what makes Q1's +4.73% directly comparable rather than merely nearby.
+#
+# One change from eplb-fp2: client.stream = false, in every arm. Capture cannot
+# stream, so nothing compared against it may either, or the cost of streaming
+# reads as capture overhead (screen-overhead-000..002 died of exactly that). TPOT
+# is unavailable without streaming, so the measure is end-to-end latency and
+# makespan. eplb-fp2 read +4.84% e2e against +4.73% TPOT at 1.73x, so the two
+# units agree closely on the quantity that matters here.
+#
+# Four arms, shuffled into shared rounds, so every pair differs in one thing:
+#
+#   base      nothing collected, EPLB off - the baseline all three are read against
+#   screen    the screen as calibrated: 4 random layers redrawn per window, a
+#             tenth of their tokens, bincounted on device (server.count_experts)
+#   capture   every token's expert ids returned in the response body. The ceiling,
+#             and the positive control: if this run cannot see capture, it cannot
+#             see anything, and the screen's reading means nothing.
+#   eplb      EPLB applying placements, which at these two levels has nothing to win
+#
+# Two levels, both free:
+#
+#   0     1.09x busiest rank, the model's own routing - the purest false positive
+#   0.5   1.73x, where eplb-fp2 put EPLB's cost at its worst, +4.73%
+#
+# Level 2 (3.63x, the only level that costs latency) is not repeated here: eplb-fp2
+# already measured it on this model at +1.07%, and it would take a third of the
+# NPU time to re-confirm a result that is not part of the gating comparison.
+#
+# What closes the argument: capture resolves clearly (the control works), and the
+# screen's interval comes in under the false positive measured in the same rounds.
+# With a baseline spreading ~2% and 5 repeats the standard error is ~0.9%, so the
+# screen should be bounded near +-2.5% - under +4.73%, though not as tightly as
+# Mixtral's +-1.16%.
+#
+# Validation is on, so the gate can be rescored on this regime's own traffic
+# rather than carried over from eplb-fp-000's.
+#
+# Cost: 2 levels x 4 arms x 5 repeats = 40 points at ~6 min = ~4.0 NPU-hours on
+# NPUs 0-3, plus ~10 min of validation.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/gate_closure.toml'
+#   ./nrun -t gate 'uv run moe-reliability run configs/examples/gate_closure.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "gate-closure"
+description = "EPLB, the screen and full capture against one baseline, on DeepSeek, in eplb-fp2's regime."
+seed = 47
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; the eplb arm turns it on. A cycle is 50 + 50 + 26 = 126 forward
+# iterations, ~20 s at this load.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only.
+eplb_record_map = false
+# Off as written; the screen arm turns it on. These are the calibrated screen's
+# own sampling parameters, and the realised fraction is read back per point.
+count_experts = false
+count_layers = 4
+count_token_fraction = 0.1
+# ~10 steps is about 50 requests' worth of decode at this concurrency, the same
+# order as the calibrated 8-request window, which at 512-way batching is a
+# fraction of one engine step.
+count_window_steps = 10
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# Capture is never streamed, so its controls must not be either.
+stream = false
+# Served before every point, in every arm: long enough for EPLB to converge
+# (~4 cycles) so the eplb arm measures its steady state, not the transient.
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+# Experts 0-15 are rank 0's under contiguous placement: a skew EPLB cannot
+# invalidate by moving experts, unlike a rank target.
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5]
+bias_plugin_at_zero = true
+# On, so the gate is scored on this regime's traffic rather than eplb-fp-000's.
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 5
+arms = [
+    "base",
+    "screen: server.count_experts=true",
+    "capture: benchmark.capture_experts=true",
+    "eplb: server.enable_eplb=true",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

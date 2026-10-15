@@ -152,6 +152,22 @@ _SERVER = Section("server", "vLLM server deployment.", (
            "balance, not whether the imbalance cost anything, and at every level measured in eplb-fp2 "
            "(1.09x to 3.63x) the plan improved EPLB's own metric by 9-69%, so it reads 'changed' even at "
            "the pure false positive. Ignored when eplb_min_imbalance is set. Needs the same node patch."),
+    Option("count_experts", "bool", False, "Run the detection screen's counting inside the server: a "
+           "random sample of MoE layers, redrawn every window, bincounted over a strided sample of their "
+           "tokens into a device-side per-layer table, copied out once per window. This is what a "
+           "deployment would pay to screen, and it is not benchmark.capture_experts scaled down - capture "
+           "returns every token's expert ids in the response body, which a screen never needs. Only one "
+           "rank counts, since expert selection is replicated."),
+    Option("count_layers", "int", 4, "MoE layers counted per window by server.count_experts. The "
+           "calibrated screen uses 4; they are redrawn each window, because evenly spaced layers are "
+           "blind to a skew confined to a few (docs/detection-findings.md)."),
+    Option("count_token_fraction", "float", 0.1, "Fraction of a counted layer's tokens to count, applied "
+           "as a stride. The calibrated screen uses 0.1, which with count_layers over 26 layers is about "
+           "1.5% of the routing."),
+    Option("count_window_steps", "int", 200, "Engine steps per counting window: how often the layer sample "
+           "is redrawn and the counts copied out. The screen's window is 8 requests, which under "
+           "continuous batching is not a fixed number of steps, so this sets the emit cadence rather than "
+           "a window the detector would score."),
 ))
 
 _CLIENT = Section("client", "Load generation against the server.", (
