@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import types
 
@@ -271,3 +272,63 @@ def test_positional_logits_are_refused(fake_ascend):
             wrapped(None, torch.zeros(1, 2), 1)
     finally:
         router_bias._current_layer[0] = None
+
+
+def test_a_window_can_close_on_evidence_rather_than_steps():
+    """D9: a fixed-step window holds whatever evidence those steps carried.
+
+    In detection-delay a window spanned 128 to 14240 counted assignments inside
+    one point, and a 128-assignment window reads 1.34-2.96x on benign traffic -
+    enough to put that run's alarm at 2.13x and leave the screen unable to fire.
+    With a target set the window closes on assignments instead, and one closed
+    by the step ceiling is marked thin rather than silently scored.
+    """
+    torch = pytest.importorskip("torch")
+    from moe_reliability import expert_counter as EC
+
+    cfg = EC.CountConfig(layers=1, token_fraction=1.0, window_steps=100, min_assignments=40, out=None)
+    counter = EC._Counter(cfg)
+    counter._active = True
+    counter.known = {0}
+    counter.redraw()
+
+    # Ten assignments a step: the window should close on the fourth, not the 100th.
+    ids = torch.zeros((5, 2), dtype=torch.int64)
+    for _ in range(3):
+        counter.observe(0, ids, 8)
+        counter.on_step()
+    assert counter.windows == 0, "closed before it had the evidence"
+    counter.observe(0, ids, 8)
+    counter.on_step()
+    assert counter.windows == 1
+    assert counter.assignments == 0, "the new window starts empty"
+
+    # A quiet server still reports, by the ceiling, and says the window is thin.
+    import json as _json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "counts.jsonl")
+        quiet = EC.CountConfig(layers=1, token_fraction=1.0, window_steps=3, min_assignments=1000, out=out)
+        counter = EC._Counter(quiet)
+        counter._active = True
+        counter.known = {0}
+        counter.redraw()
+        for _ in range(3):
+            counter.observe(0, ids, 8)
+            counter.on_step()
+        assert counter.windows == 1
+        record = _json.loads(open(out).readline())
+        assert record["thin"] is True, "a window closed by the ceiling must say so"
+        assert record["assignments"] == 30
+        assert record["steps"] == 3
+
+
+def test_min_assignments_travels_through_the_environment():
+    from moe_reliability import expert_counter as EC
+
+    cfg = EC.CountConfig(layers=4, token_fraction=0.1, window_steps=8, min_assignments=2000, out="x.jsonl")
+    env = EC.server_env(cfg)
+    assert EC.parse_env(env[EC.ENV_VAR]).min_assignments == 2000
+    # Absent means off, so an older run's environment still parses to the old behaviour.
+    assert EC.parse_env('{"layers": 4, "token_fraction": 0.1, "window_steps": 200}').min_assignments == 0

@@ -122,6 +122,7 @@ def counting_config(cfg: ExperimentConfig, out: str | None) -> expert_counter.Co
     return expert_counter.CountConfig(layers=cfg.server.count_layers,
                                       token_fraction=cfg.server.count_token_fraction,
                                       window_steps=cfg.server.count_window_steps,
+                                      min_assignments=cfg.server.count_min_assignments,
                                       out=out)
 
 

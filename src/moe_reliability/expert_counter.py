@@ -62,6 +62,16 @@ class CountConfig:
     layers: int = 4
     token_fraction: float = 0.1
     window_steps: int = 200
+    #: Counted assignments a window should hold before it closes. 0 keeps the
+    #: pre-2026-10-16 behaviour, where a window was a fixed number of steps and
+    #: so held whatever evidence those steps happened to carry: 128 to 14240
+    #: within one point of detection-delay, because the batch is tiny while the
+    #: server fills and the prefill/decode mix moves afterwards. A thin window's
+    #: busiest-rank reading is inflated by the maximum over noisy shares - a
+    #: 128-assignment window reads 1.34-2.96x on benign traffic - which put that
+    #: run's alarm at 2.13x and left the screen unable to fire at all. With a
+    #: target set, ``window_steps`` becomes the ceiling rather than the period.
+    min_assignments: int = 0
     out: str | None = None
 
     def __post_init__(self) -> None:
@@ -71,6 +81,8 @@ class CountConfig:
             raise ValueError(f"detection counting: token_fraction must be in (0, 1], got {self.token_fraction}")
         if self.window_steps < 1:
             raise ValueError(f"detection counting: window_steps must be at least 1, got {self.window_steps}")
+        if self.min_assignments < 0:
+            raise ValueError(f"detection counting: min_assignments must be >= 0, got {self.min_assignments}")
 
     @property
     def stride(self) -> int:
@@ -84,6 +96,8 @@ def server_env(cfg: CountConfig | None) -> dict[str, str]:
         return {}
     payload: dict = {"layers": cfg.layers, "token_fraction": cfg.token_fraction,
                      "window_steps": cfg.window_steps}
+    if cfg.min_assignments:
+        payload["min_assignments"] = cfg.min_assignments
     if cfg.out:
         payload["out"] = cfg.out
     return {ENV_VAR: json.dumps(payload)}
@@ -94,6 +108,7 @@ def parse_env(raw: str) -> CountConfig:
     return CountConfig(layers=int(value.get("layers", 4)),
                        token_fraction=float(value.get("token_fraction", 0.1)),
                        window_steps=int(value.get("window_steps", 200)),
+                       min_assignments=int(value.get("min_assignments", 0)),
                        out=value.get("out"))
 
 
@@ -112,6 +127,10 @@ class _Counter:
         self.step = 0
         self.last_layer = -1
         self.windows = 0
+        #: Host-side, from tensor shapes only: counting assignments must not cost
+        #: a device sync, which is the whole point of copying out once a window.
+        self.assignments = 0
+        self.window_steps_elapsed = 0
         self._active: bool | None = None
 
     def active(self) -> bool:
@@ -139,15 +158,31 @@ class _Counter:
             counts = self.counts[rows].cpu().tolist()
             if self.cfg.out:
                 record = {"window": self.windows, "step": self.step,
-                          "layers": rows, "counts": counts}
+                          "layers": rows, "counts": counts,
+                          # What the window actually held, so a reader never has
+                          # to infer it: a thin window's reading is noise.
+                          "assignments": self.assignments,
+                          "steps": self.window_steps_elapsed,
+                          "thin": bool(self.cfg.min_assignments
+                                       and self.assignments < self.cfg.min_assignments)}
                 with open(self.cfg.out, "a") as f:
                     f.write(json.dumps(record) + "\n")
             self.counts.zero_()
+        self.assignments = 0
+        self.window_steps_elapsed = 0
         self.redraw()
 
     def on_step(self) -> None:
         self.step += 1
-        if self.step % self.cfg.window_steps == 0:
+        self.window_steps_elapsed += 1
+        if self.cfg.min_assignments:
+            # Close on evidence, with the step count as a ceiling so a quiet
+            # server still reports; such a window is marked thin rather than
+            # silently scored.
+            if (self.assignments >= self.cfg.min_assignments
+                    or self.window_steps_elapsed >= self.cfg.window_steps):
+                self.flush()
+        elif self.step % self.cfg.window_steps == 0:
             self.flush()
 
     def observe(self, layer: int, topk_ids, n_experts: int) -> None:
@@ -161,6 +196,7 @@ class _Counter:
                 counts[: self.counts.shape[0]] = self.counts
             self.counts = counts
         ids = topk_ids[:: self.cfg.stride].reshape(-1)
+        self.assignments += int(ids.numel())  # shape metadata, not a device read
         self.counts[layer] += torch.bincount(ids.to(torch.int64), minlength=n_experts).to(torch.int32)
 
 

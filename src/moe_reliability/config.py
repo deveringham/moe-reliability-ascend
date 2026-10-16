@@ -164,6 +164,14 @@ _SERVER = Section("server", "vLLM server deployment.", (
     Option("count_token_fraction", "float", 0.1, "Fraction of a counted layer's tokens to count, applied "
            "as a stride. The calibrated screen uses 0.1, which with count_layers over 26 layers is about "
            "1.5% of the routing."),
+    Option("count_min_assignments", "int", 0, "Counted assignments a window should hold before it closes; "
+           "0 keeps the fixed-step window every run before 2026-10-16 used. A window of fixed steps holds "
+           "whatever evidence those steps carried - 128 to 14240 within one point of detection-delay, tiny "
+           "while the server fills and then moving with the prefill/decode mix - and a thin window's "
+           "busiest-rank reading is inflated by the maximum over noisy shares: 128 assignments read "
+           "1.34-2.96x on benign traffic, which put that run's alarm at 2.13x and left the screen unable to "
+           "fire at all. With a target set, count_window_steps becomes the ceiling rather than the period, "
+           "and a window closed by that ceiling is recorded as thin."),
     Option("count_window_steps", "int", 200, "Engine steps per counting window: how often the layer sample "
            "is redrawn and the counts copied out. The screen's window is 8 requests, which under "
            "continuous batching is not a fixed number of steps, so this sets the emit cadence rather than "
