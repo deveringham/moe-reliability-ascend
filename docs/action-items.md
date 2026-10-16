@@ -152,6 +152,13 @@ Three demonstrated staleness axes - model, traffic mix, output length - make
 the deployment's own observed benign distribution rather than an absolute load.
 The FPR and corpus work provides the material; design is desk work. The
 cost-aware alternative needs E3 first.
+*Caution found 2026-10-16 (B2):* a relative bar gets **more** prone to corpus
+shift as the window lengthens, not less - benign p99 tightens while a corpus's
+true offset does not, so a self-calibrated bar fires on 53.8% of Dolly windows
+at 32 requests where the absolute bar fires on none. Since a change of traffic
+has no latency cost attached, the adaptive form has to be calibrated over
+traffic that already contains the variation it will meet, which is a much
+stronger requirement than "calibrate on your own traffic".
 
 **P3. The target is unknown.**
 `eplb_updator.py` and `policy_factory.py` are marked for removal in favour of

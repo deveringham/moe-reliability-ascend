@@ -133,73 +133,85 @@ generated tokens pooled, busiest rank per MoE layer averaged over layers:
 
 ## B2. A long real stream, scored as it was served
 
-`natural-long` (2026-10-16, DeepSeek, 12000 unbiased requests over MMLU, Dolly,
-UltraChat and German MMMLU, 3000 each; `scripts/natural_stream.py`,
-`docs/figures/tables/natural_stream.csv`). Tumbling windows in the order the
-requests were served, scored against the alarm this model was calibrated to
-(1.245x at 1% per window), rather than bootstrapped from the pool and scored
-against themselves. 1200-1600 requests cannot contain a false alarm at the rate
-the screen is calibrated to, so this is the first measurement of one.
+`natural-long` (2026-10-16): 12000 unbiased requests over MMLU, Dolly,
+UltraChat and German MMMLU, 3000 each, on both models. Tumbling windows in the
+order the requests were served, not bootstrapped from the pool
+(`scripts/natural_stream.py`, `docs/figures/tables/natural_stream.csv`).
+1200-1600 requests cannot contain a false alarm at the rate the screen is
+calibrated to, so this is the first measurement of one rather than a simulation.
 
-| Stream | Counted | Alarming windows | k=1 | k=2 | Requests per k=2 alarm |
+**Two bars, and they are not the same question.** The *stored* alarm is the
+deployable one in `docs/calibrations`, placed a margin of 0.5 from the benign
+ceiling to the impact threshold: **1.349x** on Mixtral (ceiling 1.278x, onset
+1.42x) and **1.788x** on DeepSeek (ceiling 1.142x, onset 2.434x). The *self*
+alarm is the 99th percentile of the same capture's own mixed stream at the same
+sampling - what a deployment gets if it calibrates on representative traffic and
+then serves one corpus. The 1% quantile this document's other tables use is a
+third bar, and on DeepSeek it sits half a turn of load below the deployable one.
+
+**On DeepSeek nothing fires at the deployable alarm.** The highest window
+reading anywhere in its 12000 requests, at any sampling, is 1.435x against a
+1.788x alarm. That is headroom, not a quiet screen: its onset was 2.434x, and
+since that onset is withdrawn (2026-10-14) the alarm derived from it has no
+valid basis either. Against the *self* bar its Dolly stream fires 12.8% of
+windows at 4 x 10% and 21.3% at full counting.
+
+**On Mixtral the two bars nearly coincide - 1.349x stored, 1.367x self at
+4 x 10% - and Dolly fires at both.**
+
+| Stream | Counted | Window p99 | Fire % at 1.349x | Confirmed k=2 | Requests per alarm |
 |---|---|---|---|---|---|
-| mixed | all | 0.0% | 0 | 0 | - |
-| mixed | 4 x 10% | 1.0% | 15 | 0 | - |
-| mixed | 8 x 5% | 2.1% | 29 | 2 | 6000 |
-| **dolly** | all | 1.6% | 6 | 0 | - |
-| **dolly** | **4 x 10%** | **12.5%** | 43 | 3 | **1000** |
-| **dolly** | 8 x 5% | 20.8% | 64 | 14 | 214 |
-| mmlu | 4 x 10% | 0.0% | 0 | 0 | - |
-| mmmlu:DE_DE | 4 x 10% | 4.8% | 16 | 2 | 1500 |
-| ultrachat | 4 x 10% | 1.1% | 4 | 0 | - |
+| mixed | all layers | 1.215x | 0.0% | 0 | - |
+| mixed | 4 x 10% | 1.367x | 1.6% | 1 | 12000 |
+| mixed | 8 x 5% | 1.403x | 4.5% | 5 | 2400 |
+| **dolly** | **all layers** | **1.314x** | **0.3%** | **0** | **-** |
+| **dolly** | **4 x 10%** | **1.548x** | **16.3%** | **8** | **375** |
+| dolly | 8 x 5% | 1.657x | 28.5% | 21 | 143 |
+| mmlu | 8 x 5% | 1.385x | 4.5% | 3 | 1000 |
+| ultrachat | 8 x 5% | 1.396x | 3.2% | 1 | 3000 |
+| mmmlu:DE_DE | any | <=1.343x | 0.0-0.8% | 0 | - |
 
-**The screen fires on traffic nobody skewed.** A homogeneous Dolly stream trips
-12.5% of 8-request windows at the calibrated sampling and confirms three times
-in 3000 requests - one per 1000 - with nothing injected and no EPLB running.
-This is the first positive in this project that is not our own injector, and for
-a gate it is a false positive by construction: nothing is skewed, and DeepSeek
-has no impact threshold to call it costly against.
+**Corpus shift alone produces confirmed alarms at the deployed setting.** Dolly
+confirms every 375 requests at the sampling the calibration itself specifies,
+against a calibration whose own false-alarm rate was 0.0 - and its *true* window
+tail, counted in full, is 1.314x, below both the 1.349x alarm and the 1.42x
+onset. So the traffic never reaches the load at which skew costs anything, and
+the screen fires on it anyway. This is "the screen measures skew, not impact"
+demonstrated on an ordinary English chat corpus instead of an injected level.
 
-*Qualified by B3 (2026-10-16): this capture generates one token per request, so
-these are alarms on **prompt** routing. The same corpora with 100 generated
-tokens in the window alarm on nothing, because prompt and decode skew cancel.
-The effect is real and reproduced - Dolly reads p99 1.312x prompt-only in
-`natural-decode` too - but on this evidence it is a property of prefill routing
-rather than a false alarm a deployment would see at that generation length.*
+**What crosses the bar is sampling inflation, and an alarm only absorbs it for
+the traffic it was calibrated on.** Counted in full, Dolly fires 0.3% of windows
+and confirms nothing; at 4 x 10% it fires 16.3%. The calibration's own benign
+ceiling already included that inflation for *its* traffic, but Dolly's windows
+are heavier-tailed, so the same sampling inflates them further and carries them
+over a threshold their true load never approaches.
 
-**Pooled load does not predict it; the tail does.** Dolly has the *lowest*
-pooled load of the four corpora (1.086x) and alarms most; German MMMLU has the
-highest (1.134x) and alarms a quarter as often. What separates them is the
-window tail - Dolly's p99 is 1.377x against DE_DE's 1.275x. So the corpus table
-in `corpus.csv`, which is pooled, ranks the risk wrongly: a corpus is dangerous
-to a screen when its windows are heavy-tailed, not when its average is high.
+**Window length and the choice of bar pull in opposite directions.** Going from
+8 requests to 32 silences the absolute bar completely - 0.0% on every stream,
+Dolly included - and takes the self-calibrated bar the other way, to **53.8%**
+of Dolly windows and 11 confirmations, because mixed traffic's p99 tightens to
+1.147x while Dolly's stays at 1.190x. Reducing sampling noise quiets an absolute
+threshold and sharpens a relative one: the corpus's real offset does not shrink
+while the noise around it does. **Any self-calibrating gate inherits this**, and
+it is the main caution on that design (P2 in `action-items.md`): defined against
+its own deployment's benign distribution, it becomes *more* prone to flagging a
+change of traffic the longer its window, and a change of traffic has no cost
+attached.
 
-**On mixed traffic the k = 2 rule is better than simulated.** Single-window
-trips arrive about as often as predicted (one per 800 requests against a
-simulated 324-656), but they do not pair up: zero confirmed alarms in 1500
-windows, where the simulation said one per 1200-2544 requests. Consecutive real
-windows are evidently less correlated than the bootstrap's are - plausibly
-because resampling a finite pool lets the same unusual requests recur in nearby
-windows - but that is a hypothesis, not a measurement.
-
-**A 32-request window silences everything.** 0.0% alarming on every stream and
-every sampling, Dolly included. Window length remains the dominant knob, and the
-corpus problem is a short-window problem.
-
-**Carrying an alarm across sampling settings is the error C6 predicted.** The
-1.245x alarm was calibrated at 4 layers x 10% of tokens; applied to 8 x 5%
-readings of the same traffic it alarms twice as often (mixed 1.0% to 2.1%, Dolly
-12.5% to 20.8%), because the thinner split reads higher. Self-calibrated on this
-run the two alarms are 1.2425x and 1.2611x. The 8 x 5% split is still the better
-one - C6 measured it against a self-calibrated alarm - but it is only better
-after recalibration, and this is what skipping that costs.
+**The k = 2 rule is better than its simulation on mixed traffic.** One confirmed
+alarm per 12000 requests on Mixtral at 4 x 10%, and none at all on DeepSeek,
+where the simulation said one per 1200-2544 requests. Single windows trip at
+roughly the simulated rate; they do not pair up. Consecutive real windows are
+evidently less correlated than the bootstrap's - plausibly because resampling a
+finite pool lets the same unusual requests recur nearby - but that is a
+hypothesis, not a measurement.
 
 Two caveats. With 700 requests in flight the recorded order is completion order,
-so a window here is eight requests that *finished* together, which is neither
+so a window of 8 is eight requests that *finished* together, which is neither
 the eight that arrived together nor the bootstrap's eight drawn at random. And
-the carried-over alarm was calibrated on six-family traffic, so part of the gap
-between streams is the traffic the alarm came from rather than the traffic it is
-scoring.
+both captures generate one token per request, so every number above describes
+**prompt** routing - see B3, which is why these alarms are not yet alarms a
+deployment would see.
 
 ## B3. Prompt and decode are two independent skews, and pooling them hides both
 

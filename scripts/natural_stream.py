@@ -45,11 +45,31 @@ from moe_reliability_results import detection as D  # noqa: E402
 
 N_RANKS = 4
 MODELS = {"deepseek-v2": 64, "mixtral": 8}
-#: The alarm each model was calibrated to, at a 1% per-window false-alarm rate,
-#: from docs/calibrations. The impact thresholds are deliberately not used here:
-#: DeepSeek's was withdrawn on 2026-10-14, and nothing in this run measures
-#: latency, so no level here can be called costly or free.
-CALIBRATED_ALARM = {"mixtral": 1.339, "deepseek-v2": 1.245}
+#: The deployable alarm each model was calibrated to, read from the stored
+#: calibration rather than retyped. It is *not* a false-alarm quantile: the
+#: calibration places it a margin of the way from the benign ceiling to the
+#: impact threshold (0.5, i.e. halfway), which is why DeepSeek's sits so far
+#: above its benign traffic - 1.142x ceiling against a 2.434x onset - while
+#: Mixtral's 1.349x nearly touches its 1.42x onset. Scoring against the 1%
+#: quantile instead, as detection-findings' tables do, is a different and much
+#: lower bar, and on DeepSeek the two disagree by 0.5x.
+CALIBRATION = {
+    "mixtral": "docs/calibrations/20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep.json",
+    "deepseek-v2": "docs/calibrations/20261006-155755_imbalance_deepseek-v2_npu4_bs512_rbias-controlled-000.json",
+}
+#: Mixtral's impact threshold, for context only. DeepSeek's was withdrawn on
+#: 2026-10-14, so no DeepSeek row here may be called costly or free.
+IMPACT = {"mixtral": 1.42, "deepseek-v2": None}
+
+
+def stored_alarm(model):
+    """(alarm level, how it was placed) from the model's own calibration file."""
+    path = CALIBRATION.get(model)
+    if not path or not os.path.exists(path):
+        return None, None
+    data = json.load(open(path))
+    alarm = data.get("alarm") or {}
+    return alarm.get("level"), f"margin {alarm.get('margin')} of ceiling->onset"
 #: (layers, token_fraction): full counting, the screen as calibrated, and the
 #: split detection_params.py found better at the same cost on 2026-10-16.
 SAMPLING = ((None, 1.0), (4, 0.1), (8, 0.05))
@@ -120,14 +140,23 @@ def confirmed_alarms(flags, consecutive):
     return out
 
 
-def score(counts, label, model, window, layers, token_fraction, tokens="prompt"):
+def score(counts, label, model, window, layers, token_fraction, tokens="prompt",
+          alarm=None, alarm_source="stored"):
+    """One stream at one sampling, against one alarm.
+
+    ``alarm`` is passed in rather than looked up, because the two alarms worth
+    scoring are not interchangeable: the stored one is the deployable threshold
+    and the self-calibrated one is what a deployment would get if it calibrated
+    on its own mixed traffic and then served a single corpus - which is the
+    failure this run is looking for.
+    """
     loads = stream_loads(counts, window, layers, token_fraction)
-    if not len(loads):
+    if not len(loads) or alarm is None:
         return None
-    alarm = CALIBRATED_ALARM[model]
     flags = loads >= alarm
     requests = len(loads) * window
     row = {"model": model, "stream": label, "tokens": tokens,
+           "alarm_source": alarm_source,
            "requests": requests, "windows": len(loads),
            "window": window, "layers": layers or counts.shape[1], "of_layers": int(counts.shape[1]),
            "token_fraction": token_fraction,
@@ -135,7 +164,8 @@ def score(counts, label, model, window, layers, token_fraction, tokens="prompt")
            "window_median": round(float(np.median(loads)), 4),
            "window_p99": round(float(np.quantile(loads, 0.99)), 4),
            "window_max": round(float(loads.max()), 4),
-           "calibrated_alarm": alarm,
+           "alarm": round(float(alarm), 4),
+           "impact_threshold": IMPACT.get(model),
            "windows_alarming": int(flags.sum()),
            "per_window_rate": round(float(flags.mean()), 4)}
     for k in (1, 2, 3):
@@ -170,29 +200,36 @@ def main():
               f"layers, {meta.get('validation_workload')}, token sources {sorted(sources)}")
         # Families, not subjects: the corpus is what moves the benign floor.
         families = np.array([s.split("/")[0] for s in labels])
+        deployed, how = stored_alarm(model)
+        print(f"  stored alarm {deployed} ({how}); impact threshold {IMPACT.get(model) or 'withdrawn'}")
         for tokens, counts in sorted(sources.items()):
             streams = [("mixed", counts)]
             for family in sorted(set(families.tolist())):
                 idx = np.flatnonzero(families == family)
                 if len(idx) >= 8 * 20:
                     streams.append((family, counts[idx]))
-            for label, block in streams:
-                for window in WINDOWS:
-                    for layers, token_fraction in SAMPLING:
-                        row = score(block, label, model, window, layers, token_fraction, tokens)
-                        if row:
-                            row["run"] = os.path.basename(run_dir)
-                            rows.append(row)
+            for window in WINDOWS:
+                for layers, token_fraction in SAMPLING:
+                    # The mixed stream at this sampling is the benign reference.
+                    mixed_loads = stream_loads(counts, window, layers, token_fraction)
+                    self_alarm = (float(np.quantile(mixed_loads, 0.99)) if len(mixed_loads) else None)
+                    for label, block in streams:
+                        for alarm, source in ((deployed, "stored"), (self_alarm, "self, mixed at 1%")):
+                            row = score(block, label, model, window, layers, token_fraction, tokens,
+                                        alarm=alarm, alarm_source=source)
+                            if row:
+                                row["run"] = os.path.basename(run_dir)
+                                rows.append(row)
 
         head = [r for r in rows if r["run"] == os.path.basename(run_dir) and r["window"] == 8]
-        print(f"  {'stream':<14} {'tokens':<14} {'count':>10} {'reqs':>6} {'pooled':>7} {'median':>7} "
-              f"{'p99':>7} {'alarm%':>7} {'k2':>4} {'reqs/k2':>8}")
+        print(f"  {'stream':<13} {'tokens':<14} {'count':>8} {'alarm from':<18} {'level':>6} "
+              f"{'pooled':>7} {'p99':>7} {'fire%':>6} {'k2':>4} {'reqs/k2':>8}")
         for r in head:
             counted = f"{r['layers']}x{r['token_fraction']:g}"
             per = r["requests_per_alarm_k2"]
-            print(f"  {r['stream']:<14} {r['tokens']:<14} {counted:>10} {r['requests']:>6} "
-                  f"{r['pooled_load']:>7.3f} {r['window_median']:>7.3f} {r['window_p99']:>7.3f} "
-                  f"{r['per_window_rate']:>7.1%} {r['confirmed_k2']:>4} "
+            print(f"  {r['stream']:<13} {r['tokens']:<14} {counted:>8} {r['alarm_source']:<18} "
+                  f"{r['alarm']:>6.3f} {r['pooled_load']:>7.3f} {r['window_p99']:>7.3f} "
+                  f"{r['per_window_rate']:>6.1%} {r['confirmed_k2']:>4} "
                   f"{('-' if per is None else format(per, '.0f')):>8}")
 
     os.makedirs(args.out, exist_ok=True)

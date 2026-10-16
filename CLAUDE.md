@@ -169,23 +169,25 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   -> 1.459 on Mixtral), so the alarm is in sampling-dependent units the impact
   threshold is not: moving `count_layers` or the token fraction invalidates the
   calibration at no change in cost.
-- **The screen does fire on traffic nobody skewed, and the pooled corpus table
-  ranks the risk wrongly** (2026-10-16, `natural-long`, 12000 unbiased DeepSeek
-  requests; `scripts/natural_stream.py`, `docs/figures/tables/natural_stream.csv`).
-  Scored as served rather than bootstrapped: a homogeneous **Dolly** stream trips
-  12.5% of 8-request windows at the calibrated 4x10% sampling and confirms three
-  times in 3000 requests - one per 1000 - with nothing injected. Dolly has the
-  *lowest* pooled load of the four corpora (1.086x) and the heaviest window tail
-  (p99 1.377x against the 1.245x alarm), while German MMMLU has the highest
-  pooled load (1.134x) and alarms a quarter as often - so **a corpus is dangerous
-  to a screen through its tail, not its average**, and `corpus.csv` being pooled
-  ranks them wrongly. On *mixed* traffic the k=2 rule beats its simulation: single
-  windows trip about as often as predicted (one per 800 against 324-656) but do
-  not pair up at all (0 in 1500 windows against a predicted one per 1200-2544).
-  A 32-request window silences every stream, Dolly included. And carrying the
-  4x10% alarm onto 8x5% readings doubles the alarm rate, which is the units
-  mistake the bias bullet above predicts - the better split is better only after
-  recalibration.
+- **Corpus shift alone sets the screen off, at the deployed setting, on traffic
+  that costs nothing** (2026-10-16, `natural-long`, 12000 unbiased requests per
+  model, scored as served; B2 in `docs/detection-findings.md`). On **Mixtral**,
+  whose deployable alarm (1.349x) nearly touches its 1.42x onset, a homogeneous
+  **Dolly** stream fires 16.3% of 8-request windows at the calibrated 4x10%
+  sampling and confirms every **375 requests** - against a calibration whose own
+  false-alarm rate was 0.0 - while its *true* tail counted in full is 1.314x,
+  below both the alarm and the onset. Counted in full it fires 0.3%: what crosses
+  the bar is sampling inflation, and **an alarm absorbs that only for the traffic
+  it was calibrated on** (Dolly's windows are heavier-tailed than the
+  calibration's). On **DeepSeek nothing fires at its deployable 1.788x alarm** -
+  the highest window reading in 12000 requests is 1.435x - so quote DeepSeek's
+  Dolly alarms only against the 1% bar, which sits half a turn of load lower.
+  Lengthening the window to 32 requests silences the absolute bar entirely and
+  takes a *self-calibrated* one to 53.8% on Dolly, because benign p99 tightens
+  (1.147x) while the corpus offset does not (1.190x) - **the main caution on a
+  self-calibrating gate**. And k=2 beats its simulation: one confirmed alarm per
+  12000 requests on mixed traffic, none on DeepSeek, against a predicted one per
+  1200-2544. Every number here is prompt routing; see the next bullet.
 - **Prompt and decode routing are two independent skews, and pooling them hides
   both** (2026-10-16, `natural-decode`, DeepSeek, 2496 unbiased requests at 100
   generated tokens; B3 in `docs/detection-findings.md`). Same requests reduced
