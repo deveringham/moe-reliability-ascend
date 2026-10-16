@@ -1,0 +1,68 @@
+# What a window reads when it holds generated tokens, not just prompts.
+#
+# D1 in docs/action-items.md, and the realism axis nothing in this project has
+# ever tested. Every capture behind the detection work sets max_new_tokens = 1,
+# so every benign floor, every alarm level and every detection rate is a
+# statement about *prompt* routing. A served window is mostly generated tokens,
+# and decode routing is known to diverge from prefill routing on identical
+# prompts (docs/drift-findings.md). If the benign floor sits somewhere else once
+# decode is in the window, every threshold in docs/calibrations is calibrated
+# against the wrong distribution.
+#
+# 2500 requests at 100 generated tokens each: the same six families and the same
+# server as natural_long.toml, so the only difference from that capture is what
+# the window holds. Natural stopping is left alone - client.ignore_eos stays off
+# - because the point is what real traffic routes, and this compares one capture
+# against another rather than one level against another.
+#
+# The capture returns every token's expert ids in the response body, so the
+# records are large: about 42k ids per request on DeepSeek at this length
+# against 27k at max_new_tokens = 1. That cost is the reason this run is 2500
+# requests and not 12000.
+#
+#   ./nrun -t ndec 'uv run moe-reliability run configs/examples/natural_decode.toml'
+#   (Mixtral: --set 'model.model_id="mistralai/Mixtral-8x7B-Instruct-v0.1"' \
+#             --set 'model.model_name="mixtral"' --set 'model.probe="mistral"')
+
+[experiment]
+type = "forced_imbalance"
+name = "natural-decode"
+description = "Unbiased routing with 100 generated tokens per request, six families, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0]
+bias_plugin_at_zero = false
+validate_imbalance = true
+validation_samples = 2500
+validation_workload = "mixed:mmlu,gsm8k,mbpp,mmmlu:DE_DE,dolly,ultrachat"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false
