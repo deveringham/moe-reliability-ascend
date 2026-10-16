@@ -169,6 +169,23 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   -> 1.459 on Mixtral), so the alarm is in sampling-dependent units the impact
   threshold is not: moving `count_layers` or the token fraction invalidates the
   calibration at no change in cost.
+- **The screen does fire on traffic nobody skewed, and the pooled corpus table
+  ranks the risk wrongly** (2026-10-16, `natural-long`, 12000 unbiased DeepSeek
+  requests; `scripts/natural_stream.py`, `docs/figures/tables/natural_stream.csv`).
+  Scored as served rather than bootstrapped: a homogeneous **Dolly** stream trips
+  12.5% of 8-request windows at the calibrated 4x10% sampling and confirms three
+  times in 3000 requests - one per 1000 - with nothing injected. Dolly has the
+  *lowest* pooled load of the four corpora (1.086x) and the heaviest window tail
+  (p99 1.377x against the 1.245x alarm), while German MMMLU has the highest
+  pooled load (1.134x) and alarms a quarter as often - so **a corpus is dangerous
+  to a screen through its tail, not its average**, and `corpus.csv` being pooled
+  ranks them wrongly. On *mixed* traffic the k=2 rule beats its simulation: single
+  windows trip about as often as predicted (one per 800 against 324-656) but do
+  not pair up at all (0 in 1500 windows against a predicted one per 1200-2544).
+  A 32-request window silences every stream, Dolly included. And carrying the
+  4x10% alarm onto 8x5% readings doubles the alarm rate, which is the units
+  mistake the bias bullet above predicts - the better split is better only after
+  recalibration.
 - **The screen measures skew, not impact, and the gap is model-specific.**
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm

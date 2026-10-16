@@ -12,7 +12,10 @@ already under `results/`. Status is kept current as items close.
 
 ## Detection
 
-**D1. Every positive is our own injector.** *(in progress)*
+**D1. Every positive is our own injector.** *(DeepSeek prompt-routing done,
+2026-10-16: the screen fires on an unskewed Dolly stream, one confirmed alarm per
+1000 requests - see B2 in detection-findings.md. Left: the same on Mixtral, the
+decode capture, and a hot-locale stream.)*
 The screen has never fired on an imbalance it did not cause. The only
 natural-skew evidence is pooled corpus loads - Yoruba at 1.47x against Mixtral's
 1.42x onset - which is one row of one table, and every capture is 1200-1600

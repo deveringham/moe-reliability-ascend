@@ -131,6 +131,69 @@ generated tokens pooled, busiest rank per MoE layer averaged over layers:
   rotating phenomenon, so it is not the kind of imbalance expert placement can
   fix, and a detector that reports only a model-wide mean describes it poorly.
 
+## B2. A long real stream, scored as it was served
+
+`natural-long` (2026-10-16, DeepSeek, 12000 unbiased requests over MMLU, Dolly,
+UltraChat and German MMMLU, 3000 each; `scripts/natural_stream.py`,
+`docs/figures/tables/natural_stream.csv`). Tumbling windows in the order the
+requests were served, scored against the alarm this model was calibrated to
+(1.245x at 1% per window), rather than bootstrapped from the pool and scored
+against themselves. 1200-1600 requests cannot contain a false alarm at the rate
+the screen is calibrated to, so this is the first measurement of one.
+
+| Stream | Counted | Alarming windows | k=1 | k=2 | Requests per k=2 alarm |
+|---|---|---|---|---|---|
+| mixed | all | 0.0% | 0 | 0 | - |
+| mixed | 4 x 10% | 1.0% | 15 | 0 | - |
+| mixed | 8 x 5% | 2.1% | 29 | 2 | 6000 |
+| **dolly** | all | 1.6% | 6 | 0 | - |
+| **dolly** | **4 x 10%** | **12.5%** | 43 | 3 | **1000** |
+| **dolly** | 8 x 5% | 20.8% | 64 | 14 | 214 |
+| mmlu | 4 x 10% | 0.0% | 0 | 0 | - |
+| mmmlu:DE_DE | 4 x 10% | 4.8% | 16 | 2 | 1500 |
+| ultrachat | 4 x 10% | 1.1% | 4 | 0 | - |
+
+**The screen fires on traffic nobody skewed.** A homogeneous Dolly stream trips
+12.5% of 8-request windows at the calibrated sampling and confirms three times
+in 3000 requests - one per 1000 - with nothing injected and no EPLB running.
+This is the first positive in this project that is not our own injector, and for
+a gate it is a false positive by construction: nothing is skewed, and DeepSeek
+has no impact threshold to call it costly against.
+
+**Pooled load does not predict it; the tail does.** Dolly has the *lowest*
+pooled load of the four corpora (1.086x) and alarms most; German MMMLU has the
+highest (1.134x) and alarms a quarter as often. What separates them is the
+window tail - Dolly's p99 is 1.377x against DE_DE's 1.275x. So the corpus table
+in `corpus.csv`, which is pooled, ranks the risk wrongly: a corpus is dangerous
+to a screen when its windows are heavy-tailed, not when its average is high.
+
+**On mixed traffic the k = 2 rule is better than simulated.** Single-window
+trips arrive about as often as predicted (one per 800 requests against a
+simulated 324-656), but they do not pair up: zero confirmed alarms in 1500
+windows, where the simulation said one per 1200-2544 requests. Consecutive real
+windows are evidently less correlated than the bootstrap's are - plausibly
+because resampling a finite pool lets the same unusual requests recur in nearby
+windows - but that is a hypothesis, not a measurement.
+
+**A 32-request window silences everything.** 0.0% alarming on every stream and
+every sampling, Dolly included. Window length remains the dominant knob, and the
+corpus problem is a short-window problem.
+
+**Carrying an alarm across sampling settings is the error C6 predicted.** The
+1.245x alarm was calibrated at 4 layers x 10% of tokens; applied to 8 x 5%
+readings of the same traffic it alarms twice as often (mixed 1.0% to 2.1%, Dolly
+12.5% to 20.8%), because the thinner split reads higher. Self-calibrated on this
+run the two alarms are 1.2425x and 1.2611x. The 8 x 5% split is still the better
+one - C6 measured it against a self-calibrated alarm - but it is only better
+after recalibration, and this is what skipping that costs.
+
+Two caveats. With 700 requests in flight the recorded order is completion order,
+so a window here is eight requests that *finished* together, which is neither
+the eight that arrived together nor the bootstrap's eight drawn at random. And
+the carried-over alarm was calibrated on six-family traffic, so part of the gap
+between streams is the traffic the alarm came from rather than the traffic it is
+scoring.
+
 ## C. How cheap the screen can be, and what it then catches
 
 `detection-capture` replays 1200 prompts over six workload families at each skew
