@@ -59,11 +59,27 @@ Mixtral nothing), and detection rates are untouched.
 *Closes it:* re-run `gate-closure`'s screen arms, in the decode-heavy regime D7
 and E1 also want. Node.
 
-**D2. Detection delay has never been measured on hardware.** *(plugin done)*
-The step-counted `imbalance.bias_schedule` landed 2026-10-16: one server can now
-change its skew at a known engine step, rank-consistently, with the bias vector
-mutated in place so graph capture keeps working. What is left is the run and its
-analysis - the screen records the step per window, so a delay comes out directly.
+**D2. Detection delay has never been measured on hardware.** *(done,
+2026-10-16)* `imbalance.bias_schedule` moved the bias at step 1200 of a running
+server, rank-consistently (24 of 24 transitions at the same step), and the skew
+was caught in the first window that closed after it arrived, 4 of 4 points: 8
+steps at k=1, 16 at k=2, 24 at k=3. In windows C4's simulation was exactly
+right; in requests it was optimistic by 2.3x, because a live window spans ~18
+requests and the bootstrap's spans 8. Two things it opened: D9, and the fact
+that a step-cadence window is blind without an evidence floor (C7).
+
+**D9. A window should close on evidence, not on steps.** *(new, 2026-10-16)*
+Counted assignments per window ran 128 to 14240 within one point of
+`detection-delay` - thin while the server fills, then moving with the
+prefill/decode mix. A 128-assignment window reads 1.34-2.96x on benign traffic,
+so scored as the server writes them the alarm lands at 2.13x and the screen
+never fires at all; an evidence floor puts it at 1.23-1.28x and recovers
+everything. Every live-screen number depends on this, and it is an
+implementation defect rather than a calibration one.
+*Closes it:* close the window in `expert_counter` when the counted assignments
+reach a target, with the step cadence as a ceiling, and report the realised
+window length. Code, then any live run. Cheap, and it should land before D1b
+re-measures the screen's cost.
 Every onset figure in `detection-findings.md` is a splice of two static pools;
 every server run so far carried a fixed bias for its lifetime. Delay is the
 headline metric of a detector, and ours is simulated. This is the largest hole

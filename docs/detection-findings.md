@@ -568,6 +568,63 @@ which used the 1.31x onset. The crossing-holds correction put the onset at 1.42x
 (see the calibration bullet in CLAUDE.md), so 1.39x is free and C's detection
 rates there read as over-firing rather than as a sensitivity shortfall.
 
+## C7. Delay, measured on hardware
+
+`detection-delay` (2026-10-16, Mixtral, 3 levels x 2 repeats, 8000 requests at
+200 tokens each with `ignore_eos`, `scripts/delay_eval.py`,
+`docs/figures/tables/detection_delay.csv`). The first run in this project where
+the skew arrives while a server is running: `imbalance.bias_schedule =
+["0:0", "1200:1"]` holds the bias at zero for 1200 forwards and then steps it to
+the point's level, with `server.count_experts` counting live. Everything before
+this was a splice of two static captures.
+
+**The step-counted trigger is rank-consistent on hardware.** The schedule fired
+24 times - six points by four worker processes - every one of them at step 1200.
+A clock would not have done that, and two ranks holding different biases on the
+same forward would select different experts.
+
+**The skew is detected in the first window that closes after it arrives**, at
+both levels and in both repeats, 4 of 4:
+
+| Level | Post-onset median | k=1 | k=2 | k=3 |
+|---|---|---|---|---|
+| 0.5 (1.35x) | 1.353x | 8 steps / 18 requests | 16 / 37 | 24 / 55 |
+| 1 (1.74x) | 1.746x | 8 steps / 18 requests | 16 / 36 | 24 / 55 |
+| 0 (control) | 1.147x | fires at 64 and 200 steps (false) | 1 of 2 points | clean |
+
+**In windows the simulation was exactly right; in requests it was optimistic by
+2.3x.** C4 predicted 16 requests of delay at k = 2 from an 8-request window.
+Measured: 36-37. The window count is identical - k windows, immediately - but a
+live window at `count_window_steps = 8` spans about eighteen requests, not
+eight, so every delay figure in this document converts at the wrong rate. The
+screen is not slower than modelled; the modelled window was smaller than a real
+one.
+
+**The control confirms k is the lever, and k = 3 is the setting.** With no skew
+at all, k = 1 raised an alarm 64 and 200 steps into the post-onset stretch on
+both control points; k = 2 left one false alarm across the six points; k = 3 was
+clean on all six, for 24 steps - about 55 requests - of delay. That is the same
+conclusion C5 reached by simulation, now with the request cost measured rather
+than assumed.
+
+**A window is a fixed number of steps, not a fixed amount of evidence, and that
+matters more than the threshold does.** Counted assignments per window ranged
+**128 to 14240** inside a single point: tiny while the server fills, then moving
+with the prefill/decode mix. A 128-assignment window reads 1.34-2.96x on benign
+traffic - the maximum-of-noisy-shares inflation of C6, in extreme form - so the
+pre-onset tail is noise, not traffic. Scored as the server writes it, the alarm
+lands at **2.13x**, above even the strongest level's post-onset median (1.75x),
+and **the screen never fires at all**. Dropping windows below half the point's
+median evidence (39-60 of ~450 per point) puts the alarm at 1.23-1.28x and
+recovers everything above. So a deployed screen should close a window on counted
+assignments rather than on steps, and until it does, a step-cadence
+implementation is blind for reasons that have nothing to do with its threshold.
+
+Limits: one model, one onset step, and an instantaneous arrival rather than a
+ramp or a flicker, which remains unmeasured. The alarm is set on the first 60%
+of each point's clean pre-onset windows and judged on the rest, because setting
+and judging it on the same windows makes a k = 1 false alarm certain.
+
 ## D. Stage 2: step time at matched batch size
 
 Slope of median step wall against busiest-rank load, within a batch bin, from

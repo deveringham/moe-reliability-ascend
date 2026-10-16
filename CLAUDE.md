@@ -219,6 +219,24 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   its cost lives, would be diluted the way the natural floor is. Every detection
   rate in this project is an upper bound for a skew that is not common-mode, and
   we have never injected one.
+- **Detection delay, measured on hardware at last: one window** (2026-10-16,
+  `detection-delay`, Mixtral, 3 levels x 2 repeats, `scripts/delay_eval.py`; C7
+  in `docs/detection-findings.md`). `imbalance.bias_schedule` moved the bias at
+  step 1200 of a running server and the screen counted live. The step-counted
+  trigger fired **24 of 24 times at step 1200** across six points and four
+  worker processes, so it is rank-consistent on hardware. The skew is caught in
+  the **first window that closes after it arrives**, 4 of 4 skewed points: 8
+  steps at k=1, 16 at k=2, 24 at k=3. **In windows C4's simulation was exactly
+  right; in requests it was optimistic by 2.3x** - a live window at
+  `count_window_steps = 8` spans ~18 requests, not the bootstrap's 8, so k=2
+  costs 36 requests rather than 16. The control (level 0) fires at k=1 and is
+  clean at k=3, which is C5's recommendation with the request cost now measured.
+  **And the implementation matters more than the threshold:** counted
+  assignments per window ran **128 to 14240** within one point, a 128-assignment
+  window reads 1.34-2.96x on benign traffic, and scored as the server writes it
+  the alarm lands at 2.13x and **the screen never fires at all**. Dropping
+  windows below half a point's median evidence puts it at 1.23-1.28x and
+  recovers everything. **Close a window on counted assignments, not on steps.**
 - **The screen measures skew, not impact, and the gap is model-specific.**
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm
