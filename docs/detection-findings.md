@@ -262,6 +262,53 @@ level does to each source is unmeasured, and it decides whether including decode
 makes the screen less sensitive or merely quieter - both the floor and the signal
 move, and only the floor is measured here.
 
+### What a biased level does to each source (D1c, 2026-10-16)
+
+`detection-capture-decode`: the same five levels and six families as
+`detection_capture.toml`, with 100 generated tokens and `ignore_eos`, so each
+level's decode half is comparable (`scripts/decode_signal.py`,
+`docs/figures/tables/decode_signal.csv`).
+
+| Level | True load | prompt | decode | both | Busiest rank agrees | Share corr |
+|---|---|---|---|---|---|---|
+| 0 | 1.051x | 1.0797x | 1.0553x | **1.0514x** | 10 of 26 | **+0.085** |
+| 0.25 | 1.353x | 1.3499x | 1.3560x | 1.3526x | **26 of 26** | +0.937 |
+| 0.5 | 1.737x | 1.7155x | 1.7641x | 1.7367x | 26 of 26 | +0.985 |
+| 1 | 2.468x | 2.4243x | 2.5238x | 2.4678x | 26 of 26 | +0.997 |
+| 2 | 3.582x | 3.5337x | 3.6443x | 3.5820x | 26 of 26 | **+1.000** |
+
+**The floor cancels and the signal does not.** At level 0 the two sources are
+independent (10 of 26 layers agreeing, where chance is 6.5; correlation +0.085)
+and the pooled value falls *below both* - B3's cancellation, reproduced in a
+second capture. At every biased level all 26 layers agree and the correlation
+runs +0.94 to +1.00, so the pooled value sits *between* the two sources instead:
+ordinary averaging, nothing lost.
+
+Detection follows the mechanism. With each source scored against an alarm set on
+its own level-0 windows, at the screen's 4 x 10% sampling and 8-request windows:
+
+| Level | prompt | decode | both |
+|---|---|---|---|
+| 0.25 (1.353x) | 0.95 | 0.99 | **1.00** |
+| 0.5 and above | 1.00 | 1.00 | 1.00 |
+
+So **including decode tokens makes the screen slightly more sensitive, not
+less**. The worry B3 raised - that decode dilutes the signal along with the
+floor - does not hold for this skew, and the reason is in the correlation
+column.
+
+**But that is a property of our injector, and it is the most important limit on
+every detection rate in this project.** The plugin adds the same per-expert
+offset to every expert-selection call, prefill and decode alike, so an injected
+skew is common-mode *by construction* - the easiest possible case for a pooled
+screen. Natural routing is measurably not: at level 0 the two sources correlate
++0.085. A real imbalance arising in prefill alone - which is where its latency
+cost lives - would be diluted by decode tokens exactly the way the natural floor
+is, and nothing here measures that. Every detection figure in this document is
+therefore an upper bound for any skew that is not common-mode, and we have never
+produced one that isn't.
+
+
 ## C. How cheap the screen can be, and what it then catches
 
 `detection-capture` replays 1200 prompts over six workload families at each skew

@@ -202,8 +202,23 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   and promising:** the cost of skew lives in prefill-heavy steps and a saturated
   decode step is offset-invariant, so a *prefill-only* statistic may be the one
   that tracks latency - the first lead connecting the screen to the impact
-  mechanism. Unmeasured: what a biased level does to each source, which is what
-  decides whether decode makes the screen less sensitive or just quieter.
+  mechanism.
+- **The floor cancels, the signal does not - because our injected skew is
+  common-mode** (2026-10-16, `detection-capture-decode`, five levels at 100
+  generated tokens with `ignore_eos`; `scripts/decode_signal.py`). At level 0 the
+  two sources are independent (10 of 26 layers agreeing, correlation **+0.085**)
+  and pooling falls below both, reproducing the bullet above in a second capture.
+  At **every** biased level all 26 layers agree and the correlation is +0.94 to
+  **+1.000**, so pooling just averages: detection with each source scored against
+  its own level-0 alarm is 0.95 prompt / 0.99 decode / **1.00 both** at the
+  hardest level (1.35x) and 1.00 everywhere above. So decode makes the screen
+  *more* sensitive, not less. **The limit this exposes is the important part:**
+  the plugin adds the same offset to every selection call, so an injected skew is
+  common-mode by construction - the easiest case for a pooled screen - while
+  natural routing is not. A real skew arising in prefill alone, which is where
+  its cost lives, would be diluted the way the natural floor is. Every detection
+  rate in this project is an upper bound for a skew that is not common-mode, and
+  we have never injected one.
 - **The screen measures skew, not impact, and the gap is model-specific.**
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm

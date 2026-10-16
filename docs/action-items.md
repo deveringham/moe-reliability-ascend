@@ -25,14 +25,28 @@ traffic.
 *Closes it:* long unbiased captures with generation enabled, over homogeneous
 per-corpus streams as well as a mixed one, on both models. Node.
 
-**D1c. What a biased level does to each token source.** *(new, 2026-10-16)*
-B3 found prompt and decode routing to be independent skews that cancel when
-pooled, on unbiased traffic. Only the benign floor is measured: a skewed level
-would move both the floor and the signal, and which moves further decides
-whether including decode makes the screen less sensitive or merely quieter.
-*Closes it:* re-serve `detection_capture.toml`'s levels with generation on and
-split the capture by token source. Node, one run, and it also tests the
-prefill-only statistic in D4.
+**D1c. What a biased level does to each token source.** *(done, 2026-10-16)*
+Answered: the floor cancels and the signal does not. At level 0 the two sources
+are independent (correlation +0.085) and pooling falls below both; at every
+biased level all 26 layers agree and the correlation is +0.94 to +1.000, so
+pooling averages and detection is 1.00 with decode included against 0.95
+prompt-only at the hardest level. Decode makes the screen *more* sensitive. See
+D8 for what that exposed.
+
+**D8. We have never injected a skew that is not common-mode.** *(new, 2026-10-16)*
+The bias plugin adds the same per-expert offset to every expert-selection call,
+prefill and decode alike, so every injected skew in this project is common-mode
+by construction - the easiest possible case for a pooled screen. Natural routing
+is measurably not (prefill and decode correlate +0.085 at level 0). A real
+imbalance arising in prefill alone, which is where its latency cost lives, would
+be diluted by decode tokens the way the natural floor is. **Every detection rate
+in docs/detection-findings.md is therefore an upper bound for a non-common-mode
+skew.**
+*Closes it:* bias one token source only. The plugin decides at selection time,
+where prefill and decode are not labelled and chunked prefill mixes them in a
+step, so this needs a way to tell them apart - the step's batch composition is
+the obvious candidate. Code, then node. This is now the largest single
+qualification on the detection results.
 
 **D1b. The screen's cost on DeepSeek is unmeasured again.** *(new, 2026-10-16)*
 Found while building D2: with `server.count_experts` on, the router bias was
@@ -75,7 +89,11 @@ EPLB's own balancedness have never been scored against it.
 *Closes it:* score each statistic on the existing captures by how well it
 separates costly from free levels. Desk. **First candidate, from B3:** the
 prefill-only busiest rank, since the cost of skew lives in prefill-heavy steps
-and prefill carries a different skew from decode. That one needs D1c's capture.
+and prefill carries a different skew from decode. D1c's capture is now available
+for it - though note that on a common-mode injected skew the prefill-only and
+pooled statistics barely differ (correlation +1.000 at the top level), so this
+candidate cannot be told apart from the pooled one until D8 provides a skew that
+is not common-mode.
 
 **D5. The sampling bias is unquantified and uncorrected.**
 `detection_params.py` (2026-10-16) showed that thinning tokens biases
