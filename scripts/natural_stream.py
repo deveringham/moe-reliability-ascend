@@ -60,10 +60,18 @@ SELF_FPR = (0.005, 0.01)
 
 
 def load_capture(run_dir):
-    """(counts, labels, model) for a run's validation capture, in served order."""
+    """({token source: counts}, labels, model, meta) for a capture, in served order.
+
+    When the capture generated more than one token per request, the same records
+    are reduced twice: over prompt tokens only, as every capture behind the
+    detection work did, and over prompt plus generated tokens, which is what a
+    served window actually holds. The comparison is then within one capture - same
+    requests, same server, same order - rather than across two runs.
+    """
     manifest = json.load(open(os.path.join(run_dir, "manifest.json")))
     model = os.path.basename(run_dir.rstrip("/")).split("_")[2]
     n_experts = MODELS[model]
+    generated = int(manifest.get("config", {}).get("client", {}).get("max_new_tokens", 1))
     for point in manifest["points"]:
         if not point.get("validation_file"):
             continue
@@ -72,7 +80,10 @@ def load_capture(run_dir):
         if not meta.get("records_file") or not os.path.exists(path):
             continue
         records = [json.loads(line) for line in gzip.open(path, "rt")]
-        counts = D.request_counts(records, n_experts)
+        counts = {"prompt+decode" if generated > 1 else "prompt":
+                  D.request_counts(records, n_experts, include_generated=True)}
+        if generated > 1:
+            counts["prompt"] = D.request_counts(records, n_experts, include_generated=False)
         labels = np.array([r.get("subject") or "unknown" for r in records])
         return counts, labels, model, meta
     return None, None, model, None
@@ -109,14 +120,15 @@ def confirmed_alarms(flags, consecutive):
     return out
 
 
-def score(counts, label, model, window, layers, token_fraction):
+def score(counts, label, model, window, layers, token_fraction, tokens="prompt"):
     loads = stream_loads(counts, window, layers, token_fraction)
     if not len(loads):
         return None
     alarm = CALIBRATED_ALARM[model]
     flags = loads >= alarm
     requests = len(loads) * window
-    row = {"model": model, "stream": label, "requests": requests, "windows": len(loads),
+    row = {"model": model, "stream": label, "tokens": tokens,
+           "requests": requests, "windows": len(loads),
            "window": window, "layers": layers or counts.shape[1], "of_layers": int(counts.shape[1]),
            "token_fraction": token_fraction,
            "pooled_load": round(float(D.busiest_rank(counts.sum(axis=0), N_RANKS)), 4),
@@ -140,45 +152,48 @@ def score(counts, label, model, window, layers, token_fraction):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("runs", nargs="*", help="run directories (default: every *natural-long* run)")
+    ap.add_argument("runs", nargs="*", help="run directories (default: every natural-traffic capture)")
     ap.add_argument("--out", default=os.path.join("docs", "figures", "tables"))
     args = ap.parse_args()
-    runs = args.runs or sorted(glob.glob(os.path.join("results", "*natural-long*")))
+    runs = args.runs or sorted(glob.glob(os.path.join("results", "*_natural-*")))
     if not runs:
         raise SystemExit("no natural-long run found; ./npull first")
 
     rows = []
     for run_dir in runs:
-        counts, labels, model, meta = load_capture(run_dir)
-        if counts is None:
+        sources, labels, model, meta = load_capture(run_dir)
+        if sources is None:
             print(f"{os.path.basename(run_dir)}: no capture records, skipped")
             continue
-        print(f"\n{os.path.basename(run_dir)}: {len(counts)} requests, {counts.shape[1]} MoE layers, "
-              f"{meta.get('validation_workload')}")
+        any_counts = next(iter(sources.values()))
+        print(f"\n{os.path.basename(run_dir)}: {len(any_counts)} requests, {any_counts.shape[1]} MoE "
+              f"layers, {meta.get('validation_workload')}, token sources {sorted(sources)}")
         # Families, not subjects: the corpus is what moves the benign floor.
         families = np.array([s.split("/")[0] for s in labels])
-        streams = [("mixed", counts)]
-        for family in sorted(set(families.tolist())):
-            idx = np.flatnonzero(families == family)
-            if len(idx) >= 8 * 20:
-                streams.append((family, counts[idx]))
-        for label, block in streams:
-            for window in WINDOWS:
-                for layers, token_fraction in SAMPLING:
-                    row = score(block, label, model, window, layers, token_fraction)
-                    if row:
-                        row["run"] = os.path.basename(run_dir)
-                        rows.append(row)
+        for tokens, counts in sorted(sources.items()):
+            streams = [("mixed", counts)]
+            for family in sorted(set(families.tolist())):
+                idx = np.flatnonzero(families == family)
+                if len(idx) >= 8 * 20:
+                    streams.append((family, counts[idx]))
+            for label, block in streams:
+                for window in WINDOWS:
+                    for layers, token_fraction in SAMPLING:
+                        row = score(block, label, model, window, layers, token_fraction, tokens)
+                        if row:
+                            row["run"] = os.path.basename(run_dir)
+                            rows.append(row)
 
         head = [r for r in rows if r["run"] == os.path.basename(run_dir) and r["window"] == 8]
-        print(f"  {'stream':<14} {'count':>10} {'reqs':>6} {'pooled':>7} {'median':>7} {'p99':>7} "
-              f"{'alarm%':>7} {'k2':>4} {'reqs/k2':>8}")
+        print(f"  {'stream':<14} {'tokens':<14} {'count':>10} {'reqs':>6} {'pooled':>7} {'median':>7} "
+              f"{'p99':>7} {'alarm%':>7} {'k2':>4} {'reqs/k2':>8}")
         for r in head:
             counted = f"{r['layers']}x{r['token_fraction']:g}"
             per = r["requests_per_alarm_k2"]
-            print(f"  {r['stream']:<14} {counted:>10} {r['requests']:>6} {r['pooled_load']:>7.3f} "
-                  f"{r['window_median']:>7.3f} {r['window_p99']:>7.3f} {r['per_window_rate']:>7.1%} "
-                  f"{r['confirmed_k2']:>4} {('-' if per is None else format(per, '.0f')):>8}")
+            print(f"  {r['stream']:<14} {r['tokens']:<14} {counted:>10} {r['requests']:>6} "
+                  f"{r['pooled_load']:>7.3f} {r['window_median']:>7.3f} {r['window_p99']:>7.3f} "
+                  f"{r['per_window_rate']:>7.1%} {r['confirmed_k2']:>4} "
+                  f"{('-' if per is None else format(per, '.0f')):>8}")
 
     os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, "natural_stream.csv")

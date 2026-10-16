@@ -160,6 +160,13 @@ This is the first positive in this project that is not our own injector, and for
 a gate it is a false positive by construction: nothing is skewed, and DeepSeek
 has no impact threshold to call it costly against.
 
+*Qualified by B3 (2026-10-16): this capture generates one token per request, so
+these are alarms on **prompt** routing. The same corpora with 100 generated
+tokens in the window alarm on nothing, because prompt and decode skew cancel.
+The effect is real and reproduced - Dolly reads p99 1.312x prompt-only in
+`natural-decode` too - but on this evidence it is a property of prefill routing
+rather than a false alarm a deployment would see at that generation length.*
+
 **Pooled load does not predict it; the tail does.** Dolly has the *lowest*
 pooled load of the four corpora (1.086x) and alarms most; German MMMLU has the
 highest (1.134x) and alarms a quarter as often. What separates them is the
@@ -193,6 +200,55 @@ the eight that arrived together nor the bootstrap's eight drawn at random. And
 the carried-over alarm was calibrated on six-family traffic, so part of the gap
 between streams is the traffic the alarm came from rather than the traffic it is
 scoring.
+
+## B3. Prompt and decode are two independent skews, and pooling them hides both
+
+`natural-decode` (2026-10-16, DeepSeek, 2496 unbiased requests at 100 generated
+tokens, six families). The capture stores prompt and generated routing
+separately, so the same requests are reduced three ways - no second run, no
+drift, same order:
+
+| Token source | Tokens | Pooled busiest rank |
+|---|---|---|
+| prompt only | 320812 (58%) | 1.0780x |
+| decode only | 234095 (42%) | 1.0638x |
+| **both** | 554907 | **1.0517x** |
+
+**The pooled value is below both components**, so this is not dilution - a
+weighted average would land between them. It is cancellation: the busiest rank
+per layer agrees between the two sources on **7 of 26 layers**, where chance is
+6.5, and the correlation between their per-layer per-rank shares is **+0.011**.
+Prefill and decode concentrate on unrelated ranks, so a window holding both
+reads more balanced than either half of it.
+
+This is the fourth place in this project where two skews that do not coincide
+cancel in a pooled reading, after the rotating-layer skew, per-rank kernel
+totals, and `rank_max_over_mean` against its per-layer form. The pattern is the
+finding: **any sum over a dimension the hot rank varies along reports a balanced
+server.**
+
+Consequences, in order of what they cost:
+
+- **Every calibration in `docs/calibrations` was made on prompt routing alone.**
+  All of them used `max_new_tokens = 1`. They describe one of the two skews, and
+  the one a served window does not hold on its own.
+- **The screen, counting whatever a window holds, measures the cancelled
+  mixture.** With decode included, the alarm rate on this capture falls to 0.0%
+  on every corpus and every sampling bar one row at 1.9%, against 0.3-17.3%
+  prompt-only.
+- **The statistic that tracks cost may be prefill-only.** The cost of skew lives
+  in prefill-heavy steps, and a saturated decode step is the same length at every
+  eager offset (2026-10-14). If prefill carries both the larger skew and a
+  different one, then pooled busiest-rank load dilutes precisely the component
+  that correlates with latency. That is a hypothesis with an obvious test and it
+  is the first thing linking the detection statistic to the impact mechanism.
+- **A screen could count the two separately**, at no extra counting cost: the
+  same bincount, split by whether the step's tokens are prefill or decode.
+
+Limits: one model, one generation length, unskewed traffic only. What a *skewed*
+level does to each source is unmeasured, and it decides whether including decode
+makes the screen less sensitive or merely quieter - both the floor and the signal
+move, and only the floor is measured here.
 
 ## C. How cheap the screen can be, and what it then catches
 

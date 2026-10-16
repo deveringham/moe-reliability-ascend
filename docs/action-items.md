@@ -25,6 +25,15 @@ traffic.
 *Closes it:* long unbiased captures with generation enabled, over homogeneous
 per-corpus streams as well as a mixed one, on both models. Node.
 
+**D1c. What a biased level does to each token source.** *(new, 2026-10-16)*
+B3 found prompt and decode routing to be independent skews that cancel when
+pooled, on unbiased traffic. Only the benign floor is measured: a skewed level
+would move both the floor and the signal, and which moves further decides
+whether including decode makes the screen less sensitive or merely quieter.
+*Closes it:* re-serve `detection_capture.toml`'s levels with generation on and
+split the capture by token source. Node, one run, and it also tests the
+prefill-only statistic in D4.
+
 **D1b. The screen's cost on DeepSeek is unmeasured again.** *(new, 2026-10-16)*
 Found while building D2: with `server.count_experts` on, the router bias was
 never applied, because plugins load sorted by name and router_bias skipped any
@@ -64,7 +73,9 @@ demonstrations that its mapping to cost goes stale. There is no evidence it is
 the *right* statistic: CV, entropy, max-expert share, p99 of per-layer max and
 EPLB's own balancedness have never been scored against it.
 *Closes it:* score each statistic on the existing captures by how well it
-separates costly from free levels. Desk.
+separates costly from free levels. Desk. **First candidate, from B3:** the
+prefill-only busiest rank, since the cost of skew lives in prefill-heavy steps
+and prefill carries a different skew from decode. That one needs D1c's capture.
 
 **D5. The sampling bias is unquantified and uncorrected.**
 `detection_params.py` (2026-10-16) showed that thinning tokens biases

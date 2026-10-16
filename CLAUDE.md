@@ -186,6 +186,22 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   4x10% alarm onto 8x5% readings doubles the alarm rate, which is the units
   mistake the bias bullet above predicts - the better split is better only after
   recalibration.
+- **Prompt and decode routing are two independent skews, and pooling them hides
+  both** (2026-10-16, `natural-decode`, DeepSeek, 2496 unbiased requests at 100
+  generated tokens; B3 in `docs/detection-findings.md`). Same requests reduced
+  three ways: prompt-only **1.0780x**, decode-only **1.0638x**, both
+  **1.0517x** - *below either component*, so it is cancellation, not dilution.
+  The busiest rank per layer agrees across the two sources on 7 of 26 layers
+  (chance is 6.5) and their per-layer per-rank shares correlate **+0.011**. So
+  every calibration in `docs/calibrations` (all `max_new_tokens = 1`) describes
+  prompt routing alone, and a screen counting a mixed window measures the
+  cancelled mixture - the alarm rate on this capture falls to 0.0% almost
+  everywhere once decode is in the window, against 0.3-17.3% prompt-only. **Open
+  and promising:** the cost of skew lives in prefill-heavy steps and a saturated
+  decode step is offset-invariant, so a *prefill-only* statistic may be the one
+  that tracks latency - the first lead connecting the screen to the impact
+  mechanism. Unmeasured: what a biased level does to each source, which is what
+  decides whether decode makes the screen less sensitive or just quieter.
 - **The screen measures skew, not impact, and the gap is model-specific.**
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm
