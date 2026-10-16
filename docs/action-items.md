@@ -22,7 +22,22 @@ traffic.
 *Closes it:* long unbiased captures with generation enabled, over homogeneous
 per-corpus streams as well as a mixed one, on both models. Node.
 
-**D2. Detection delay has never been measured on hardware.**
+**D1b. The screen's cost on DeepSeek is unmeasured again.** *(new, 2026-10-16)*
+Found while building D2: with `server.count_experts` on, the router bias was
+never applied, because plugins load sorted by name and router_bias skipped any
+selection function the counter had already wrapped. `gate-closure`'s count-on arm
+read 1.13x at a level whose validation says 1.73x, so its +1.65% / +1.71% is
+withdrawn. The bug is fixed and has a regression test; the measurement is not
+replaced. Mixtral's +0.28% survives (level 0, and the zero-bias plugin costs
+Mixtral nothing), and detection rates are untouched.
+*Closes it:* re-run `gate-closure`'s screen arms, in the decode-heavy regime D7
+and E1 also want. Node.
+
+**D2. Detection delay has never been measured on hardware.** *(plugin done)*
+The step-counted `imbalance.bias_schedule` landed 2026-10-16: one server can now
+change its skew at a known engine step, rank-consistently, with the bias vector
+mutated in place so graph capture keeps working. What is left is the run and its
+analysis - the screen records the step per window, so a delay comes out directly.
 Every onset figure in `detection-findings.md` is a splice of two static pools;
 every server run so far carried a fixed bias for its lifetime. Delay is the
 headline metric of a detector, and ours is simulated. This is the largest hole

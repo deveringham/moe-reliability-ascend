@@ -353,3 +353,135 @@ def test_rotating_sweep_skews_every_layer_without_a_persistent_hot_rank(deployme
     # what per-rank totals hide.
     shares = json.load(_gzip.open(ctx.abspath(by_level[4]["validation_file"])))["rank_share_mean"]
     assert max(shares) / min(shares) < 1.5
+
+
+# --- a schedule: changing the skew while one server runs ----------------------
+
+def test_schedule_must_say_what_it_serves_from_the_first_forward():
+    assert RB.normalise_schedule([[6, 2.0], [0, 0.0]]) == [(0, 0.0), (6, 2.0)]
+    with pytest.raises(ValueError, match="first pair must be at step 0"):
+        RB.normalise_schedule([[6, 2.0]])
+    with pytest.raises(ValueError, match="non-negative"):
+        RB.normalise_schedule([[0, 0.0], [-1, 2.0]])
+    with pytest.raises(ValueError, match="same step"):
+        RB.normalise_schedule([[0, 0.0], [6, 1.0], [6, 2.0]])
+
+
+def test_a_schedule_installs_the_plugin_even_though_it_starts_at_zero():
+    # Without a schedule, strength 0 serves without the plugin; with one, the
+    # server has to carry it from the start or the onset would also install it.
+    env = RB.server_env("rank:1", 0.0, 8, 4, schedule=[[0, 0.0], [50, 2.0]])
+    assert env != {}
+    bias = RB.parse_env(env[RB.ENV_VAR])
+    assert bias.schedule == ((0, 0.0), (50, 2.0))
+    assert bias.initial_strength == 0.0
+    assert bias.strengths == [0.0, 2.0]
+
+
+def test_scheduled_strength_switches_at_its_step_and_mutates_the_vector_in_place(monkeypatch):
+    torch = pytest.importorskip("torch")
+    seen = []
+
+    def select(hidden_states, router_logits, top_k):
+        seen.append(router_logits.clone())
+        return router_logits.topk(top_k, dim=-1).indices
+
+    bias = RB.Bias(strength=0.0, n_ranks=2, target="rank:1", schedule=((0, 0.0), (3, 5.0)))
+    schedule = RB._Schedule(bias)
+    biased = RB._wrap(select, bias, schedule)
+    logits = torch.tensor([[1.0, 2.0, 0.0, -1.0]])
+    monkeypatch.setattr(RB, "_current_layer", [None])
+
+    def forward():
+        """One engine step over a two-layer model."""
+        for layer in (0, 1):
+            RB._current_layer[0] = layer
+            biased(hidden_states=None, router_logits=logits, top_k=2)
+
+    for _ in range(3):
+        forward()
+    # Three forwards of two layers is three steps, not six: the step is the
+    # forward, read off the layer index falling back to 0.
+    assert schedule.step == 2
+    assert schedule.strength == 0.0
+    vector = schedule.live[0][0]
+    assert vector.tolist() == [0.0, 0.0, 0.0, 0.0]
+    assert sorted(seen[-1][0].tolist()) == [-1.0, 0.0, 1.0, 2.0]
+
+    forward()
+    assert schedule.step == 3
+    assert schedule.strength == 5.0
+    # The same tensor object, overwritten: a captured graph holds this reference,
+    # so replacing it would leave the graph adding the old values forever.
+    assert schedule.live[0][0] is vector
+    assert vector.tolist() == [0.0, 0.0, 5.0, 5.0]
+    assert torch.equal(seen[-1], logits + torch.tensor([0.0, 0.0, 5.0, 5.0]))
+
+
+def test_a_schedule_passes_through_every_level_it_lists(monkeypatch):
+    pytest.importorskip("torch")
+    bias = RB.Bias(strength=0.0, n_ranks=2, target="rank:0",
+                   schedule=((0, 0.0), (2, 1.0), (4, 3.0)))
+    schedule = RB._Schedule(bias)
+    biased = RB._wrap(lambda **kw: kw["router_logits"], bias, schedule)
+    monkeypatch.setattr(RB, "_current_layer", [None])
+    import torch
+
+    strengths = []
+    for _ in range(6):
+        for layer in (0, 1):
+            RB._current_layer[0] = layer
+            biased(hidden_states=None, router_logits=torch.zeros(1, 4), top_k=1)
+        strengths.append(schedule.strength)
+    assert strengths == [0.0, 0.0, 1.0, 1.0, 3.0, 3.0]
+
+
+def test_the_bias_survives_the_screen_loading_first(monkeypatch, tmp_path):
+    """Both plugins must wrap selection, in either load order.
+
+    Entry points load sorted by name, so ``moe_expert_counter`` always loads
+    before ``moe_router_bias``. Until 2026-10-16 router_bias skipped any
+    selection function that already carried ``__wrapped__`` - which the counter
+    sets - so with the screen on, the bias was never applied at all.
+    gate-closure's count-on arm recorded 1.13x busiest rank where the run's own
+    validation of that level reported 1.73x.
+    """
+    torch = pytest.importorskip("torch")
+    from moe_reliability import expert_counter as EC
+
+    real = {}
+
+    def select(*args, **kwargs):
+        real["logits"] = kwargs["router_logits"]
+        return ("weights", kwargs["router_logits"].topk(kwargs["top_k"], dim=-1).indices)
+
+    sel = types.ModuleType("vllm_ascend.ops.fused_moe.experts_selector")
+    sel._select_experts_with_fusion_ops = select
+    sel._native_select_experts = select
+    fused = types.ModuleType("vllm_ascend.ops.fused_moe.fused_moe")
+
+    class Runner:
+        def forward_impl(self, layer):
+            return None
+
+    fused.AscendMoERunner = Runner
+    pkg = types.ModuleType("vllm_ascend.ops.fused_moe")
+    pkg.experts_selector = sel
+    for name, mod in {"vllm_ascend": types.ModuleType("vllm_ascend"),
+                      "vllm_ascend.ops": types.ModuleType("vllm_ascend.ops"),
+                      "vllm_ascend.ops.fused_moe": pkg,
+                      "vllm_ascend.ops.fused_moe.experts_selector": sel,
+                      "vllm_ascend.ops.fused_moe.fused_moe": fused}.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    monkeypatch.setenv(EC.ENV_VAR, json.dumps({"layers": 1, "token_fraction": 1.0, "window_steps": 4,
+                                               "out": str(tmp_path / "counts.jsonl")}))
+    monkeypatch.setenv(RB.ENV_VAR, json.dumps({"strength": 5.0, "n_ranks": 2, "target": "rank:1"}))
+    EC.register()   # the order the entry points actually load in
+    RB.register()
+
+    logits = torch.tensor([[1.0, 2.0, 0.0, -1.0]])
+    monkeypatch.setattr(RB, "_current_layer", [0])
+    _, ids = sel._native_select_experts(hidden_states=None, router_logits=logits, top_k=2)
+    assert sorted(ids[0].tolist()) == [2, 3], "the bias did not reach the router"
+    assert torch.equal(real["logits"], logits + torch.tensor([0.0, 0.0, 5.0, 5.0]))

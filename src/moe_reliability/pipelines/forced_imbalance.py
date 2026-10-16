@@ -53,7 +53,7 @@ def _expert_count(cfg: ExperimentConfig) -> int:
 
 def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
     """Every point serves the unmodified model; the level travels as a server environment."""
-    from ..router_bias import ROTATE, server_env, target_experts
+    from ..router_bias import ROTATE, parse_schedule_spec, server_env, target_experts
 
     n_experts, n_ranks = _expert_count(cfg), cfg.hardware.n_npus
     rotating = cfg.imbalance.bias_target == ROTATE
@@ -62,13 +62,18 @@ def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
     what = f"a different rank per layer, {n_experts // n_ranks} experts each" if rotating \
         else f"experts {targeted} of {n_experts}"
     layers = f", layers {cfg.imbalance.bias_layers}" if cfg.imbalance.bias_layers else ""
+    # Fractions of each point's level, so every level shares the onset step.
+    schedule = parse_schedule_spec(cfg.imbalance.bias_schedule) if cfg.imbalance.bias_schedule else None
     log(f"router bias on {cfg.imbalance.bias_target}: {what}, {n_ranks} ranks{layers}"
-        + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else ""))
+        + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else "")
+        + (f", scheduled {[f'step {s}: {f:g}x the level' for s, f in schedule]}" if schedule else ""))
     for p in ctx.points:
         ctx.update_point(p["label"], model_path=cfg.model.model_id, checkpoint_created=False,
                          server_env=server_env(cfg.imbalance.bias_target, p["value"], n_experts, n_ranks,
                                                at_zero=cfg.imbalance.bias_plugin_at_zero,
-                                               layers=cfg.imbalance.bias_layers),
+                                               layers=cfg.imbalance.bias_layers,
+                                               schedule=[(step, fraction * p["value"])
+                                                         for step, fraction in schedule] if schedule else None),
                          bias_experts=targeted or None)
 
 

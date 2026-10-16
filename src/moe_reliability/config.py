@@ -266,6 +266,16 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
            "the bias applies to; empty biases every MoE layer. A few layers hold a skew the way natural "
            "imbalance does, and test whether a detector localises it. The zero-bias control uses the same "
            "layers."),
+    Option("bias_schedule", "list[str]", [], "router_bias only: change the skew while one server runs, as "
+           "'<engine step>:<fraction of this point's level>' entries - ['0:0', '600:1'] serves balanced for "
+           "600 forwards and then steps to the point's level. The first entry must be at step 0, so what the "
+           "server serves before the first change is explicit, and the fractions multiply the point's level, "
+           "so a sweep gets one onset per level at the same step. Steps rather than seconds because expert "
+           "selection is replicated: two ranks holding different biases on the same forward would select "
+           "different experts, and a step count is identical on every rank where a clock is not. This is how "
+           "detection *delay* is measured; every run before 2026-10-16 held its bias for the server's life, "
+           "so an onset could only be simulated by splicing two captures. The counting screen records the "
+           "step per window, so the two line up directly."),
     Option("validation_workload", "str", "", "Prompts for validation: empty keeps the first "
            "validation_samples MMLU prompts in the order every earlier run used; a workload spec draws them "
            "shuffled from one family or several: mmlu, gsm8k, mbpp, mmmlu:<LANG> (e.g. mmmlu:ZH_CN), dolly, "
@@ -729,6 +739,12 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                 errors.append("imbalance.bias_layers must be layer indices >= 0")
             if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):
                 errors.append("imbalance.bias_layers contains duplicates")
+            if cfg["imbalance"]["bias_schedule"]:
+                from .router_bias import parse_schedule_spec
+                try:
+                    parse_schedule_spec(cfg["imbalance"]["bias_schedule"])
+                except ValueError as e:
+                    errors.append(f"imbalance.bias_schedule: {e}")
             # A rank target names the experts a rank holds *under contiguous
             # placement*, which EPLB is free to change, so the skew would wander
             # off the rank it was aimed at and the point would measure nothing
@@ -747,6 +763,8 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                               f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
         if cfg["imbalance"]["bias_layers"] and cfg["imbalance"]["method"] != "router_bias":
             errors.append("imbalance.bias_layers applies to method = 'router_bias' only")
+        if cfg["imbalance"]["bias_schedule"] and cfg["imbalance"]["method"] != "router_bias":
+            errors.append("imbalance.bias_schedule applies to method = 'router_bias' only")
         if cfg["benchmark"]["workload"]:
             from .core.data import parse_workload
             try:

@@ -376,6 +376,23 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   to price the screen - they are different mechanisms, and that would over-count
   transport the screen never does. DeepSeek is unmeasurable in the prefill-bound
   regime (baseline spread 3.75%, se 4.11%: ~85 repeats to resolve 1%).
+- **The screen and the router bias could not both be on, and nobody noticed**
+  (2026-10-16). vLLM loads general plugins in entry-point order, which is sorted
+  by name, so `moe_expert_counter` always loaded before `moe_router_bias` -
+  and router_bias skipped any selection function already carrying `__wrapped__`,
+  which the counter sets. **With the screen on, the bias was never applied.**
+  Proof on the data: `gate-closure`'s count-on arm recorded a busiest rank of
+  1.128x at level 0 and **1.13x at level 0.5**, whose own validation reports
+  1.73x. So that run's screen cost (+1.65% / +1.71% on DeepSeek) compared
+  unbiased traffic without the plugin against biased traffic with it - two
+  differences, neither of them the screen - and is **withdrawn**. The capture
+  control (+6.38% / +9.51%) is unaffected, because `benchmark.capture_experts`
+  is not a plugin. Mixtral's +0.28% +-0.71 stands only because it was level 0
+  and the zero-bias plugin costs Mixtral nothing measurable; it now rests on
+  that rather than on the arms being alike. Detection rates are unaffected -
+  they come from `validation_save_records` captures, which never set
+  `count_experts`. Each plugin now owns its sentinel (`_biasing`,
+  `_counting`), with a regression test that loads them in the real order.
 - **Run the positive control, and in a quieter regime** (2026-10-13,
   `gate-closure`, 4 arms x 2 levels x 5 repeats, 40/40 points, neighbour throughout). On
   DeepSeek with `client.stream = false` in every arm and eplb-fp2's settings,

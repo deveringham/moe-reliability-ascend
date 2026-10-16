@@ -524,6 +524,21 @@ a *lower* loadavg than its siblings.
   measurable. `count-on`'s spread is *wider* than `capture-on`'s, which is
   incoherent as signal. The fix is a decode-heavy workload, not more points.
 
+**Withdrawn 2026-10-16: the DeepSeek readings above measured something else.**
+vLLM loads general plugins sorted by name, so `moe_expert_counter` loaded before
+`moe_router_bias`, and router_bias skipped any selection function already
+carrying `__wrapped__` - which the counter sets. With the screen on, the bias was
+never applied. `gate-closure`'s count-on arm therefore recorded 1.128x busiest
+rank at level 0 and 1.13x at level 0.5, where that level's own validation reports
+1.73x: the arm served unbiased traffic *and* without the plugin, whose own cost
+on DeepSeek is +6.1%. So +1.65% / +1.71% is not a bound on what the screen
+costs, and DeepSeek's cost is now unmeasured rather than bounded. The capture
+control is unaffected (`benchmark.capture_experts` is not a plugin), and so are
+all detection rates, which come from captures that never set `count_experts`.
+Mixtral's +0.28% +-0.71 survives because that run was level 0 and the zero-bias
+plugin costs Mixtral nothing measurable - but it now rests on that measurement
+rather than on the two arms being alike.
+
 ### Against what it averts
 
 EPLB rearranging where it has nothing to win costs **+4.73% +-4.84** TPOT at

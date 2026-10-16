@@ -9,11 +9,17 @@
 # alarms if the simulation is right, which turns a simulated rate into a
 # measured one, and none if the simulation is pessimistic.
 #
-# The same six families as detection-capture's balanced arm, so the loads are
-# directly comparable to everything already measured, at ten times the length.
-# 2000 requests per family, so a homogeneous per-corpus stream is 250 windows of
-# 8 and the mixed stream is 1500 - the per-prompt labels carry the family, so
-# both come out of one capture.
+# Four of the six families detection-capture's balanced arm used, at 3000
+# requests each: a homogeneous per-corpus stream is then 375 windows of 8 and
+# the mixed stream is 1500, and the per-prompt labels carry the family, so both
+# come out of one capture.
+#
+# MBPP and GSM8K are left out because the datasets cannot supply the depth -
+# 500 and 1319 prompts exist, against the 3000 per family this asks for, and the
+# loader divides the sample count equally. Repeating prompts would not help:
+# prefill routing is deterministic, so a repeat adds no variability to the
+# window distribution, only weight. Both are already captured at 200 per family
+# in detection-capture, which is what breadth there is; this run buys depth.
 #
 # Capture only: one level, no sweep, and the unbiased level, so the plugin is
 # never installed. Nothing here measures latency, so a neighbour on NPUs 4-5
@@ -61,7 +67,7 @@ imbalance_levels = [0]
 bias_plugin_at_zero = false
 validate_imbalance = true
 validation_samples = 12000
-validation_workload = "mixed:mmlu,gsm8k,mbpp,mmmlu:DE_DE,dolly,ultrachat"
+validation_workload = "mixed:mmlu,dolly,ultrachat,mmmlu:DE_DE"
 validation_save_records = true
 
 [benchmark]
