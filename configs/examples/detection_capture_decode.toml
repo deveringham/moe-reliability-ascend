@@ -1,0 +1,76 @@
+# The detection capture again, with generation on, split by token source.
+#
+# D1c in docs/action-items.md. B3 found prompt and decode routing to be
+# independent skews that cancel when pooled - prompt-only 1.0780x, decode-only
+# 1.0638x, both 1.0517x, busiest rank agreeing on 7 of 26 layers and their
+# per-rank shares correlating +0.011. That was measured on unbiased traffic, so
+# it describes the screen's *floor* and says nothing about its signal.
+#
+# Which matters, because both move. If an injected skew lands on prefill and
+# decode alike, including decode lowers the floor and the signal together and
+# the screen is merely quieter. If the skew lands mostly on prefill - which is
+# where its latency cost lives, and a saturated decode step is the same length
+# at every eager offset - then decode tokens dilute the signal while the floor
+# barely moves, and the screen is less sensitive in deployment than any
+# calibration in docs/calibrations claims.
+#
+# Same levels, same families, same sample count as detection_capture.toml, so
+# the prompt-only half of this capture is directly comparable to it and the
+# difference is generation. The analysis splits each record by token source
+# (prompt_routed_experts against routed_experts), so one run answers both
+# questions and also supplies the prefill-only statistic D4 wants to score.
+#
+# client.ignore_eos, because this compares levels: past ~3x the bias shortens
+# DeepSeek's answers, and a level whose decode half is 84 tokens where another's
+# is 100 would differ in token mix as well as in skew
+# (docs/router-bias-findings.md).
+#
+#   ./nrun -t dcapdec 'uv run moe-reliability run configs/examples/detection_capture_decode.toml'
+#   (Mixtral: --set 'model.model_id="mistralai/Mixtral-8x7B-Instruct-v0.1"' \
+#             --set 'model.model_name="mixtral"' --set 'model.probe="mistral"' \
+#             --set 'imbalance.imbalance_levels=[0, 0.25, 0.5, 1, 2, 3]')
+
+[experiment]
+type = "forced_imbalance"
+name = "detection-capture-decode"
+description = "Per-request routing at offsets 0-2 with 100 generated tokens, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+# The one difference from detection_capture.toml that matters.
+max_new_tokens = 100
+ignore_eos = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.25, 0.5, 1, 2]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 1200
+validation_workload = "mixed:mmlu,gsm8k,mbpp,mmmlu:DE_DE,dolly,ultrachat"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false
