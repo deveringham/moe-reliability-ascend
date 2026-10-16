@@ -326,6 +326,70 @@ counted, inside the baseline's own spread (G). `detection.monitoring_overhead`
 still prices it from an assumed per-assignment `scatter_add_`; the measurement
 supersedes it.
 
+## C6. Two knobs that were fixed by assumption
+
+`scripts/detection_params.py` (2026-10-16), re-analysis of the same captures:
+`docs/figures/tables/detection_fpr.csv`, `detection_fpr_confirmation.csv` and
+`detection_budget_split.csv`. Both knobs were held constant everywhere above -
+the false-alarm target at 1% and the budget split at 4 layers x 10% of tokens -
+and neither value was chosen by measurement.
+
+**The 1% per-window target is not the best point.** Every level at or above an
+impact threshold is caught in 100% of windows at every target from 0.2% to 10%,
+so the target moves only the marginal levels and the rate of early firing.
+Tightening it dominates, at the same confirmation length and the same delay:
+
+| Target, k = 2 | Detect onset | Requests to a false alarm | Mixtral headroom |
+|---|---|---|---|
+| 1% (as used above) | 0.99 / 0.99 | 1704 / 1504 | +0.060 |
+| **0.5%** | **1.00 / 1.00** | **2544 / 3120** | **+0.034** |
+| 0.2% | 1.00 / 1.00 | 2328 / 3120 | +0.009 |
+
+(Mixtral / DeepSeek; headroom is the 1.42x impact threshold less the alarm, so
+it is what the screen has to warn *before* the cost.) Half a percent is the
+setting to prefer: detection is full, the quiet interval roughly doubles, and
+0.2% buys nothing further while spending the headroom that makes an early
+warning possible. k stays the lever it was in C5 - at every target, k = 1 fires
+early on 6-39% of streams and k = 2 removes it.
+
+**The counting budget buys more as layers than as tokens.** At the screen's own
+1.3-1.5% of assignments, holding the budget and moving the split:
+
+| Split | DeepSeek, all layers | DeepSeek, 6 of 26 | Mixtral, 1.39x (free) | Mixtral, costly levels |
+|---|---|---|---|---|
+| 1 x 40% | 0.61 | 0.23 | 0.46 | 1.00 |
+| 2 x 20% | 0.85 | 0.43 | 0.60 | 1.00 |
+| 4 x 10% (as used above) | 0.95 | 0.69 | 0.68 | 1.00 |
+| **8 x 5%** | **0.97** | **0.90** | 0.60 | **1.00** |
+| 13 x 3% | 0.96 | 0.94 | 0.39 | 1.00 |
+| every layer x 1.3-1.5% | 0.73 | **1.00** | 0.09 | 0.99-1.00 |
+
+Eight layers at a twentieth of their tokens is better or equal everywhere that
+matters: +0.21 on a skew confined to six layers, +0.02 on an all-layer skew, and
+every Mixtral level that costs latency still caught in full. Its one apparent
+loss - Mixtral's 1.39x falling from 0.68 to 0.60 - is on a level *below* the
+1.42x onset, where firing less is the improvement. What it does cost is
+headroom: Mixtral's alarm rises to 1.406, leaving +0.014 of early warning. So
+the split trades early warning for reach, and 4 x 10% is defensible only if
+early warning is what the deployment wants.
+
+**Thinning tokens biases the statistic upward, which is why the all-layer split
+collapses.** Each layer's reading is a maximum over ranks of a noisy share, so
+counting fewer tokens inflates it: the benign median runs 1.137 -> 1.459 on
+Mixtral and 1.104 -> 1.258 on DeepSeek across the splits above. At every layer
+and 1.3% of tokens Mixtral's benign median (1.459) sits *above* its impact
+threshold - the screen reads ordinary traffic as costly. The alarm is therefore
+in biased, sampling-dependent units while the impact threshold is not, so
+**changing `count_layers` or the token fraction invalidates the calibration**
+even though the counting cost is unchanged. Recalibrate the alarm whenever the
+sampling moves, and treat the bias as a property to characterise rather than a
+noise term.
+
+**A stale label in C.** Section C calls 1.39x Mixtral's "lowest costly level",
+which used the 1.31x onset. The crossing-holds correction put the onset at 1.42x
+(see the calibration bullet in CLAUDE.md), so 1.39x is free and C's detection
+rates there read as over-firing rather than as a sensitivity shortfall.
+
 ## D. Stage 2: step time at matched batch size
 
 Slope of median step wall against busiest-rank load, within a batch bin, from

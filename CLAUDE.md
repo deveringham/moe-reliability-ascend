@@ -154,6 +154,21 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   within 0.04. `WindowSampler(layer_choice="random")`, and anything that slices
   the layers once before a stream starts has silently turned it back into fixed
   sampling - `onset_delay` and `mean_windows_to_false_alarm` both did.
+- **Sweep the false-alarm target and the layers/tokens split; neither default was
+  measured** (2026-10-16, `scripts/detection_params.py`,
+  `docs/figures/tables/detection_fpr.csv`, `detection_budget_split.csv`). Every
+  costly level is caught in 100% of windows at every per-window target from 0.2%
+  to 10%, so the target only moves marginal levels and early firing: **0.5% with
+  k = 2** detects in full and roughly doubles the quiet interval against the 1%
+  used everywhere before (2544/3120 requests against 1704/1504), at the same
+  16-request delay. At a held counting budget, **8 layers at 5% of tokens beats 4
+  at 10%** - +0.21 on a six-layer skew, +0.02 on an all-layer one, every costly
+  Mixtral level still 1.00 - but it spends Mixtral's early-warning headroom
+  (+0.014 against +0.060). The reason the all-layer split collapses is that
+  thinning tokens **biases busiest-rank-over-mean upward** (benign median 1.137
+  -> 1.459 on Mixtral), so the alarm is in sampling-dependent units the impact
+  threshold is not: moving `count_layers` or the token fraction invalidates the
+  calibration at no change in cost.
 - **The screen measures skew, not impact, and the gap is model-specific.**
   DeepSeek's 1%-false-alarm level is 1.25x where nothing costs until 2.43x, so
   it alarms on 94-100% of windows at 1.35x and 1.72x, both free. Mixtral's alarm
