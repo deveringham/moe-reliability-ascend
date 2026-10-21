@@ -159,9 +159,13 @@ def main():
                          and r["token_fraction"] == token_fraction][0]["true_load"]
             print(f"  {'':>8} {lv:>6} {true_both:>10.3f} " + "".join(cells))
 
+    # One table holds every model: replace this model's rows, keep the others'.
     os.makedirs(args.out, exist_ok=True)
     for name, data in (("decode_signal.csv", rows), ("decode_signal_sources.csv", agreement)):
         path = os.path.join(args.out, name)
+        if os.path.exists(path):
+            with open(path, newline="") as f:
+                data = [r for r in csv.DictReader(f) if r["model"] != model] + data
         fields = list(dict.fromkeys(k for r in data for k in r))
         with open(path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=fields)
