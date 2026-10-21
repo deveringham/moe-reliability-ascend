@@ -34,6 +34,7 @@ moe-reliability = "moe_reliability.cli:main"
 # environment carries MOE_ROUTER_BIAS (see moe_reliability/router_bias.py).
 [project.entry-points."vllm.general_plugins"]
 moe_router_bias = "moe_reliability.router_bias:register"
+moe_expert_counter = "moe_reliability.expert_counter:register"
 
 [dependency-groups]
 dev = ["pytest>=8"]

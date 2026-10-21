@@ -53,7 +53,7 @@ def _expert_count(cfg: ExperimentConfig) -> int:
 
 def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
     """Every point serves the unmodified model; the level travels as a server environment."""
-    from ..router_bias import ROTATE, server_env, target_experts
+    from ..router_bias import ROTATE, parse_schedule_spec, server_env, target_experts
 
     n_experts, n_ranks = _expert_count(cfg), cfg.hardware.n_npus
     rotating = cfg.imbalance.bias_target == ROTATE
@@ -62,13 +62,18 @@ def prepare_router_bias(ctx: RunContext, cfg: ExperimentConfig) -> None:
     what = f"a different rank per layer, {n_experts // n_ranks} experts each" if rotating \
         else f"experts {targeted} of {n_experts}"
     layers = f", layers {cfg.imbalance.bias_layers}" if cfg.imbalance.bias_layers else ""
+    # Fractions of each point's level, so every level shares the onset step.
+    schedule = parse_schedule_spec(cfg.imbalance.bias_schedule) if cfg.imbalance.bias_schedule else None
     log(f"router bias on {cfg.imbalance.bias_target}: {what}, {n_ranks} ranks{layers}"
-        + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else ""))
+        + (", plugin installed at level 0 too (all-zero vector)" if cfg.imbalance.bias_plugin_at_zero else "")
+        + (f", scheduled {[f'step {s}: {f:g}x the level' for s, f in schedule]}" if schedule else ""))
     for p in ctx.points:
         ctx.update_point(p["label"], model_path=cfg.model.model_id, checkpoint_created=False,
                          server_env=server_env(cfg.imbalance.bias_target, p["value"], n_experts, n_ranks,
                                                at_zero=cfg.imbalance.bias_plugin_at_zero,
-                                               layers=cfg.imbalance.bias_layers),
+                                               layers=cfg.imbalance.bias_layers,
+                                               schedule=[(step, fraction * p["value"])
+                                                         for step, fraction in schedule] if schedule else None),
                          bias_experts=targeted or None)
 
 
@@ -152,10 +157,11 @@ def validate_checkpoints(ctx: RunContext, cfg: ExperimentConfig) -> None:
     n = cfg.imbalance.validation_samples
     subjects: list | None = None
     if cfg.imbalance.validation_workload:
-        from ..core.data import prompt_char_budget, workload_prompts
+        from ..core.data import prompt_token_budget, workload_prompts
 
-        prompts, subjects = workload_prompts(cfg.imbalance.validation_workload, n, cfg.experiment.seed,
-                                             max_chars=prompt_char_budget(cfg.server.max_model_len))
+        prompts, subjects = workload_prompts(
+            cfg.imbalance.validation_workload, n, cfg.experiment.seed,
+            max_tokens=prompt_token_budget(cfg.server.max_model_len, cfg.client.max_new_tokens))
     elif n:
         prompts, subjects, _ = common.mmlu_prompts(n, cfg.experiment.seed)
     else:
@@ -247,7 +253,8 @@ def _has_capture(records) -> bool:
 
 def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> None:
     ctx.init_stages(STAGES)
-    ctx.ensure_points(cfg.imbalance.imbalance_levels, repeats=cfg.benchmark.repeats)
+    ctx.ensure_points(cfg.imbalance.imbalance_levels, repeats=cfg.benchmark.repeats,
+                      arms=[name for name, _ in cfg.arms])
 
     if common.should_run(ctx, STAGE_CHECKPOINTS):
         with ctx.stage(STAGE_CHECKPOINTS):
@@ -269,11 +276,12 @@ def run(ctx: RunContext, cfg: ExperimentConfig, retry_failed: bool = False) -> N
                 # Loaded once, and only if a point still needs benchmarking.
                 if "prompts" not in cache:
                     if cfg.benchmark.workload:
-                        from ..core.data import prompt_char_budget, workload_prompts
+                        from ..core.data import prompt_token_budget, workload_prompts
 
                         cache["prompts"], _ = workload_prompts(
                             cfg.benchmark.workload, cfg.benchmark.n_samples, cfg.experiment.seed,
-                            max_chars=prompt_char_budget(cfg.server.max_model_len))
+                            max_tokens=prompt_token_budget(cfg.server.max_model_len,
+                                                            cfg.client.max_new_tokens))
                     else:
                         cache["prompts"], _, _ = common.mmlu_prompts(cfg.benchmark.n_samples,
                                                                      cfg.experiment.seed)
@@ -302,6 +310,11 @@ def plan(cfg: ExperimentConfig) -> list[str]:
     lines.append(f"benchmark {len(levels)} imbalance levels {levels} with {cfg.benchmark.n_samples} "
                  f"{corpus} prompts"
                  f"{common.profiling_note(cfg.benchmark)}")
+    for name, overrides in cfg.arms:
+        lines.append(f"  arm {name}: {'; '.join(overrides) or 'as configured'}")
+    if cfg.arms:
+        lines.append(f"{len(levels) * len(cfg.arms) * max(1, cfg.benchmark.repeats)} points: every level once per "
+                     f"arm and repeat, arms shuffled into the same rounds")
     return lines
 
 

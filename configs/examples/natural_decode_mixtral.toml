@@ -1,0 +1,67 @@
+# Does Mixtral's Dolly false positive survive decode tokens?
+#
+# The cross-model half of B3, and the open question B2 leaves. Mixtral is the
+# model whose deployable alarm (1.349x) nearly touches its impact onset (1.42x),
+# and on prompt routing a homogeneous Dolly stream fires 16.3% of its windows
+# and confirms every 375 requests while costing nothing. On DeepSeek, decode
+# tokens cancelled most of the prompt-side skew and took the alarm rate to ~0.
+# Whether that happens on Mixtral is not a detail: if it does, the false positive
+# is an artefact of capturing with max_new_tokens = 1 and the deployed screen is
+# quieter than B2 says; if it does not, B2 stands as a deployment result.
+#
+# Mixtral is also the harder case for the cancellation itself. Eight experts over
+# four ranks is two per rank, so there are far fewer ways for prefill and decode
+# to concentrate on different ranks than DeepSeek's sixteen-per-rank gives them.
+# If the cancellation still appears here it is a property of routing rather than
+# of expert count.
+#
+# Four families at 1500 each: Dolly because it is the one that fires, Yoruba
+# because it is the hottest corpus measured on this model (1.47x pooled against a
+# 1.42x onset), MMLU and UltraChat as the quiet references. 187 windows of 8 per
+# corpus, which is enough for a p99 and for a confirmed-alarm count, and not
+# enough for a rate as precise as natural-long's.
+#
+#   ./nrun -t ndecmx 'uv run moe-reliability run configs/examples/natural_decode_mixtral.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "natural-decode-mixtral"
+description = "Unbiased routing with 100 generated tokens, four families incl. Yoruba, Mixtral, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0]
+bias_plugin_at_zero = false
+validate_imbalance = true
+validation_samples = 6000
+validation_workload = "mixed:mmlu,dolly,ultrachat,mmmlu:YO_NG"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

@@ -1,0 +1,45 @@
+model,skew,budget,budget_x_screen,layers,of_layers,token_fraction,assignment_fraction,benign_median,benign_p99,alarm,detect_1.20x,detect_1.39x,detect_1.80x,detect_2.69x,detect_3.44x,catches_costly_levels,detect_1.40x,detect_1.67x,run,hot_layers,detect_1.35x,detect_1.72x,detect_2.43x,detect_3.54x
+mixtral,all-layer skew,0.0125,1,1,32,0.4,0.0125,1.1365,1.3984,1.3984,0.097,0.462,0.936,1.0,1.0,0.979,,,,,,,,
+mixtral,all-layer skew,0.0125,1,2,32,0.2,0.0125,1.1624,1.3566,1.3566,0.123,0.604,0.986,1.0,1.0,0.995,,,,,,,,
+mixtral,all-layer skew,0.0125,1,4,32,0.1,0.0125,1.1942,1.3598,1.3598,0.087,0.678,0.999,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.0125,1,8,32,0.05,0.0125,1.2483,1.4061,1.4061,0.068,0.601,1.0,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.0125,1,13,32,0.0308,0.0125,1.3034,1.4763,1.4763,0.032,0.385,1.0,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.0125,1,32,32,0.0125,0.0125,1.4588,1.6841,1.6841,0.017,0.09,0.994,1.0,1.0,0.998,,,,,,,,
+mixtral,all-layer skew,0.05,4,2,32,0.8,0.05,1.1332,1.2943,1.2943,0.204,0.816,0.998,1.0,1.0,0.999,,,,,,,,
+mixtral,all-layer skew,0.05,4,4,32,0.4,0.05,1.1459,1.2768,1.2768,0.216,0.937,1.0,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.05,4,8,32,0.2,0.05,1.1665,1.2693,1.2693,0.264,0.992,1.0,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.05,4,13,32,0.1231,0.05,1.1873,1.2846,1.2846,0.226,0.996,1.0,1.0,1.0,1.0,,,,,,,,
+mixtral,all-layer skew,0.05,4,32,32,0.05,0.05,1.2521,1.358,1.358,0.111,0.962,1.0,1.0,1.0,1.0,,,,,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,1,26,0.4,0.0154,1.1039,1.2828,1.2828,,,,,,,0.234,0.245,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,2,26,0.2,0.0154,1.1169,1.2518,1.2518,,,,,,,0.434,0.423,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,4,26,0.1,0.0154,1.1359,1.244,1.244,,,,,,,0.686,0.668,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,8,26,0.05,0.0154,1.1652,1.2712,1.2712,,,,,,,0.899,0.916,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,13,26,0.0308,0.0154,1.1944,1.3019,1.3019,,,,,,,0.944,0.992,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,26,26,0.0154,0.0154,1.2579,1.3816,1.3816,,,,,,,1.0,1.0,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,2,26,0.8,0.0615,1.1047,1.2223,1.2223,,,,,,,0.415,0.436,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,4,26,0.4,0.0615,1.1111,1.2013,1.2013,,,,,,,0.687,0.662,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,8,26,0.2,0.0615,1.1203,1.1952,1.1952,,,,,,,0.921,0.924,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,13,26,0.1231,0.0615,1.131,1.2015,1.2015,,,,,,,0.989,0.991,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,26,26,0.0615,0.0615,1.156,1.2251,1.2251,,,,,,,1.0,1.0,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,all-layer skew,0.0154,1,1,26,0.4,0.0154,1.1034,1.3086,1.3086,,,,,,,,,,,0.614,0.999,1.0,1.0
+deepseek-v2,all-layer skew,0.0154,1,2,26,0.2,0.0154,1.1155,1.2571,1.2571,,,,,,,,,,,0.854,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0154,1,4,26,0.1,0.0154,1.1335,1.2454,1.2454,,,,,,,,,,,0.952,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0154,1,8,26,0.05,0.0154,1.1601,1.2608,1.2608,,,,,,,,,,,0.973,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0154,1,13,26,0.0308,0.0154,1.1891,1.2936,1.2936,,,,,,,,,,,0.956,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0154,1,26,26,0.0154,0.0154,1.2478,1.3645,1.3645,,,,,,,,,,,0.735,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0615,4,2,26,0.8,0.0615,1.1038,1.2353,1.2353,,,,,,,,,,,0.924,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0615,4,4,26,0.4,0.0615,1.1102,1.2057,1.2057,,,,,,,,,,,0.995,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0615,4,8,26,0.2,0.0615,1.1198,1.1936,1.1936,,,,,,,,,,,1.0,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0615,4,13,26,0.1231,0.0615,1.1297,1.1956,1.1956,,,,,,,,,,,1.0,1.0,1.0,1.0
+deepseek-v2,all-layer skew,0.0615,4,26,26,0.0615,0.0615,1.1529,1.2199,1.2199,,,,,,,,,,,1.0,1.0,1.0,1.0
+deepseek-v2,6 of 26 layers,0.0154,1,1,26,0.4,0.0154,1.1039,1.2828,1.2828,,,,,,,0.234,0.245,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,2,26,0.2,0.0154,1.1169,1.2518,1.2518,,,,,,,0.434,0.423,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,4,26,0.1,0.0154,1.1359,1.244,1.244,,,,,,,0.686,0.668,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,8,26,0.05,0.0154,1.1652,1.2712,1.2712,,,,,,,0.899,0.916,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,13,26,0.0308,0.0154,1.1944,1.3019,1.3019,,,,,,,0.944,0.992,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0154,1,26,26,0.0154,0.0154,1.2579,1.3816,1.3816,,,,,,,1.0,1.0,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,2,26,0.8,0.0615,1.1047,1.2223,1.2223,,,,,,,0.415,0.436,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,4,26,0.4,0.0615,1.1111,1.2013,1.2013,,,,,,,0.687,0.662,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,8,26,0.2,0.0615,1.1203,1.1952,1.1952,,,,,,,0.921,0.924,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,13,26,0.1231,0.0615,1.131,1.2015,1.2015,,,,,,,0.989,0.991,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,
+deepseek-v2,6 of 26 layers,0.0615,4,26,26,0.0615,0.0615,1.156,1.2251,1.2251,,,,,,,1.0,1.0,20261007-151926_imbalance_deepseek-v2_npu4_bs512_detection-localisation,6,,,,

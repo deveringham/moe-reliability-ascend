@@ -1,0 +1,68 @@
+# What does collecting the routing cost, on both models, at full sampling?
+#
+#   2 models x 2 capture arms x 4 repeats = 16 points, ~4 min each, ~1.1 NPU-hours
+#
+# Second attempt. The first (2026-10-09, screen-overhead-000..002) compared a
+# streaming arm against a capturing one, and capture is never streamed: the
+# capturing arm finished 15% *sooner* end to end, which is the cost of streaming
+# 2000 responses through the client and API server, not a negative overhead. It
+# also ran the arms as separate grid entries under a neighbouring job, and died
+# on the third when another process took 31 GiB of NPU 0. Now both arms are
+# unstreamed (client.stream = false), timed end to end and by makespan, and
+# interleaved inside one run per model (benchmark.arms).
+#
+# The screen's overhead has two terms and only one of them has ever been
+# measured. The arithmetic - a scatter-add per counted assignment - is modelled
+# in detection.json from an *assumed* 2 ns per assignment, flagged unmeasured,
+# and comes out at 0.1% of a step at full sampling. The collection path, getting
+# the routing off the device at all, has never been measured here, and on eager
+# DeepSeek the comparable router-bias plugin's per-call tensor add cost 10.0 ms
+# per token, which is 6% of TPOT. An assumption that small, next to a measured
+# effect that large, is the weakest number in the overhead story.
+#
+# This measures the ceiling: --enable-return-routed-experts returns every
+# assignment of every layer for every request, so it is sampling fraction 1.0
+# with the serialisation included. A screen counting 4 of 26 layers and a tenth
+# of their tokens counts 1.3% of that, and whatever the collection path costs
+# bounds what the sampled version can cost.
+#
+# It does not vary with the sampling parameters, because the flag has no such
+# knobs - it is all or nothing. Turning the measured ceiling into a curve over
+# (layers, token fraction) needs a counting hook with those knobs, which is the
+# next thing to build. Until then: this number is the anchor, the curve below it
+# is a model, and the two should be presented as such.
+#
+# Everything else is held at the deployment the calibrations describe, and the
+# arms share prompts, so the difference is the capture and nothing else.
+#
+#   ./nrun 'uv run moe-reliability grid configs/grids/screen_overhead.toml --dry-run'
+#   ./nrun -t overhead2 'uv run moe-reliability grid configs/grids/screen_overhead.toml'
+
+[grid]
+name = "screen-overhead2"
+base = "../examples/router_bias_sweep.toml"
+share_workloads = true
+
+[set]
+"client.max_new_tokens" = 100
+"server.batch_size" = 512
+"server.max_num_batched_tokens" = 4096
+"server.gpu_memory_utilization" = 0.85
+"benchmark.repeats" = 4
+# Unstreamed in both arms: capture cannot stream, so neither may its control.
+# TTFT and TPOT are then unavailable; e2e latency and makespan are the measures.
+"client.stream" = false
+"benchmark.arms" = ["capture-off", "capture-on: benchmark.capture_experts=true"]
+"benchmark.n_samples" = 2000
+# One level, unbiased: the question is what the instrument costs, not what
+# imbalance costs, so nothing should be injected. The plugin stays installed so
+# this is the same serving path every calibration ran on.
+"imbalance.imbalance_levels" = [0]
+"imbalance.bias_plugin_at_zero" = true
+"imbalance.validate_imbalance" = false
+
+[matrix]
+"model.model_id,model.model_name,model.probe" = [
+    ["deepseek-ai/DeepSeek-V2-Lite-Chat", "deepseek-v2", "deepseek"],
+    ["mistralai/Mixtral-8x7B-Instruct-v0.1", "mixtral", "mistral"],
+]

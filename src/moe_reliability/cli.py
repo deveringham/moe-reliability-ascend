@@ -179,9 +179,10 @@ def cmd_grid(args: argparse.Namespace) -> int:
         for e in grid.entries:
             values = pipeline_for(e.config.experiment_type).sweep_values(e.config)
             repeats = max(1, e.config.benchmark.repeats)
-            n = f"{len(values) * repeats}" if values is not None else "?"
-            if values is not None and repeats > 1:
-                n += f" ({len(values)}x{repeats})"
+            arms = max(1, len(e.config.arms))
+            n = f"{len(values) * repeats * arms}" if values is not None else "?"
+            if values is not None and repeats * arms > 1:
+                n += f" ({len(values)}x{repeats}" + (f"x{arms} arms)" if arms > 1 else ")")
             print(f"  {e.name}: {n} points  " + ", ".join(f"{k}={v}" for k, v in e.assignments.items()))
         return EXIT_OK
 

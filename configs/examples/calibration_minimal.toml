@@ -1,0 +1,80 @@
+# The cheapest calibration that reproduced the full one - run as its own sweep.
+#
+#   3 levels x 3 repeats = 9 points, about 30 minutes
+#
+# scripts/calibration_cost.py cuts the 21-point calibration sweep every way it
+# can and asks which subsets still place the alarm where the full one did. The
+# answer on this deployment is levels {0, 0.5, 1} at 3 repeats: onset 1.420x,
+# alarm 1.339x, no false alarms, every costly level caught - identical to the
+# full sweep at 30 NPU-minutes against 69.
+#
+# That is a subset of one run, so it shares its traffic, its server instances and
+# its hardware state. It shows the recipe is sufficient *in that session*. It
+# cannot show the recipe reproduces in the next one, which is the property a
+# deployment-time calibration actually needs, and no other run on this deployment
+# captured routing at every level so the check cannot be done offline.
+#
+# This is that check. Same model, same batch, same levels, a different session.
+# Compare against docs/calibrations/...calibration-sweep.json:
+#
+#   onset within ~0.05x of 1.420x     the recipe transfers
+#   alarm within ~0.05x of 1.339x     and so does what it implies
+#   noise floor near 0.95%            the replication is as quiet as before
+# A large disagreement does not mean 3 repeats is too few - it means a
+# calibration has a session-to-session spread that none of our numbers include,
+# which would be the more important finding of the two.
+#
+# The levels are not a guess: 0 is the baseline every cost is measured against,
+# and 1 (1.76x) is the lowest level in the sweep that sits above the onset, which
+# is what the sweep has to bracket. 0.5 (1.36x) sits just below it. A sweep that
+# stops short of the onset does not calibrate at all.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/calibration_minimal.toml'
+#   ./nrun -t calmin 'uv run moe-reliability run configs/examples/calibration_minimal.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "calibration-minimal"
+description = "The 3x3 calibration recipe, re-run in its own session, Mixtral, NPUs 0-3."
+seed = 51
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.5, 1]
+# Without this the balanced arm runs without the plugin while every other point
+# pays its per-call tensor add, and the offset is collinear with "level > 0", so
+# an affected sweep cannot be fixed by refitting.
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 800
+validation_save_records = true
+
+[benchmark]
+n_samples = 2000
+repeats = 3
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

@@ -1,0 +1,91 @@
+# Does the record-mode fix actually give a working record-only EPLB?
+#
+# The bug (2026-10-12, docs/upstream-eplb.md patch 3): with
+# eplb_config.expert_map_record_path set, forward_before still starts the D2D
+# transfer and forward_end never finishes it, so the loader wedges in
+# TRANSFERRING and every later cycle is refused. Separately EplbWorker advances
+# old_expert_maps after every plan, applied or not, so from cycle 2 it plans
+# against a layout the server does not have.
+#
+# That half is already measured: every EPLB run in this project before
+# 2026-10-12 had a record path set, and all of them show
+# eplb_activity.stalled = true with 0 applied cycles. What has never been run
+# is the *fix*. This config is the positive control for it, with the branch
+# fix-eplb-record-mode applied to the node's installed package.
+#
+# Two arms, one level, one repeat - this is a behavioural check read from the
+# server log, not a latency measurement, so replication buys nothing here:
+#
+#   record    eplb_record_map = true. With the fix: plans every cycle, no
+#             "D2D weight update is on-going", 0 applied cycles (nothing may
+#             move), and - the discriminator for the worker half -
+#             eplb_activity.hotness "current" stays flat across every plan,
+#             because each plan is computed from the installed placement.
+#             Without the fix it stalls after cycle 1 and current drifts.
+#   eplb-on   no record path: the regression check. The patched package must
+#             still apply placements normally, so this arm should look like
+#             every earlier EPLB-on point - 11-12 applied cycles and current
+#             falling 1.68x -> ~1.0x.
+#
+# Level 0.5 (1.72x by eplb-gated's validation) so there is a real imbalance to
+# plan against: a flat "current" at 1.68x is only evidence if EPLB wants to
+# move something.
+#
+# Cost: 2 points at ~4 min = ~10 NPU-minutes on NPUs 0-3.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_record_fix.toml'
+#   ./nrun -t rec 'uv run moe-reliability run configs/examples/eplb_record_fix.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-record-fix"
+description = "Positive control for the fix-eplb-record-mode branch: record-only EPLB that plans every cycle and moves nothing."
+seed = 53
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+enable_eplb = true
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Off as written; the record arm turns it on.
+eplb_record_map = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0.5]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 1200
+repeats = 1
+arms = [
+    "record: server.eplb_record_map=true",
+    "eplb-on",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

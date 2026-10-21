@@ -1,0 +1,59 @@
+{
+ "noise_floor_pct": 0.86,
+ "impact_threshold": 1.234,
+ "benign_ceiling": 1.178,
+ "benign_median": 1.178,
+ "sampling": {
+  "window": 8,
+  "layers": 4,
+  "token_fraction": 0.1,
+  "layer_choice": "random"
+ },
+ "curve": [
+  {
+   "load": 1.178,
+   "cost_pct": 0.0
+  },
+  {
+   "load": 1.241,
+   "cost_pct": 0.96
+  },
+  {
+   "load": 1.38,
+   "cost_pct": 3.32
+  },
+  {
+   "load": 1.761,
+   "cost_pct": 6.71
+  },
+  {
+   "load": 2.62,
+   "cost_pct": 17.16
+  },
+  {
+   "load": 3.364,
+   "cost_pct": 26.77
+  }
+ ],
+ "headroom": 0.056,
+ "alarm": {
+  "level": 1.206,
+  "margin": 0.5,
+  "false_alarm_rate": 0.0,
+  "warns_before_cost": true
+ },
+ "note": "only 0.06x of headroom between benign traffic and the cost: an alarm set for early warning will fire often; realised loads were borrowed from another run's traffic, so the thresholds are only as good as that traffic matching this one",
+ "run": "20261006-165818_imbalance_mixtral_npu4_bs512_rbias-controlled-001",
+ "model": "mixtral",
+ "deployment": {
+  "n_npus": 4,
+  "batch_size": 512,
+  "max_num_batched_tokens": 4096,
+  "enforce_eager": true,
+  "max_new_tokens": 100,
+  "bias_target": "rank:0"
+ },
+ "balanced_tpot_ms": 165.5,
+ "loads_from": "a separate calibration run of this model",
+ "margin_sweep": null
+}

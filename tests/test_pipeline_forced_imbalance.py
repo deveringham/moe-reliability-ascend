@@ -93,6 +93,27 @@ def test_profiled_run_parses_npu_profiler_data(deployment, forced_config_data):
     assert ctx.stage_status("hta") == schema.STATUS_SKIPPED
 
 
+def test_benchmark_capture_reaches_the_benchmark_pass_only_when_asked(deployment, forced_config_data):
+    """The capture is what a monitor's collection path costs, so it has to be switchable.
+
+    Validation always captures - that is where the routing comes from - so the
+    benchmark pass is the only one whose timings can be compared with and
+    without it. Leaving it off by default keeps every existing sweep's TPOT
+    measured on an uninstrumented server.
+    """
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    benchmark = [c for c in deployment.calls if not c["capture"]]
+    assert benchmark and all(not c["capture"] for c in benchmark)
+
+    forced_config_data["benchmark"]["capture_experts"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    assert all(c["capture"] for c in deployment.calls[len(deployment.calls) - len(benchmark):])
+
+
 def test_separate_profiling_run_serves_each_point_twice(deployment, forced_config_data):
     """Timings must come from an unprofiled pass, traces from a profiled one."""
     forced_config_data["benchmark"]["enable_profiling"] = True
@@ -346,3 +367,178 @@ def test_runs_differing_only_in_name_are_ordered_independently(deployment, force
         assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
         orders.add(tuple(p["label"] for p in sorted(ctx.points, key=lambda p: p["exec_order"])))
     assert len(orders) > 1
+
+
+ARMS = ["eplb-off", "eplb-on: server.enable_eplb=true; server.eplb_heat_collection_interval=1"]
+
+
+def test_arms_are_served_inside_one_run_in_shared_rounds(deployment, forced_config_data):
+    """Arms run as separate grid entries let drift alias onto the arm, as on 2026-10-09."""
+    forced_config_data["benchmark"].update(repeats=2, arms=ARMS)
+    forced_config_data["imbalance"]["validate_imbalance"] = True
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+
+    labels = [p["label"] for p in ctx.points]
+    assert labels == ["imbalance_0_eplb-off", "imbalance_0_eplb-off_r2", "imbalance_0_eplb-on",
+                      "imbalance_0_eplb-on_r2", "imbalance_100_eplb-off", "imbalance_100_eplb-off_r2",
+                      "imbalance_100_eplb-on", "imbalance_100_eplb-on_r2"]
+    assert [p["arm"] for p in ctx.points] == ["eplb-off"] * 2 + ["eplb-on"] * 2 + ["eplb-off"] * 2 + ["eplb-on"] * 2
+    # validation once per level, on the configuration as written
+    validation = [c for c in deployment.calls if c["capture"]]
+    assert len(validation) == 2 and all(c["eplb"] is None for c in validation)
+    # each benchmark call is served with its own arm's settings
+    served = [c for c in deployment.calls if not c["capture"]]
+    by_order = sorted(ctx.points, key=lambda p: p["exec_order"])
+    for p, call in zip(by_order, served):
+        assert (call["eplb"] is not None) == (p["arm"] == "eplb-on")
+    # every round holds both arms at every level
+    for r in (1, 2):
+        rnd = [p for p in by_order if p["repeat"] == r]
+        assert {(p["value"], p["arm"]) for p in rnd} == {(v, a) for v in (0, 100) for a in ("eplb-off", "eplb-on")}
+
+    summary = ResultsStore(cfg.output.results_dir).get(ctx.run_id).summary()
+    on = summary[summary["arm"] == "eplb-on"]
+    assert on["enable_eplb"].all() and not summary[summary["arm"] == "eplb-off"]["enable_eplb"].any()
+
+
+def test_an_arm_may_not_change_what_validation_shares(forced_config_data):
+    from moe_reliability.config import ConfigError
+
+    forced_config_data["benchmark"]["arms"] = ["a", "b: imbalance.imbalance_levels=[0]"]
+    with pytest.raises(ConfigError, match="may only change"):
+        ExperimentConfig.from_dict(forced_config_data)
+
+
+def test_eplb_activity_is_read_from_the_point_s_own_log(deployment, forced_config_data, monkeypatch):
+    """Only the log says whether a plan was applied; the map says what was planned."""
+    from moe_reliability.pipelines import common
+
+    forced_config_data["benchmark"]["arms"] = ARMS
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    ctx = RunContext.create(cfg)
+    log_path = ctx.abspath(schema.LOG_FILE)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("Expert hotness imbalance, current: mean=9.000 max=9.0, updated: mean=1.0 max=1.0\n")
+
+    def serve(cfg, *args, **kwargs):
+        if cfg.server.enable_eplb:
+            with open(log_path, "a") as f:
+                f.write("Expert hotness imbalance, current: mean=2.000 max=2.5, updated: mean=1.000 max=1.1\n")
+                f.write("Full expert weight update cycle completed, total_layers=26\n" * cfg.hardware.n_npus)
+        return deployment(cfg, *args, **kwargs)
+
+    monkeypatch.setattr(common, "serve_and_measure", serve)
+    assert run_pipeline(ctx, cfg) == schema.STATUS_COMPLETED
+    for p in ctx.points:
+        if p["arm"] == "eplb-on":
+            # only this point's lines, not the one written before it
+            assert p["eplb_activity"]["plans"] == 1 and p["eplb_activity"]["applied_cycles"] == 1
+            assert p["eplb_activity"]["hotness"][0][0] == 2.0
+        else:
+            assert "eplb_activity" not in p
+
+
+def test_ignore_eos_reaches_the_client_and_is_off_by_default(monkeypatch, forced_config_data):
+    """client.ignore_eos is what holds the prefill/decode mix fixed across levels.
+
+    It has to reach the call that serves every pass - warm-up, benchmark and the
+    validation capture all go through it - and stay off unless asked for, so an
+    existing config keeps sending the requests it always sent.
+    """
+    from moe_reliability.core import vllm_serving
+    from moe_reliability.pipelines.common import serve_and_measure
+
+    seen = []
+
+    async def fake(*args, **kwargs):
+        seen.append(kwargs.get("ignore_eos"))
+        return []
+
+    monkeypatch.setattr(vllm_serving, "measure_vllm_throughput", fake)
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    serve_and_measure(cfg, "m", ["p"], trace_dir=None)
+    forced_config_data["client"] = {**forced_config_data.get("client", {}), "ignore_eos": True}
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    serve_and_measure(cfg, "m", ["p"], trace_dir=None)
+    assert seen == [False, True]
+
+
+def _metrics_file(path, prompts, lengths):
+    import gzip
+    import json
+
+    with gzip.open(path, "wt") as f:
+        json.dump({"requests": [{"prompt": p, "num_output_tokens": n} for p, n in zip(prompts, lengths)]}, f)
+    return str(path)
+
+
+def test_lengths_from_replays_each_prompts_length_by_content(monkeypatch, forced_config_data, tmp_path):
+    """client.lengths_from gives each prompt the length it had in the recorded point.
+
+    Matched by content, not position: warm-up serves a prefix and the recorded
+    point may have served the prompts in another order, and either way a prompt
+    must get its own length, not its neighbour's.
+    """
+    from moe_reliability.core import vllm_serving
+    from moe_reliability.pipelines.common import serve_and_measure
+
+    prompts = [[{"role": "user", "content": f"q{i}"}] for i in range(4)]
+    path = _metrics_file(tmp_path / "m.json.gz", list(reversed(prompts)), [40, 30, 20, 10])
+    seen = []
+
+    async def fake(*args, **kwargs):
+        seen.append((kwargs["max_new_tokens"], kwargs["ignore_eos"]))
+        return []
+
+    monkeypatch.setattr(vllm_serving, "measure_vllm_throughput", fake)
+    forced_config_data["client"] = {**forced_config_data["client"], "lengths_from": path, "ignore_eos": True}
+    cfg = ExperimentConfig.from_dict(forced_config_data)
+    serve_and_measure(cfg, "m", prompts, trace_dir=None)
+    serve_and_measure(cfg, "m", prompts[:2], trace_dir=None)
+    assert seen == [([10, 20, 30, 40], True), ([10, 20], True)]
+
+    with pytest.raises(ValueError, match="1 of 1 prompts have no recorded length"):
+        serve_and_measure(cfg, "m", [[{"role": "user", "content": "unseen"}]], trace_dir=None)
+
+
+def test_lengths_from_is_refused_without_ignore_eos_or_with_validation(forced_config_data, tmp_path):
+    """Without ignore_eos a replayed length is only a cap; validation serves prompts it never saw."""
+    from moe_reliability.config import ConfigError
+
+    path = _metrics_file(tmp_path / "m.json.gz", [["p"]], [5])
+    forced_config_data["client"] = {**forced_config_data["client"], "lengths_from": path}
+    with pytest.raises(ConfigError, match="needs client.ignore_eos"):
+        ExperimentConfig.from_dict(forced_config_data)
+
+    forced_config_data["client"]["ignore_eos"] = True
+    forced_config_data["imbalance"] = {**forced_config_data["imbalance"], "validate_imbalance": True}
+    with pytest.raises(ConfigError, match="validation capture"):
+        ExperimentConfig.from_dict(forced_config_data)
+
+    forced_config_data["imbalance"]["validate_imbalance"] = False
+    forced_config_data["client"]["lengths_from"] = str(tmp_path / "missing.json.gz")
+    with pytest.raises(ConfigError, match="no such metrics file"):
+        ExperimentConfig.from_dict(forced_config_data)
+
+
+def test_run_batch_sends_a_per_prompt_length_to_each_request():
+    """A list of lengths reaches each request as its own max_tokens."""
+    import asyncio
+    import types
+
+    from moe_reliability.core.vllm_serving import run_batch
+
+    sent = {}
+
+    async def create(**kwargs):
+        sent[kwargs["messages"][0]["content"]] = kwargs["max_tokens"]
+        usage = types.SimpleNamespace(completion_tokens=kwargs["max_tokens"], prompt_tokens=3)
+        msg = types.SimpleNamespace(content="x")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)], usage=usage)
+
+    client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+    prompts = [[{"role": "user", "content": c}] for c in "abc"]
+    asyncio.run(run_batch(client, "m", prompts, max_new_tokens=[7, 8, 9, 10], stream=False))
+    assert sent == {"a": 7, "b": 8, "c": 9}

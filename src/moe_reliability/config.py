@@ -129,8 +129,53 @@ _SERVER = Section("server", "vLLM server deployment.", (
            "are cleared at the end of it, so a run shorter than one cycle never rearranges at all."),
     Option("eplb_algorithm_execution_interval", "int", 50, "Iterations the planner is given before the "
            "new placement is applied."),
-    Option("eplb_record_map", "bool", False, "Write the placement EPLB chose to eplb_expert_map.json in "
-           "the run directory."),
+    Option("eplb_record_map", "bool", False, "Record-only mode: EPLB collects load and plans, and the "
+           "placement it planned is written to <label>_eplb_expert_map.json, but it is never applied. "
+           "vllm-ascend 0.23 skips the weight update whenever a record path is set (EplbUpdator.forward_end), "
+           "so the first layer's transfer is launched, never completed, and every later one is refused "
+           "('D2D weight update is on-going'). The layout stays contiguous for the whole point. That makes "
+           "this the collect-and-plan arm of an overhead decomposition, never an EPLB-on arm: every EPLB run "
+           "before 2026-10-12 had it on and measured no rearrangement at all."),
+    Option("eplb_min_imbalance", "float", 0.0, "Apply a planned placement only once the measured "
+           "per-layer imbalance (busiest rank over the mean, worst MoE layer - EPLB's own "
+           "_compute_imbalance statistic) reaches this load. 0 disables the gate, which is what vllm-ascend "
+           "and vLLM both do today: they rearrange on an iteration counter without asking whether the "
+           "imbalance costs anything. Set it to the deployment's calibrated impact threshold - the load at "
+           "which skew starts costing latency, 2.43x on DeepSeek-V2-Lite and 1.42x on Mixtral 8x7B. Needs "
+           "the node patch (scripts/apply_node_patch.py); the run refuses to start without it, since an "
+           "unpatched server ignores it and quietly measures plain EPLB again."),
+    Option("eplb_honor_changed", "bool", False, "Apply a planned placement only when EPLB's own policy "
+           "says it is worth applying. Policies 1 and 2 return a 'changed' flag - set when the plan "
+           "improves the summed per-layer max heat by at least 5% - and EplbWorker.do_update discards it, "
+           "so placements are applied whatever the policy concluded. This honours it, and is worth fixing "
+           "upstream, but do not expect a latency result from it: the flag asks whether the plan improves "
+           "balance, not whether the imbalance cost anything, and at every level measured in eplb-fp2 "
+           "(1.09x to 3.63x) the plan improved EPLB's own metric by 9-69%, so it reads 'changed' even at "
+           "the pure false positive. Ignored when eplb_min_imbalance is set. Needs the same node patch."),
+    Option("count_experts", "bool", False, "Run the detection screen's counting inside the server: a "
+           "random sample of MoE layers, redrawn every window, bincounted over a strided sample of their "
+           "tokens into a device-side per-layer table, copied out once per window. This is what a "
+           "deployment would pay to screen, and it is not benchmark.capture_experts scaled down - capture "
+           "returns every token's expert ids in the response body, which a screen never needs. Only one "
+           "rank counts, since expert selection is replicated."),
+    Option("count_layers", "int", 4, "MoE layers counted per window by server.count_experts. The "
+           "calibrated screen uses 4; they are redrawn each window, because evenly spaced layers are "
+           "blind to a skew confined to a few (docs/detection-findings.md)."),
+    Option("count_token_fraction", "float", 0.1, "Fraction of a counted layer's tokens to count, applied "
+           "as a stride. The calibrated screen uses 0.1, which with count_layers over 26 layers is about "
+           "1.5% of the routing."),
+    Option("count_min_assignments", "int", 0, "Counted assignments a window should hold before it closes; "
+           "0 keeps the fixed-step window every run before 2026-10-16 used. A window of fixed steps holds "
+           "whatever evidence those steps carried - 128 to 14240 within one point of detection-delay, tiny "
+           "while the server fills and then moving with the prefill/decode mix - and a thin window's "
+           "busiest-rank reading is inflated by the maximum over noisy shares: 128 assignments read "
+           "1.34-2.96x on benign traffic, which put that run's alarm at 2.13x and left the screen unable to "
+           "fire at all. With a target set, count_window_steps becomes the ceiling rather than the period, "
+           "and a window closed by that ceiling is recorded as thin."),
+    Option("count_window_steps", "int", 200, "Engine steps per counting window: how often the layer sample "
+           "is redrawn and the counts copied out. The screen's window is 8 requests, which under "
+           "continuous batching is not a fixed number of steps, so this sets the emit cadence rather than "
+           "a window the detector would score."),
 ))
 
 _CLIENT = Section("client", "Load generation against the server.", (
@@ -138,6 +183,23 @@ _CLIENT = Section("client", "Load generation against the server.", (
     Option("concurrency_limit", "int", 700, "Maximum number of in-flight requests "
            "(should exceed batch_size to saturate the server)."),
     Option("n_warmup_samples", "int", 10, "Number of warm-up requests before measurement."),
+    Option("stream", "bool", True, "Stream responses, which is what gives TTFT, TPOT and inter-token "
+           "latencies. Off, each request is timed end to end only. Expert capture is never streamed, so an arm "
+           "compared against benchmark.capture_experts has to turn this off too: streaming costs the client "
+           "and API server per token, and with 2000 prompts in flight that difference is larger than the "
+           "capture (the capturing arm finished 15% sooner than a streaming one on 2026-10-09)."),
+    Option("ignore_eos", "bool", False, "Generate exactly max_new_tokens per request, ignoring "
+           "end-of-sequence (vLLM's ignore_eos). Holds output length fixed across sweep points: a strong router "
+           "bias degrades DeepSeek-V2-Lite enough that some answers end early (205 of 300 tokens on average at "
+           "offset 2, 84 of 100), and with length held the skew costs nothing - the ~20-30% read as its cost "
+           "came with the early stops. Applies to warm-up, benchmark and the validation capture alike."),
+    Option("lengths_from", "str", "", "Replay another point's output lengths: a metrics file "
+           "(<run>/metrics/<label>.json.gz) whose requests give each prompt the number of tokens it generated "
+           "there, matched by prompt content. Needs ignore_eos, so each request generates exactly that many, "
+           "and max_new_tokens at least the longest. Separates *how many* tokens a point generated from "
+           "*which* requests stopped early: DeepSeek at router-bias offset 2 averages 84 of 100 tokens and "
+           "costs +21% TPOT, while every request held at 84 costs nothing. A prompt missing from the file is "
+           "an error, never a fallback to max_new_tokens."),
 ))
 
 _ACTIVATIONS = Section("activations", "Stage 1 (synthetic workloads): expert activation capture on MMLU prompts.", (
@@ -182,6 +244,11 @@ _BENCHMARK_SYNTHETIC = Section("benchmark", "Stage 3: benchmarking of each sweep
            "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
            "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
            "metrics file."),
+    Option("capture_experts", "bool", False, "Serve the benchmark with --enable-return-routed-experts, so "
+           "every request returns the experts it routed to. This is what a monitor's collection path costs: "
+           "the screen's own arithmetic is negligible beside getting the routing off the device, and that "
+           "cost is otherwise assumed rather than measured. Benchmark it against an otherwise identical "
+           "point with this off - the difference is the ceiling, at every layer and every token."),
 ))
 
 _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
@@ -207,6 +274,16 @@ _IMBALANCE = Section("imbalance", "Forced router imbalance.", (
            "the bias applies to; empty biases every MoE layer. A few layers hold a skew the way natural "
            "imbalance does, and test whether a detector localises it. The zero-bias control uses the same "
            "layers."),
+    Option("bias_schedule", "list[str]", [], "router_bias only: change the skew while one server runs, as "
+           "'<engine step>:<fraction of this point's level>' entries - ['0:0', '600:1'] serves balanced for "
+           "600 forwards and then steps to the point's level. The first entry must be at step 0, so what the "
+           "server serves before the first change is explicit, and the fractions multiply the point's level, "
+           "so a sweep gets one onset per level at the same step. Steps rather than seconds because expert "
+           "selection is replicated: two ranks holding different biases on the same forward would select "
+           "different experts, and a step count is identical on every rank where a clock is not. This is how "
+           "detection *delay* is measured; every run before 2026-10-16 held its bias for the server's life, "
+           "so an onset could only be simulated by splicing two captures. The counting screen records the "
+           "step per window, so the two line up directly."),
     Option("validation_workload", "str", "", "Prompts for validation: empty keeps the first "
            "validation_samples MMLU prompts in the order every earlier run used; a workload spec draws them "
            "shuffled from one family or several: mmlu, gsm8k, mbpp, mmmlu:<LANG> (e.g. mmmlu:ZH_CN), dolly, "
@@ -230,6 +307,14 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
            "on the traffic that produces it."),
     Option("repeats", "int", 1, "Benchmark every sweep point this many times. Points sharing a value differ only in the state of the machine, so their spread measures the run's own noise floor."),
     Option("shuffle_points", "bool", True, "Serve the sweep points in seeded random rounds, one per repeat, each holding every value once, so values interleave over the run. In parameter order, anything that drifts during a run - a neighbouring job, thermal state - aliases onto the swept parameter."),
+    Option("arms", "list[str]", [], "Serve every level once per arm, inside this run: 'name' or "
+           "'name: section.key=value; section.key=value', e.g. ['eplb-off', 'eplb-on: server.enable_eplb=true']. "
+           "Arms are shuffled into the same rounds as the levels, so anything that drifts during the run "
+           "falls on both. Comparing arms run as separate grid entries aliases drift onto the arm instead: "
+           "on 2026-10-09 a neighbouring job grew from one process to eight during the second entry and "
+           "read as a 10% EPLB cost. Overrides may touch [server], [client] and benchmark.capture_experts; "
+           "an arm with no overrides is the configuration as written. Validation runs once per level, on "
+           "the configuration as written, since no arm setting changes which experts a token routes to.", ),
     Option("enable_profiling", "bool", False, "Record PyTorch profiler traces on all workers."),
     Option("separate_profiling_run", "bool", True, "Benchmark each point twice when profiling: once "
            "unprofiled for the timings and once profiled for the traces. Profiling perturbs latency, so a "
@@ -243,6 +328,11 @@ _BENCHMARK_FORCED = Section("benchmark", "Benchmarking of each imbalance level."
            "is invisible in it; the ITL series is what shows within-request spikes and what a change in TPOT "
            "can be attributed to. Costs one timestamp per token in the client and a list per request in the "
            "metrics file."),
+    Option("capture_experts", "bool", False, "Serve the benchmark with --enable-return-routed-experts, so "
+           "every request returns the experts it routed to. This is what a monitor's collection path costs: "
+           "the screen's own arithmetic is negligible beside getting the routing off the device, and that "
+           "cost is otherwise assumed rather than measured. Benchmark it against an otherwise identical "
+           "point with this off - the difference is the ceiling, at every layer and every token."),
 ))
 
 _ANALYSIS = Section("analysis", "Post-processing of profiler traces.", (
@@ -410,11 +500,36 @@ class ExperimentConfig:
     def to_dict(self) -> dict[str, dict[str, Any]]:
         return copy.deepcopy(self._data)
 
+    @property
+    def arms(self) -> list[tuple[str, list[str]]]:
+        """``(name, overrides)`` per benchmark arm; empty when the run has none."""
+        return [parse_arm(spec) for spec in self._data["benchmark"].get("arms", [])]
+
+    def for_arm(self, name: str | None) -> "ExperimentConfig":
+        """This configuration with one arm's overrides applied (itself for ``None``)."""
+        if name is None:
+            return self
+        for arm, overrides in self.arms:
+            if arm == name:
+                data = self.to_dict()
+                data["benchmark"]["arms"] = []
+                return ExperimentConfig(apply_overrides(data, overrides), source=self.source)
+        raise ConfigError(f"no benchmark arm named {name!r}; arms are {[a for a, _ in self.arms]}")
+
     def flat(self) -> dict[str, Any]:
         return {k: v for name, sec in self._data.items() if name != "environment" for k, v in sec.items()}
 
     def to_toml(self, header: str | None = None) -> str:
         return to_toml(self._data, header=header)
+
+
+_ARM_KEYS = ("server.", "client.", "benchmark.capture_experts")
+
+
+def parse_arm(spec: str) -> tuple[str, list[str]]:
+    """``'eplb-on: server.enable_eplb=true; ...'`` -> ``('eplb-on', ['server.enable_eplb=true', ...])``."""
+    name, _, rest = spec.partition(":")
+    return name.strip(), [item.strip() for item in rest.split(";") if item.strip()]
 
 
 def apply_overrides(data: dict[str, Any], overrides: Iterable[str]) -> dict[str, Any]:
@@ -520,11 +635,64 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
         errors.append("server.gpu_memory_utilization must be in (0, 1]")
     if not 1 <= cfg["server"]["port"] <= 65535:
         errors.append("server.port must be in [1, 65535]")
+    if cfg["server"]["eplb_min_imbalance"] < 0:
+        errors.append("server.eplb_min_imbalance is a busiest-rank-over-mean load, so it must be >= 1 "
+                      "(or 0 to disable the gate)")
+    elif 0 < cfg["server"]["eplb_min_imbalance"] < 1:
+        errors.append(f"server.eplb_min_imbalance = {cfg['server']['eplb_min_imbalance']} is below 1, "
+                      "which no imbalance can be under: the busiest rank is never under the mean. A "
+                      "threshold under 1 gates nothing. Use 0 to disable the gate.")
+    gated = cfg["server"]["eplb_min_imbalance"] or cfg["server"]["eplb_honor_changed"]
+    if gated:
+        which = "eplb_min_imbalance" if cfg["server"]["eplb_min_imbalance"] else "eplb_honor_changed"
+        # The gate decides whether a *planned* placement is applied, so without
+        # EPLB there is nothing to gate and the arm would silently be a second
+        # EPLB-off arm. Record-only mode never applies a placement either.
+        if not cfg["server"]["enable_eplb"]:
+            errors.append(f"server.{which} needs server.enable_eplb: it gates whether a planned "
+                          "placement is applied, so with EPLB off it measures nothing")
+        if cfg["server"]["eplb_record_map"]:
+            errors.append(f"server.{which} with server.eplb_record_map: record-only mode never applies a "
+                          "placement, so the gate cannot change what the point measures")
+        if cfg["server"]["eplb_policy_type"] not in (1, 2):
+            errors.append(f"server.{which} needs eplb_policy_type 1 or 2, not "
+                          f"{cfg['server']['eplb_policy_type']}: policy 0 is a shuffle, and policy 3 "
+                          "(FlashLB) applies its own update trigger internally, so gating it would be "
+                          "two triggers in series")
     positive("client", "max_new_tokens")
+    if cfg["client"]["lengths_from"]:
+        if not cfg["client"]["ignore_eos"]:
+            errors.append("client.lengths_from needs client.ignore_eos: without it each replayed length is "
+                          "only a cap, the model stops wherever it likes, and the lengths are not replayed")
+        if not Path(cfg["client"]["lengths_from"]).is_file():
+            errors.append(f"client.lengths_from: no such metrics file {cfg['client']['lengths_from']!r}")
     positive("client", "concurrency_limit")
     positive("client", "n_warmup_samples", allow_zero=True)
     positive("benchmark", "trace_active_iterations")
     positive("benchmark", "trace_start_iteration")
+
+    arm_names = []
+    for spec in cfg["benchmark"].get("arms", []):
+        name, overrides = parse_arm(spec)
+        arm_names.append(name)
+        if not _NAME_RE.match(name):
+            errors.append(f"benchmark.arms: arm name {name!r} may only contain letters, digits, '.', '_' and '-'")
+        bad = [o for o in overrides if not o.split("=", 1)[0].strip().startswith(_ARM_KEYS)]
+        if bad:
+            errors.append(f"benchmark.arms: arm {name!r} overrides {bad}; an arm may only change "
+                          f"[server], [client] and benchmark.capture_experts, since validation and the "
+                          f"prompts are shared between arms")
+            continue
+        # Each arm is a configuration in its own right, so it gets the same checks.
+        data = copy.deepcopy(cfg)
+        data["benchmark"]["arms"] = []
+        try:
+            _resolve(apply_overrides(data, overrides))
+        except ConfigError as e:
+            detail = str(e).removeprefix("invalid configuration:\n  - ").replace("\n  - ", "; ")
+            errors.append(f"benchmark.arms: arm {name!r}: {detail}")
+    if len(set(arm_names)) != len(arm_names):
+        errors.append("benchmark.arms: arm names must be distinct")
 
     etype = cfg["experiment"]["type"]
     probe = cfg["model"]["probe"]
@@ -552,6 +720,10 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
     else:
         levels = cfg["imbalance"]["imbalance_levels"]
         positive("benchmark", "n_samples")
+        if cfg["client"]["lengths_from"] and cfg["imbalance"]["validate_imbalance"]:
+            errors.append("client.lengths_from with imbalance.validate_imbalance: the validation capture "
+                          "serves its own prompts, which the replayed point never saw, so they have no "
+                          "length to replay")
         if not levels or any(level < 0 for level in levels):
             errors.append("imbalance.imbalance_levels must be a non-empty list of numbers >= 0")
         if len(set(levels)) != len(levels):
@@ -560,6 +732,7 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
             errors.append("imbalance.validation_samples must be >= 0")
         if cfg["imbalance"]["method"] == "router_bias":
             from .router_bias import parse_target
+            kind = None
             try:
                 kind, ids = parse_target(cfg["imbalance"]["bias_target"])
                 if kind == "rank" and ids[0] >= cfg["hardware"]["n_npus"]:
@@ -574,14 +747,32 @@ def _validate(cfg: dict[str, dict[str, Any]]) -> None:
                 errors.append("imbalance.bias_layers must be layer indices >= 0")
             if len(set(cfg["imbalance"]["bias_layers"])) != len(cfg["imbalance"]["bias_layers"]):
                 errors.append("imbalance.bias_layers contains duplicates")
-            if cfg["server"]["enable_eplb"]:
-                errors.append("imbalance.method = 'router_bias' assumes contiguous expert placement; "
-                              "EPLB moves experts between ranks, so a rank target would not stay on one rank")
+            if cfg["imbalance"]["bias_schedule"]:
+                from .router_bias import parse_schedule_spec
+                try:
+                    parse_schedule_spec(cfg["imbalance"]["bias_schedule"])
+                except ValueError as e:
+                    errors.append(f"imbalance.bias_schedule: {e}")
+            # A rank target names the experts a rank holds *under contiguous
+            # placement*, which EPLB is free to change, so the skew would wander
+            # off the rank it was aimed at and the point would measure nothing
+            # definite. An expert target names experts directly: the skew stays
+            # on them wherever EPLB puts them, which is what makes an EPLB
+            # comparison possible at all. 'rotate' is a rank target per layer.
+            if cfg["server"]["enable_eplb"] and kind not in (None, "experts"):
+                errors.append(f"imbalance.bias_target = {cfg['imbalance']['bias_target']!r} is a rank "
+                              "target, which assumes contiguous expert placement; EPLB moves experts "
+                              "between ranks, so the skew would not stay on the rank it names. Use an "
+                              "'experts:<i>,<j>,...' target with EPLB: under contiguous placement rank r "
+                              "holds experts [r*n/ranks, (r+1)*n/ranks), so naming those experts is the "
+                              "same skew and survives rearrangement")
             if probe_family is None:
                 errors.append("imbalance.method = 'router_bias' needs the expert count: set model.probe "
                               f"explicitly to one of {list(PROBE_CHOICES[1:])} for this model_id")
         if cfg["imbalance"]["bias_layers"] and cfg["imbalance"]["method"] != "router_bias":
             errors.append("imbalance.bias_layers applies to method = 'router_bias' only")
+        if cfg["imbalance"]["bias_schedule"] and cfg["imbalance"]["method"] != "router_bias":
+            errors.append("imbalance.bias_schedule applies to method = 'router_bias' only")
         if cfg["benchmark"]["workload"]:
             from .core.data import parse_workload
             try:

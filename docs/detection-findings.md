@@ -61,7 +61,14 @@ runs. Requiring three consecutive alarming windows takes the amortised pipeline
 cost from 6.1% to 0.2% *and* raises detection from 0.50 to 1.00, for 24-40
 requests of delay (C5).
 
-**What is still unmeasured:** the screen's own cost on the device, behaviour
+**The screen's own cost is now measured, and it is nothing.** Counting the way a
+deployment would - 4 random layers redrawn per window, a tenth of their tokens,
+bincounted on device - costs +0.28% +-0.71 of end-to-end latency on Mixtral
+against a 0.44% baseline spread, bounded above by +1.2%. Capture, which returns
+every token's expert ids in the response body, costs +6.38% on the same traffic:
+the screen is a cheaper mechanism, not a fraction of that one (G).
+
+**What is still unmeasured:** the screen's cost under saturation (G), behaviour
 under a skew that ramps or flickers rather than switching on (every capture is a
 server whose bias is fixed for its lifetime), and stage 3's ability to attribute
 (the balanced case already has a pace setter).
@@ -80,6 +87,15 @@ DeepSeek's threshold falls in the gap between its swept levels (2.34x and
 3.45x), so it is an interpolation across a jump, not a measured point; the
 `rbias-graph-threshold-002` run fills that gap. Mixtral's is interpolated
 between measured levels 0.25 and 0.5.
+
+> **DeepSeek's threshold is withdrawn (2026-10-14/15).** The 3.45x point it
+> interpolates to cost latency because the model's answers ended early (84 of 100
+> tokens), not because of the skew: with length held a 3.53x skew costs nothing at
+> 100 tokens, and 3.64x nothing at 300
+> ([router-bias-findings.md](router-bias-findings.md#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew)).
+> Read every DeepSeek "\*" (at or above threshold) below as not mattering. The
+> detection rates themselves are routing measurements and are unaffected; only
+> which levels count as mattering changes. Mixtral's lengths never moved.
 
 **These are not the same kind of number.** Mixtral's cost rises linearly from
 the first offset, so its threshold is where the line crosses the noise floor.
@@ -114,6 +130,184 @@ generated tokens pooled, busiest rank per MoE layer averaged over layers:
   rank and the ~100% of an injected rank bias. Natural imbalance is a layer-local,
   rotating phenomenon, so it is not the kind of imbalance expert placement can
   fix, and a detector that reports only a model-wide mean describes it poorly.
+
+## B2. A long real stream, scored as it was served
+
+`natural-long` (2026-10-16): 12000 unbiased requests over MMLU, Dolly,
+UltraChat and German MMMLU, 3000 each, on both models. Tumbling windows in the
+order the requests were served, not bootstrapped from the pool
+(`scripts/natural_stream.py`, `docs/figures/tables/natural_stream.csv`).
+1200-1600 requests cannot contain a false alarm at the rate the screen is
+calibrated to, so this is the first measurement of one rather than a simulation.
+
+**Two bars, and they are not the same question.** The *stored* alarm is the
+deployable one in `docs/calibrations`, placed a margin of 0.5 from the benign
+ceiling to the impact threshold: **1.349x** on Mixtral (ceiling 1.278x, onset
+1.42x) and **1.788x** on DeepSeek (ceiling 1.142x, onset 2.434x). The *self*
+alarm is the 99th percentile of the same capture's own mixed stream at the same
+sampling - what a deployment gets if it calibrates on representative traffic and
+then serves one corpus. The 1% quantile this document's other tables use is a
+third bar, and on DeepSeek it sits half a turn of load below the deployable one.
+
+**On DeepSeek nothing fires at the deployable alarm.** The highest window
+reading anywhere in its 12000 requests, at any sampling, is 1.435x against a
+1.788x alarm. That is headroom, not a quiet screen: its onset was 2.434x, and
+since that onset is withdrawn (2026-10-14) the alarm derived from it has no
+valid basis either. Against the *self* bar its Dolly stream fires 12.8% of
+windows at 4 x 10% and 21.3% at full counting.
+
+**On Mixtral the two bars nearly coincide - 1.349x stored, 1.367x self at
+4 x 10% - and Dolly fires at both.**
+
+| Stream | Counted | Window p99 | Fire % at 1.349x | Confirmed k=2 | Requests per alarm |
+|---|---|---|---|---|---|
+| mixed | all layers | 1.215x | 0.0% | 0 | - |
+| mixed | 4 x 10% | 1.367x | 1.6% | 1 | 12000 |
+| mixed | 8 x 5% | 1.403x | 4.5% | 5 | 2400 |
+| **dolly** | **all layers** | **1.314x** | **0.3%** | **0** | **-** |
+| **dolly** | **4 x 10%** | **1.548x** | **16.3%** | **8** | **375** |
+| dolly | 8 x 5% | 1.657x | 28.5% | 21 | 143 |
+| mmlu | 8 x 5% | 1.385x | 4.5% | 3 | 1000 |
+| ultrachat | 8 x 5% | 1.396x | 3.2% | 1 | 3000 |
+| mmmlu:DE_DE | any | <=1.343x | 0.0-0.8% | 0 | - |
+
+**Corpus shift alone produces confirmed alarms at the deployed setting.** Dolly
+confirms every 375 requests at the sampling the calibration itself specifies,
+against a calibration whose own false-alarm rate was 0.0 - and its *true* window
+tail, counted in full, is 1.314x, below both the 1.349x alarm and the 1.42x
+onset. So the traffic never reaches the load at which skew costs anything, and
+the screen fires on it anyway. This is "the screen measures skew, not impact"
+demonstrated on an ordinary English chat corpus instead of an injected level.
+
+**What crosses the bar is sampling inflation, and an alarm only absorbs it for
+the traffic it was calibrated on.** Counted in full, Dolly fires 0.3% of windows
+and confirms nothing; at 4 x 10% it fires 16.3%. The calibration's own benign
+ceiling already included that inflation for *its* traffic, but Dolly's windows
+are heavier-tailed, so the same sampling inflates them further and carries them
+over a threshold their true load never approaches.
+
+**Window length and the choice of bar pull in opposite directions.** Going from
+8 requests to 32 silences the absolute bar completely - 0.0% on every stream,
+Dolly included - and takes the self-calibrated bar the other way, to **53.8%**
+of Dolly windows and 11 confirmations, because mixed traffic's p99 tightens to
+1.147x while Dolly's stays at 1.190x. Reducing sampling noise quiets an absolute
+threshold and sharpens a relative one: the corpus's real offset does not shrink
+while the noise around it does. **Any self-calibrating gate inherits this**, and
+it is the main caution on that design (P2 in `action-items.md`): defined against
+its own deployment's benign distribution, it becomes *more* prone to flagging a
+change of traffic the longer its window, and a change of traffic has no cost
+attached.
+
+**The k = 2 rule is better than its simulation on mixed traffic.** One confirmed
+alarm per 12000 requests on Mixtral at 4 x 10%, and none at all on DeepSeek,
+where the simulation said one per 1200-2544 requests. Single windows trip at
+roughly the simulated rate; they do not pair up. Consecutive real windows are
+evidently less correlated than the bootstrap's - plausibly because resampling a
+finite pool lets the same unusual requests recur nearby - but that is a
+hypothesis, not a measurement.
+
+Two caveats. With 700 requests in flight the recorded order is completion order,
+so a window of 8 is eight requests that *finished* together, which is neither
+the eight that arrived together nor the bootstrap's eight drawn at random. And
+both captures generate one token per request, so every number above describes
+**prompt** routing - see B3, which is why these alarms are not yet alarms a
+deployment would see.
+
+## B3. Prompt and decode are two independent skews, and pooling them hides both
+
+`natural-decode` (2026-10-16, DeepSeek, 2496 unbiased requests at 100 generated
+tokens, six families). The capture stores prompt and generated routing
+separately, so the same requests are reduced three ways - no second run, no
+drift, same order:
+
+| Token source | Tokens | Pooled busiest rank |
+|---|---|---|
+| prompt only | 320812 (58%) | 1.0780x |
+| decode only | 234095 (42%) | 1.0638x |
+| **both** | 554907 | **1.0517x** |
+
+**The pooled value is below both components**, so this is not dilution - a
+weighted average would land between them. It is cancellation: the busiest rank
+per layer agrees between the two sources on **7 of 26 layers**, where chance is
+6.5, and the correlation between their per-layer per-rank shares is **+0.011**.
+Prefill and decode concentrate on unrelated ranks, so a window holding both
+reads more balanced than either half of it.
+
+This is the fourth place in this project where two skews that do not coincide
+cancel in a pooled reading, after the rotating-layer skew, per-rank kernel
+totals, and `rank_max_over_mean` against its per-layer form. The pattern is the
+finding: **any sum over a dimension the hot rank varies along reports a balanced
+server.**
+
+Consequences, in order of what they cost:
+
+- **Every calibration in `docs/calibrations` was made on prompt routing alone.**
+  All of them used `max_new_tokens = 1`. They describe one of the two skews, and
+  the one a served window does not hold on its own.
+- **The screen, counting whatever a window holds, measures the cancelled
+  mixture.** With decode included, the alarm rate on this capture falls to 0.0%
+  on every corpus and every sampling bar one row at 1.9%, against 0.3-17.3%
+  prompt-only.
+- **The statistic that tracks cost may be prefill-only.** The cost of skew lives
+  in prefill-heavy steps, and a saturated decode step is the same length at every
+  eager offset (2026-10-14). If prefill carries both the larger skew and a
+  different one, then pooled busiest-rank load dilutes precisely the component
+  that correlates with latency. That is a hypothesis with an obvious test and it
+  is the first thing linking the detection statistic to the impact mechanism.
+- **A screen could count the two separately**, at no extra counting cost: the
+  same bincount, split by whether the step's tokens are prefill or decode.
+
+Limits: one model, one generation length, unskewed traffic only. What a *skewed*
+level does to each source is unmeasured, and it decides whether including decode
+makes the screen less sensitive or merely quieter - both the floor and the signal
+move, and only the floor is measured here.
+
+### What a biased level does to each source (D1c, 2026-10-16)
+
+`detection-capture-decode`: the same five levels and six families as
+`detection_capture.toml`, with 100 generated tokens and `ignore_eos`, so each
+level's decode half is comparable (`scripts/decode_signal.py`,
+`docs/figures/tables/decode_signal.csv`).
+
+| Level | True load | prompt | decode | both | Busiest rank agrees | Share corr |
+|---|---|---|---|---|---|---|
+| 0 | 1.051x | 1.0797x | 1.0553x | **1.0514x** | 10 of 26 | **+0.085** |
+| 0.25 | 1.353x | 1.3499x | 1.3560x | 1.3526x | **26 of 26** | +0.937 |
+| 0.5 | 1.737x | 1.7155x | 1.7641x | 1.7367x | 26 of 26 | +0.985 |
+| 1 | 2.468x | 2.4243x | 2.5238x | 2.4678x | 26 of 26 | +0.997 |
+| 2 | 3.582x | 3.5337x | 3.6443x | 3.5820x | 26 of 26 | **+1.000** |
+
+**The floor cancels and the signal does not.** At level 0 the two sources are
+independent (10 of 26 layers agreeing, where chance is 6.5; correlation +0.085)
+and the pooled value falls *below both* - B3's cancellation, reproduced in a
+second capture. At every biased level all 26 layers agree and the correlation
+runs +0.94 to +1.00, so the pooled value sits *between* the two sources instead:
+ordinary averaging, nothing lost.
+
+Detection follows the mechanism. With each source scored against an alarm set on
+its own level-0 windows, at the screen's 4 x 10% sampling and 8-request windows:
+
+| Level | prompt | decode | both |
+|---|---|---|---|
+| 0.25 (1.353x) | 0.95 | 0.99 | **1.00** |
+| 0.5 and above | 1.00 | 1.00 | 1.00 |
+
+So **including decode tokens makes the screen slightly more sensitive, not
+less**. The worry B3 raised - that decode dilutes the signal along with the
+floor - does not hold for this skew, and the reason is in the correlation
+column.
+
+**But that is a property of our injector, and it is the most important limit on
+every detection rate in this project.** The plugin adds the same per-expert
+offset to every expert-selection call, prefill and decode alike, so an injected
+skew is common-mode *by construction* - the easiest possible case for a pooled
+screen. Natural routing is measurably not: at level 0 the two sources correlate
++0.085. A real imbalance arising in prefill alone - which is where its latency
+cost lives - would be diluted by decode tokens exactly the way the natural floor
+is, and nothing here measures that. Every detection figure in this document is
+therefore an upper bound for any skew that is not common-mode, and we have never
+produced one that isn't.
+
 
 ## C. How cheap the screen can be, and what it then catches
 
@@ -304,10 +498,132 @@ unmeasured):
   24-40 requests of delay, no false alarm within the simulated horizon, and no
   confirmation cost to amortise.
 
-The unmeasured number remains the screen's own device cost. Everything above
-treats it as 0.2%; `detection.monitoring_overhead` prices it from one
-measurement - the per-assignment cost of a `scatter_add_` into a resident buffer
-- which has to be taken on the device.
+The 0.2% the table charges for the screen is now measured rather than assumed,
+and it is the right order: +0.28% +-0.71 on Mixtral at 1.26% of assignments
+counted, inside the baseline's own spread (G). `detection.monitoring_overhead`
+still prices it from an assumed per-assignment `scatter_add_`; the measurement
+supersedes it.
+
+## C6. Two knobs that were fixed by assumption
+
+`scripts/detection_params.py` (2026-10-16), re-analysis of the same captures:
+`docs/figures/tables/detection_fpr.csv`, `detection_fpr_confirmation.csv` and
+`detection_budget_split.csv`. Both knobs were held constant everywhere above -
+the false-alarm target at 1% and the budget split at 4 layers x 10% of tokens -
+and neither value was chosen by measurement.
+
+**The 1% per-window target is not the best point.** Every level at or above an
+impact threshold is caught in 100% of windows at every target from 0.2% to 10%,
+so the target moves only the marginal levels and the rate of early firing.
+Tightening it dominates, at the same confirmation length and the same delay:
+
+| Target, k = 2 | Detect onset | Requests to a false alarm | Mixtral headroom |
+|---|---|---|---|
+| 1% (as used above) | 0.99 / 0.99 | 1704 / 1504 | +0.060 |
+| **0.5%** | **1.00 / 1.00** | **2544 / 3120** | **+0.034** |
+| 0.2% | 1.00 / 1.00 | 2328 / 3120 | +0.009 |
+
+(Mixtral / DeepSeek; headroom is the 1.42x impact threshold less the alarm, so
+it is what the screen has to warn *before* the cost.) Half a percent is the
+setting to prefer: detection is full, the quiet interval roughly doubles, and
+0.2% buys nothing further while spending the headroom that makes an early
+warning possible. k stays the lever it was in C5 - at every target, k = 1 fires
+early on 6-39% of streams and k = 2 removes it.
+
+**The counting budget buys more as layers than as tokens.** At the screen's own
+1.3-1.5% of assignments, holding the budget and moving the split:
+
+| Split | DeepSeek, all layers | DeepSeek, 6 of 26 | Mixtral, 1.39x (free) | Mixtral, costly levels |
+|---|---|---|---|---|
+| 1 x 40% | 0.61 | 0.23 | 0.46 | 1.00 |
+| 2 x 20% | 0.85 | 0.43 | 0.60 | 1.00 |
+| 4 x 10% (as used above) | 0.95 | 0.69 | 0.68 | 1.00 |
+| **8 x 5%** | **0.97** | **0.90** | 0.60 | **1.00** |
+| 13 x 3% | 0.96 | 0.94 | 0.39 | 1.00 |
+| every layer x 1.3-1.5% | 0.73 | **1.00** | 0.09 | 0.99-1.00 |
+
+Eight layers at a twentieth of their tokens is better or equal everywhere that
+matters: +0.21 on a skew confined to six layers, +0.02 on an all-layer skew, and
+every Mixtral level that costs latency still caught in full. Its one apparent
+loss - Mixtral's 1.39x falling from 0.68 to 0.60 - is on a level *below* the
+1.42x onset, where firing less is the improvement. What it does cost is
+headroom: Mixtral's alarm rises to 1.406, leaving +0.014 of early warning. So
+the split trades early warning for reach, and 4 x 10% is defensible only if
+early warning is what the deployment wants.
+
+**Thinning tokens biases the statistic upward, which is why the all-layer split
+collapses.** Each layer's reading is a maximum over ranks of a noisy share, so
+counting fewer tokens inflates it: the benign median runs 1.137 -> 1.459 on
+Mixtral and 1.104 -> 1.258 on DeepSeek across the splits above. At every layer
+and 1.3% of tokens Mixtral's benign median (1.459) sits *above* its impact
+threshold - the screen reads ordinary traffic as costly. The alarm is therefore
+in biased, sampling-dependent units while the impact threshold is not, so
+**changing `count_layers` or the token fraction invalidates the calibration**
+even though the counting cost is unchanged. Recalibrate the alarm whenever the
+sampling moves, and treat the bias as a property to characterise rather than a
+noise term.
+
+**A stale label in C.** Section C calls 1.39x Mixtral's "lowest costly level",
+which used the 1.31x onset. The crossing-holds correction put the onset at 1.42x
+(see the calibration bullet in CLAUDE.md), so 1.39x is free and C's detection
+rates there read as over-firing rather than as a sensitivity shortfall.
+
+## C7. Delay, measured on hardware
+
+`detection-delay` (2026-10-16, Mixtral, 3 levels x 2 repeats, 8000 requests at
+200 tokens each with `ignore_eos`, `scripts/delay_eval.py`,
+`docs/figures/tables/detection_delay.csv`). The first run in this project where
+the skew arrives while a server is running: `imbalance.bias_schedule =
+["0:0", "1200:1"]` holds the bias at zero for 1200 forwards and then steps it to
+the point's level, with `server.count_experts` counting live. Everything before
+this was a splice of two static captures.
+
+**The step-counted trigger is rank-consistent on hardware.** The schedule fired
+24 times - six points by four worker processes - every one of them at step 1200.
+A clock would not have done that, and two ranks holding different biases on the
+same forward would select different experts.
+
+**The skew is detected in the first window that closes after it arrives**, at
+both levels and in both repeats, 4 of 4:
+
+| Level | Post-onset median | k=1 | k=2 | k=3 |
+|---|---|---|---|---|
+| 0.5 (1.35x) | 1.353x | 8 steps / 18 requests | 16 / 37 | 24 / 55 |
+| 1 (1.74x) | 1.746x | 8 steps / 18 requests | 16 / 36 | 24 / 55 |
+| 0 (control) | 1.147x | fires at 64 and 200 steps (false) | 1 of 2 points | clean |
+
+**In windows the simulation was exactly right; in requests it was optimistic by
+2.3x.** C4 predicted 16 requests of delay at k = 2 from an 8-request window.
+Measured: 36-37. The window count is identical - k windows, immediately - but a
+live window at `count_window_steps = 8` spans about eighteen requests, not
+eight, so every delay figure in this document converts at the wrong rate. The
+screen is not slower than modelled; the modelled window was smaller than a real
+one.
+
+**The control confirms k is the lever, and k = 3 is the setting.** With no skew
+at all, k = 1 raised an alarm 64 and 200 steps into the post-onset stretch on
+both control points; k = 2 left one false alarm across the six points; k = 3 was
+clean on all six, for 24 steps - about 55 requests - of delay. That is the same
+conclusion C5 reached by simulation, now with the request cost measured rather
+than assumed.
+
+**A window is a fixed number of steps, not a fixed amount of evidence, and that
+matters more than the threshold does.** Counted assignments per window ranged
+**128 to 14240** inside a single point: tiny while the server fills, then moving
+with the prefill/decode mix. A 128-assignment window reads 1.34-2.96x on benign
+traffic - the maximum-of-noisy-shares inflation of C6, in extreme form - so the
+pre-onset tail is noise, not traffic. Scored as the server writes it, the alarm
+lands at **2.13x**, above even the strongest level's post-onset median (1.75x),
+and **the screen never fires at all**. Dropping windows below half the point's
+median evidence (39-60 of ~450 per point) puts the alarm at 1.23-1.28x and
+recovers everything above. So a deployed screen should close a window on counted
+assignments rather than on steps, and until it does, a step-cadence
+implementation is blind for reasons that have nothing to do with its threshold.
+
+Limits: one model, one onset step, and an instantaneous arrival rather than a
+ramp or a flicker, which remains unmeasured. The alarm is set on the first 60%
+of each point's clean pre-onset windows and judged on the rest, because setting
+and judging it on the same windows makes a k = 1 false alarm certain.
 
 ## D. Stage 2: step time at matched batch size
 
@@ -356,13 +672,124 @@ the timings and profiled for the traces, and the profiled pass's timings were
 discarded. That is now kept (`profiled_request_summary`), so the next profiled
 run measures the profiler's own cost within a point at no extra NPU time.
 
-The screen's cost is not measured either. `detection.monitoring_overhead` prices
-a device-side counter from one number - the per-assignment cost of a
-`scatter_add_` into a resident buffer - which has to be measured on the device.
-What is already known is the shape of the risk: the router-bias plugin's
-per-call tensor add costs 10.0 ms per token on eager DeepSeek, where decode is
-host-bound, and nothing on Mixtral. A monitor doing per-call host work would
-disturb exactly what it measures.
+The screen's cost **is** now measured - see G. The shape of the risk it had to
+clear: the router-bias plugin's per-call tensor add costs 10.0 ms per token on
+eager DeepSeek, where decode is host-bound, and nothing on Mixtral, so a monitor
+doing per-call host work would disturb exactly what it measures. Keeping the
+counting on device, with no copy-out except once per window, is what avoids
+that.
+
+## G. What the screen costs
+
+2026-10-12/13, grid `screen-counting`, 2 models x 3 arms x 5 repeats, 30/30
+points. Another user's jobs held NPUs 4-5 on every Mixtral point and on round 5
+of DeepSeek's, alike in every arm of a round (first recorded as "no contention
+warnings", which was wrong). Arms interleaved in shared rounds, so a pair
+differs in the instrument and in nothing that drifted.
+
+The screen's device cost was the placeholder in C5 and the first item under Open.
+It is measured here with the counting done the way a deployment would do it,
+which is **not** the way a calibration does it:
+
+- `benchmark.capture_experts` (`--enable-return-routed-experts`) returns every
+  token's expert ids in the HTTP response body - about 41k ids per request on
+  DeepSeek, base64 npy through JSON, parsed by the client. It is the right
+  instrument for building a calibration, because it keeps the whole trace, and
+  the wrong one for costing a screen, which never needs the trace.
+- `server.count_experts` (`src/moe_reliability/expert_counter.py`) counts 4 MoE
+  layers redrawn every window, every tenth of their tokens, with one `bincount`
+  and one add into a device-side `[layer, expert]` table and a copy-out once per
+  window. One rank counts: expert selection is replicated, so the other three
+  would recount the same routing.
+
+| model | arm | e2e median | mean +-sd | 95% CI | baseline spread |
+|---|---|---|---|---|---|
+| Mixtral | count-on | +0.13% | +0.28% +-0.71 | [-0.61, +1.16] | 0.44% |
+| | capture-on | +6.04% | +6.38% +-0.61 | [+5.62, +7.14] | |
+| DeepSeek | count-on | -0.35% | +0.45% +-9.19 | [-10.97, +11.88] | 3.75% |
+| | capture-on | -0.34% | +0.84% +-5.33 | [-5.78, +7.47] | |
+
+DeepSeek's row was a non-measurement, and `gate-closure` (2026-10-13) establishes
+that it was blindness rather than a null, by running the control in a regime
+chosen to be quieter: eplb-fp2's settings unchanged, `client.stream = false` in
+every arm, 5 repeats, two free skew levels, 40 of 40 points, with another
+user's jobs on NPUs 4-5 throughout and alike in every arm (not "no contention"
+as first recorded). Medians against the `base` arm:
+
+| level | screen | capture (control) | EPLB | baseline spread |
+|---|---|---|---|---|
+| 1.09x | +1.65% | **+6.38%** | +0.71% | 3.41% |
+| 1.73x | +1.71% | **+9.51%** | +1.52% | 2.39% |
+
+Capture is now the largest effect at both levels (+9.8% and +17.5% of makespan),
+and at 1.73x its interval excludes zero, so the instrument works here. The
+screen's +1.7% is therefore a bound of about that size rather than a reading of
+nothing - about six times tighter than the +-11% interval above, and still under
+the baseline's own spread. Shortening the point was the fix the config predicted:
+the earlier regime's 70 s makespan averaged less than this one's 134 s.
+
+The headline is the median paired difference, declared in the grid config before
+the run because DeepSeek's baseline has a heavy tail at this concurrency: in
+`screen-overhead2` one point in four ran 15% slow with no foreign NPU process and
+a *lower* loadavg than its siblings.
+
+- **The screen is free to within the measurement.** On Mixtral, where the
+  baseline's own spread is 0.44%, counting costs +0.28% +-0.71 and is bounded
+  above by +1.2% at 95%; four of five rounds fall inside +-0.26%. The 0.2% C5
+  charges for it is the right order.
+- **Capture is not free.** +6.38% on the same traffic in the same rounds, every
+  round between +5.85% and +7.22%. That also reproduces `screen-overhead2`'s
+  independent +5.38% within about a point, which is what makes the two runs
+  comparable and lets `count-on` be read beside that earlier number.
+- **So the ceiling is about twenty times the thing, and scaling it down would
+  have been wrong.** The sampled screen is not 1.5% of capture's cost: it is a
+  different mechanism, with no per-request payload, no serialisation, no
+  client-side parse and one counting rank instead of four returning. Multiplying
+  6.38% by the sampling fraction would over-count transport the screen never does
+  and omit the per-window copy-out it does.
+- **The realised sampling fraction matches the nominal**, read back from what the
+  hook wrote rather than assumed: 1.55% of all expert assignments on DeepSeek
+  (nominal 4/26 x 0.1 = 1.54%) and 1.26% on Mixtral (4/32 x 0.1 = 1.25%).
+- **DeepSeek is unmeasured, and more repeats will not fix it.** Its baseline
+  spreads 3.75% and `count-on`'s per-round differences run -9.22% to +14.59%, a
+  standard error of 4.11%; resolving 1% would take about 85 repeats. This is the
+  prefill-bound regime of the rest of this document - the engine queue sits empty
+  83-90% of the time on DeepSeek - so host-side work hides in the idle time, which
+  is also the likeliest reason capture costs Mixtral 6% and DeepSeek nothing
+  measurable. `count-on`'s spread is *wider* than `capture-on`'s, which is
+  incoherent as signal. The fix is a decode-heavy workload, not more points.
+
+**Withdrawn 2026-10-16: the DeepSeek readings above measured something else.**
+vLLM loads general plugins sorted by name, so `moe_expert_counter` loaded before
+`moe_router_bias`, and router_bias skipped any selection function already
+carrying `__wrapped__` - which the counter sets. With the screen on, the bias was
+never applied. `gate-closure`'s count-on arm therefore recorded 1.128x busiest
+rank at level 0 and 1.13x at level 0.5, where that level's own validation reports
+1.73x: the arm served unbiased traffic *and* without the plugin, whose own cost
+on DeepSeek is +6.1%. So +1.65% / +1.71% is not a bound on what the screen
+costs, and DeepSeek's cost is now unmeasured rather than bounded. The capture
+control is unaffected (`benchmark.capture_experts` is not a plugin), and so are
+all detection rates, which come from captures that never set `count_experts`.
+Mixtral's +0.28% +-0.71 survives because that run was level 0 and the zero-bias
+plugin costs Mixtral nothing measurable - but it now rests on that measurement
+rather than on the two arms being alike.
+
+### Against what it averts
+
+EPLB rearranging where it has nothing to win costs **+4.73% +-4.84** TPOT at
+1.73x on DeepSeek, and about +1% at every other level
+(`docs/imbalance-findings.md`). The screen that would have blocked that
+rearrangement - the gate is shut on 0-1% of windows at the two free levels -
+costs **at most about 1%**. So the gating argument closes: the screen is cheaper
+than the false positive it averts, by roughly 4 points on Mixtral's measurement.
+
+Two things that argument rests on. It closes on Mixtral, where both the screen's
+cost and the capture ceiling are measured cleanly; on DeepSeek the screen's cost
+and the false positive are each inside their own noise, so it closes there only by
+assuming the hook behaves as it does on Mixtral. And the costs are measured in
+different units on different models - e2e latency on Mixtral against TPOT on
+DeepSeek - because capture cannot stream, so a capturing arm's control cannot
+either, and TPOT is unavailable without streaming.
 
 ## Workload families
 
@@ -381,11 +808,12 @@ corpus does not transfer exactly to another.
 
 ## Open
 
-1. **Measure the screen's per-assignment cost on the device.** The accuracy side
-   of the frontier is now measured; the cost side is still a placeholder. A
-   `scatter_add_` into a resident counter inside the expert-selection wrapper is
-   the implementation to time, against the same unprofiled twin the profiler
-   overhead will use.
+1. **Measure the screen's cost under saturation.** Answered on Mixtral and not on
+   DeepSeek (G): DeepSeek's engine queue sits empty 83-90% of the time in this
+   prefill-heavy regime, so host-side work hides in the idle time and its off arm
+   spreads 3.75%. Repeats do not fix that - the standard error is 4.11%, so 1%
+   would need about 85 of them. A decode-heavy workload that keeps the queue full
+   would, and is also the regime a deployment screens in.
 2. **A skew that ramps or flickers.** C4 measures an instantaneous onset into a
    standing skew, which is the easy case. The plugin would have to read its bias
    from a tensor updated in place - which also keeps graph mode working, since

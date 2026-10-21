@@ -34,7 +34,8 @@ cannot surface.
 graded, injected router bias that keeps every expert live raises 100-token TPOT
 on 4 NPUs, measured with the instrument in every arm. Mixtral is linear from the
 first offset, +12% per +1x of busiest-rank load (t = 52), and reproduces in graph
-mode. DeepSeek's cost is large and real by 3.2-3.5x but its shape below that is
+mode. DeepSeek's cost is large and real by 3.2-3.5x (*confounded with shorter
+answers - see the 2026-10-14 update below*) but its shape below that is
 unresolved: two eager sweeps disagree at 2.34x (+1.0% against +6.5%), by more
 than either one's repeat spread. **The mechanism is not established on either
 model**: a saturated decode step is the same length at every eager offset, which
@@ -53,6 +54,36 @@ The rotating case is also where the pooled load statistic fails completely: it
 reads 1.05-1.08x, i.e. benign, for a skew that costs Mixtral +17%
 (`docs/figures/rotating_skew.png`).
 
+**Update 2026-10-14: DeepSeek's cost of skew did not survive holding output
+length fixed.** Strong bias makes DeepSeek write shorter answers (205 of 300
+tokens, 84 of 100), and every DeepSeek point that ever cost heavily is one of
+those. `fixed-length` (24/24 points) forced exactly 300 tokens per request: at
+3.64x the skew costs **-0.27% +-1.84** TPOT, where eplb-fp2 at natural length read
++30.86%. Withdrawn at 300 tokens: the +31%, and the EPLB null at 3.63x (nothing
+to recover; EPLB there is a false positive, +3.83% +-1.02).
+
+**Update 2026-10-15: the same at 100 tokens, and it is not the mean length.**
+`length-held-100` (36/36, three arms in shared rounds): natural length reproduces
++20.58% at 3.53x; held at 100 it is -2.13% +-3.91. Held at 84 - offset 2's
+average - is free too, while natural is +17.70% above it at the same skew and the
+same mean length. What differs is the spread: 28% of requests stop early at
+scattered points, and every request in the server slows. So DeepSeek has no
+measured cost of skew at any length; the router-bias knob degraded the model and
+measured that. Withdrawn: the +22%, the 2.43x threshold, DeepSeek's half of the
+rotating contrast. Mixtral's lengths never moved and its results stand, now the
+only demonstrated cost of skew. `length-replay` (18/18) then served offset 2's
+per-request lengths at offset 0, with no skew: **+19.55% +-5.64** TPOT against
+every request held at 85, the same mean (6 of 6 rounds; makespan +8%). The
+scattered stops are the whole cost, and every uniform-length baseline in the
+project is ~20% optimistic about traffic with a spread of answer lengths.
+`length-replay-profiled` (4/4) then located the cost: 63% of it is the step mix.
+With stops scattered a slot frees almost every step, so the same prompt tokens
+are admitted in 2.4x as many chunks (1027 per prefill-carrying step against
+2457), and a step costs nearly the same whether it carries 300 prompt tokens or
+4000. It is scheduling, not imbalance - the straggler reading is 1.05x in both
+arms.
+Detail in [router-bias-findings.md](router-bias-findings.md#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew).
+
 Scope of the claim: DeepSeek-V2-Lite-Chat (64 experts, top-6) at 2 to 8-way
 expert parallelism, and Mixtral 8x7B (8 experts, top-2) at 8-way, over router
 bias 0-100 and effective alpha 0.75-1.44. Single node, 8x Ascend 910B3.
@@ -68,12 +99,67 @@ from runs served in alpha order or under a neighbouring job.
 is the methodological lesson of the project: `benchmark.repeats` above 1 is the
 only noise floor available, and single points are not evidence.
 
-**EPLB rearranges correctly and buys nothing.** 84 cycles, a placement recorded
-per point; by its own accounting it cuts rank imbalance from 1.139 to 1.007. The
-measured straggler reads 1.026 off and 1.027 on. It balances token counts, which
-overstate time imbalance by about six times, so there is nothing left to win.
-Its one measurable effect is overhead: MoE share of compute falls 0.77pp while
-absolute MoE time holds.
+**EPLB: retracted and replaced 2026-10-12.** The "rearranges correctly and buys
+nothing" result measured EPLB in record-only mode: `eplb_record_map` makes
+vllm-ascend plan and never apply, so its 84 "cycles" were 84 plans and no expert
+moved. Re-measured with placements applied (`eplb-fp2`, 7-12 completed cycles per
+point, 4 repeats): the conclusion holds for sounder reasons. EPLB takes a 3.63x
+skew that costs the unbalanced server +31% TPOT down to 1.09x by its own reading
+and recovers none of the latency (+1.07%); rearranging where there is nothing to
+win costs up to +4.73% +-4.84 at 1.73x. Caveat: at 3.63x convergence took ~85 s
+of a 127 s batch, so the steady state is not what was measured.
+**Corrected 2026-10-14:** with length held (`fixed-length`, 1800-request warm-up
+so convergence falls before the measured window) the 3.64x skew costs nothing,
+so there was nothing to recover, and EPLB there costs +3.83% +-1.02. Every level
+EPLB has been measured at on DeepSeek is now one where it can only lose.
+
+**The null holds on Mixtral, where there was something to win** (2026-10-13,
+`eplb-mixtral`, 24/24 points). Mixtral was the clean test because its cost curve
+has no threshold; EPLB recovers nothing at 1.11x, 1.76x or 2.62x, every interval
+spanning zero, and it cannot balance the model either - 2.62x to 1.58x, because
+8 experts over 4 ranks is 2 per rank. Coarse MoE bounds the best possible plan
+before any implementation gets a turn.
+
+**An impact threshold goes stale on output length alone** (2026-10-14), and this
+is the finding that most constrains the gating argument. At matched load, model,
+hardware, batch size and bias, generating 300 tokens per request instead of 100
+cuts the cost of Mixtral's 2.62x skew from +14.45% to +2.95% TPOT and 1.76x to
+nothing: the cost lives in prefill-heavy steps, and a decode-dominated workload
+dilutes it ~5x. Both calibrations were made at 100 tokens, so both thresholds are
+too low for the 300-token EPLB runs - on Mixtral the gate opens on 100% of
+windows at 1.76x, exactly where rearranging costs most, and gating comes out
+0.3-0.6pp worse than leaving EPLB on. "Calibrate per deployment" now includes the
+traffic mix.
+
+**The gating sum does not close on DeepSeek, and the control says why not**
+(2026-10-13, `gate-closure`, 40/40 points, 4 arms in shared rounds). Full capture
+reads +6.38% and +9.51% against baseline spreads of 3.41% and 2.39%, so the
+positive control fires and the regime can see ~6%; the screen's +1.65%/+1.71% is
+a real bound. EPLB read only +1.52% there, but in end-to-end latency with
+streaming off; in TPOT it replicated (below).
+
+**A live gate decides correctly and averts less than half of the false
+positive** (2026-10-14, `eplb-gated`, 36/36 points, off/on/gated in shared
+rounds). The patched vllm-ascend shut on all 96 decisions at 1.09x and 1.73x and
+opened at 3.63x, identically on all four ranks. At 1.73x EPLB-on costs +5.52%
+TPOT (pooled with eplb-fp2, +5.12%, +1.7% to +8.5% - the first reading to
+exclude zero), and the gated arm, which moved nothing, still costs +3.23% (+2.6%
+to +3.9%). Most of the false positive is the cost of having EPLB on, which no
+gate in the planner reaches. One level only, and the source is unattributed.
+
+**Correction, 2026-10-14: four runs were not quiet.** eplb-mixtral, gate-closure,
+eplb-gated and Mixtral's screen-counting all ran beside another user's jobs on
+NPUs 4-5; `screen_overhead.py` read a key points never carry and reported them
+clean. The neighbour was present alike in every arm of each round, so the paired
+comparisons stand. Only eplb-fp2 ran on a quiet node.
+
+**The screen costs nothing to run, and capture is not its proxy.** Measured
+2026-10-12/13 (`screen-counting`, 30 points): counting 4 random layers and a
+tenth of their tokens on device costs +0.28% +-0.71 e2e on Mixtral against a
+0.44% baseline spread, while `--enable-return-routed-experts` costs +6.38% on the
+same rounds. The sampled screen is a different, cheaper mechanism - no
+per-request payload, one counting rank - not 1.5% of capture's cost. DeepSeek is
+unmeasurable in this prefill-bound regime (baseline spread 3.75%, se 4.11%).
 
 **The idle rank is the bottleneck, not a victim** - in 30 of 30 profiled points.
 Ranks that arrive early at a collective wait *inside* the kernel and so count as
@@ -111,6 +197,15 @@ touches hardware, which goes through `./nrun`.
 
 ## Open, in the order I would take them
 
+0. **Can the scattered-stop cost be scheduled away** (2026-10-15).
+   `length-replay` reproduced the cost with no bias (+19.55% +-5.64 against
+   uniform 85) and `length-replay-profiled` put 63% of it in the step mix: the
+   same prompt tokens admitted in 2.4x as many chunks, each chunk costing a step
+   nearly the same whether it carries 300 tokens or 4000. Next: does raising
+   `max_num_batched_tokens`, which sets the chunk, shrink the gap, and does the
+   remaining 14.9 ms of per-step rate survive at matched chunk count? Real
+   traffic always has a spread of answer lengths, so this outlives the
+   router-bias question.
 1. **The pace-setter.** Partly explained 2026-10-06: in DeepSeek decode (eager)
    the pace-setting rank's device idles 130-150 ms of a ~175-230 ms step,
    spread over every kernel transition. It is host-launch-bound. Host CANN API
@@ -142,12 +237,30 @@ touches hardware, which goes through `./nrun`.
    1.04x at 2 ranks, 1.13x at 4, 1.31x at 8, extrapolating to 1.63x at 16. Tail
    inflation also grows with rank count, independent of alpha - p99 sits 3.5%
    above the mean at 4 ranks and 12.6% at 8.
-5. **EPLB at a realistic cadence.** Our intervals were cut from 600+50 to 50+10
-   to make it fire inside a point at all, which leaves the weight transfer
-   occupying about a third of every cycle. That overstates its overhead and may
-   explain why realised imbalance (1.139) never approaches predicted (1.007).
+5. **EPLB at a realistic cadence, and past convergence.** Our intervals were cut
+   from 600+50 to 50+10 to make it fire inside a point at all. (Realised
+   imbalance never approaching predicted was not the cadence: no plan was ever
+   applied - see above.) `eplb-fp2` now applies placements, but at the costly
+   level convergence eats two thirds of the batch, so EPLB's *benefit* has never
+   been measured in steady state. A batch long enough to discard the first ~80 s
+   is the missing measurement.
+6. **The screen's cost under saturation.** Measured on Mixtral and not on
+   DeepSeek, whose engine queue sits empty 83-90% of the time in this
+   prefill-heavy regime, so host-side work hides in the idle time. A decode-heavy
+   workload would settle it, and is the regime a deployment screens in.
 
 ## What not to trust
+
+- **Any DeepSeek cost of skew measured at natural output length** (raised and
+  tested 2026-10-14). Every costly DeepSeek point is one where the answers
+  shortened (205 of 300, 84 of 100, 92 of 100 at offset 1.75), and the rotating
+  arm that "cost nothing" kept its length. Tested at both lengths: held to 300,
+  3.64x costs -0.27% +-1.84; held to 100, 3.53x costs -2.13% +-3.91. Holding to
+  the shortened *mean* (84) is free as well, so do not explain the old cost as
+  "more prompt per generated token". Mixtral's lengths never move and are
+  unaffected. Check
+  `output_tokens_mean` per level, and set `client.ignore_eos` on any sweep that
+  compares levels.
 
 - **Prefill-only makespan and TTFT.** The engine's queue sits empty for 83-90% of
   a DeepSeek prefill-only run, so these measure the client and API server. That
@@ -197,8 +310,8 @@ touches hardware, which goes through `./nrun`.
 ## Honest assessment
 
 The strongest results are negative or mechanistic: imbalance does not cost
-anything here, EPLB does not help, and we can now say precisely why in both
-cases. That is a real contribution for anyone planning MoE serving on this
+anything here, and we can say precisely why. (The matching EPLB result was
+withdrawn on 2026-10-12: it never rearranged.) That is a real contribution for anyone planning MoE serving on this
 hardware, and the measurement pitfalls above are reusable.
 
 What we do not yet have is a positive result. The detection work is honestly

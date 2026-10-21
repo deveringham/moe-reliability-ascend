@@ -184,7 +184,8 @@ def decode_routed_experts(payload):
 
 # Sends a single streaming request and measures TTFT and TPOT
 async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tokens=100, collect_itl=False,
-                          get_response=False, prompt_formatted=True, capture_experts=False):
+                          get_response=False, prompt_formatted=True, capture_experts=False, stream=True,
+                          ignore_eos=False):
     
     start_time = time.perf_counter()
     first_token_time = None
@@ -193,22 +194,43 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
     else:
         messages = [{"role": "user", "content": prompt}]
 
-    # If recording expert activations...
-    if capture_experts:
+    # vLLM's own sampling parameter, outside the OpenAI schema. Sent only when
+    # set, so a request without it is byte-identical to one from before it existed.
+    extra = {"extra_body": {"ignore_eos": True}} if ignore_eos else {}
+
+    # Expert capture is only returned on a non-streamed response. A non-streamed
+    # response has no first-token time, so it is also what an arm compared
+    # against a capturing one has to use: streaming costs the client and the API
+    # server per token, and that difference would otherwise be read as capture.
+    if capture_experts or not stream:
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
             stream=False,
             max_tokens=max_new_tokens,
             seed=seed,
-            temperature=0
+            temperature=0,
+            **extra,
         )
         end_time = time.perf_counter()
         choice = response.choices[0]
-        routed_experts = decode_routed_experts(getattr(choice, "routed_experts", None))
-        prompt_routed_experts = decode_routed_experts(getattr(response, "prompt_routed_experts", None))
         num_input_tokens = response.usage.prompt_tokens
         num_output_tokens = response.usage.completion_tokens
+        if not capture_experts:
+            result = {
+                "prompt": prompt,
+                "prompt_id": prompt_idx,
+                "ttft": None,  # no first-token time without streaming
+                "tpot": None,
+                "num_output_tokens": num_output_tokens,
+                "num_input_tokens": num_input_tokens,
+                "total_time": end_time - start_time,
+            }
+            if get_response:
+                result["response"] = choice.message.content
+            return result
+        routed_experts = decode_routed_experts(getattr(choice, "routed_experts", None))
+        prompt_routed_experts = decode_routed_experts(getattr(response, "prompt_routed_experts", None))
 
         # The server returns one array over prompt and generated tokens; split it
         # at the prompt length. Records captured before 2026-10-05 split at the
@@ -243,7 +265,8 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
         stream_options={"include_usage": True},
         max_tokens=max_new_tokens,
         seed=seed,
-        temperature=0
+        temperature=0,
+        **extra,
     )
 
     response_str = ""
@@ -304,7 +327,7 @@ async def measure_request(client, model, prompt_idx, prompt, seed=0, max_new_tok
     return result
     
 # Runs a batch of prompts concurrently and calculates aggregate metrics
-async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False, collect_itl=False):
+async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurrency_limit=100, print_output=False, prompt_formatted=True, capture_experts=False, collect_itl=False, stream=True, ignore_eos=False):
 
     print(f"Sending batch of {len(prompts)} concurrent requests...")
     
@@ -318,6 +341,9 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
     # Offsets from the batch start, so a point's makespan and throughput can be
     # recovered: per-request TTFT is mostly queueing when every request is
     # submitted at once, so the batch wall time is the cleaner prefill measure.
+    # max_new_tokens is one cap for every request, or one per prompt (a replayed
+    # point's lengths, client.lengths_from); warm-up passes a prefix of the
+    # prompts, so a per-prompt list longer than the batch is expected.
     async def rate_limited_measure_request(i, prompt):
         async with semaphore:
             start_s = time.perf_counter() - batch_start_time
@@ -327,11 +353,13 @@ async def run_batch(client, model, prompts, seed=0, max_new_tokens=100, concurre
                 i, 
                 prompt, 
                 seed=seed, 
-                max_new_tokens=max_new_tokens, 
+                max_new_tokens=max_new_tokens if isinstance(max_new_tokens, int) else max_new_tokens[i], 
                 get_response=False,
                 prompt_formatted=prompt_formatted,
                 capture_experts=capture_experts,
-                collect_itl=collect_itl
+                collect_itl=collect_itl,
+                stream=stream,
+                ignore_eos=ignore_eos,
             )
             res["start_s"] = start_s
             res["end_s"] = time.perf_counter() - batch_start_time
@@ -406,7 +434,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
                                   print_output=False, enable_bnb=False, enable_expert_parallel=False,
                                   enable_prefix_caching=False, eplb=None, enable_expert_capture=False,
                                   trace_dir=None, trace_active_iterations=2, trace_start_iteration=100,
-                                  port=8000, extra_env=None, collect_itl=False):
+                                  port=8000, extra_env=None, collect_itl=False, stream=True,
+                                  ignore_eos=False):
     server_process = None
     results = None
     clients: list = []
@@ -434,7 +463,7 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         await run_batch(client, model, prompts[:n_warmup_samples],
                         seed=seed, print_output=False, max_new_tokens=max_new_tokens,
                         concurrency_limit=concurrency_limit,
-                        prompt_formatted=True)
+                        prompt_formatted=True, ignore_eos=ignore_eos)
         
         # Start profiling
         if trace_dir is not None:
@@ -444,7 +473,8 @@ async def measure_vllm_throughput(model, prompts, seed=0, max_new_tokens=100, co
         results = await run_batch(client, model, prompts,
                                   seed=seed, print_output=print_output, max_new_tokens=max_new_tokens,
                                   concurrency_limit=concurrency_limit, capture_experts=enable_expert_capture,
-                                  prompt_formatted=True, collect_itl=collect_itl)
+                                  prompt_formatted=True, collect_itl=collect_itl, stream=stream,
+                                  ignore_eos=ignore_eos)
         
         # Stop profiling
         if trace_dir is not None:

@@ -24,6 +24,12 @@ regime, with the instrument present in every arm (the controlled sweep,
   The two disagree by more than either one's spread, so "a threshold, not a
   slope" is withdrawn pending replication. The gradual rise first reported
   *below* 2.34x was the instrument, and that still stands.
+  **Withdrawn, 2026-10-14/15:** every costly DeepSeek point is one where the
+  model's answers ended early (84 of 100 tokens at 3.45x), and with length held
+  the same skew costs nothing at 100 tokens (-2.13% ±3.91 at 3.53x) and at 300
+  (-0.27% ±1.84 at 3.64x). See
+  [Fixed-length output](#fixed-length-output-deepseeks-cost-was-its-early-stops-not-the-skew).
+  DeepSeek has no measured cost of skew that survives that control.
 
 Natural traffic reaches 1.09-1.25x on the same load measure, even for a single
 prompt (`docs/figures/impact_map.png`). Mixtral's first cost beyond run-to-run
@@ -484,7 +490,8 @@ calibrate to 2.67x, 2.95x and 3.21x, inside the gap the controlled sweep left:
   9.9 ms**, and the sequence is non-monotone (2.95x reads below 2.67x). Three
   repeats are not enough to resolve the shape at this noise level.
 - **What is settled:** DeepSeek's cost is real and large by 3.2-3.5x, and absent
-  at natural load. **What is not:** whether it begins near 2.3x or only above
+  at natural load. *(Not settled after all, 2026-10-14: the 3.21x and 3.45x points
+  wrote 92 and 84 of 100 tokens - see "Fixed-length output".)* **What is not:** whether it begins near 2.3x or only above
   3x, and therefore whether it is a threshold or a slope. Resolving it needs more
   repeats in 2.3-3.5x, and an explanation for why eager DeepSeek's repeat spread
   is 2-5 ms in one run and 9-14 ms in another of the same configuration.
@@ -536,6 +543,252 @@ leads 34-35% of layers. On DeepSeek that is a second reason its natural imbalanc
 is free: not only is the skew small, it is also the kind that costs nothing even
 when large. On Mixtral that reasoning does not hold, and only the smallness
 protects it.
+
+> **Withdrawn for DeepSeek, 2026-10-15** (next section). The fixed arm's costly
+> point is the one where DeepSeek's answers ended early (84 of 100 tokens); the
+> rotating arm kept its length (99.3). With length held, a fixed 3.53x skew at 100
+> tokens costs nothing either, so both arms are flat and there is no contrast:
+> "DeepSeek pays only for a persistently hot rank" has no cost behind it. The
+> Mixtral half stands.
+
+## Fixed-length output: DeepSeek's cost was its early stops, not the skew
+
+2026-10-14 (300 tokens) and 2026-10-15 (100 tokens).
+
+Every DeepSeek point that ever cost heavily is one where the model wrote shorter
+answers, and every full-length point is cheap or noisy:
+
+| Run (max tokens) | Offset | Busiest rank | Tokens / request | TPOT |
+|---|---|---|---|---|
+| rbias-controlled (100) | 0-1 | 1.14-2.34x | 100.0 | 171.8-175.8 ms |
+| | 2 | 3.45x | **84.2** | **212.6 ms** |
+| rbias-graph-threshold-002 (100) | 1-1.5 | 2.35-2.95x | 99.7-100.0 | 184.8-194.8 ms |
+| | 1.75 / 2 | 3.21 / 3.45x | **91.8 / 83.9** | **205.3 / 209.3 ms** |
+| rbias-graph, graph mode (100) | 2 | 3.45x | **84.0** | **174.1 ms** (139.5 balanced) |
+| rotating-skew (100) | 2 | 3.59x | 99.3 | 174.8 ms (free) |
+| eplb-fp2 (300) | 2 | 3.63x | **205.2** | **202.1 ms** (+30.9%) |
+
+The first suspicion was the prefill/decode mix: shorter answers raise the prompt
+tokens carried per generated token (0.55 to 0.79 in eplb-fp2), and the mix moves
+TPOT on its own (Mixtral at 100 against 300 tokens). **That account is withdrawn**
+(100-token section below): holding every request at offset 2's *average* length
+moves the mix the same way and costs nothing.
+
+`fixed-length` (`20261014-115455`, `configs/examples/fixed_length.toml`) is
+eplb-fp2 with `client.ignore_eos = true`: every request generates exactly 300
+tokens, at every level and in both arms. 3 offsets x 2 arms (EPLB off / on) x 4
+repeats, 24 of 24 points, shuffled shared rounds, warm-up 1800 requests. The
+validation capture ran with the same forced length and reads the same skew as
+eplb-fp2: 1.05x / 2.48x / 3.64x, 64 / 64 / 58 experts live.
+
+TPOT with EPLB off, paired by round against offset 0 (± is the sd of the four
+paired differences):
+
+| Busiest rank | eplb-fp2 (natural length) | fixed-length (300 every request) |
+|---|---|---|
+| 2.48x | +2.18% ±2.80 | +2.56% ±1.89 (+3.8 / +2.9 / +3.7 / -0.2) |
+| 3.64x | **+30.86% ±3.46** (205 tokens) | **-0.27% ±1.84** (-0.1 / -2.8 / +1.5 / +0.4) |
+
+- **At 300 tokens DeepSeek's skew is free up to 3.64x once length is held.**
+  e2e agrees (-0.51% ±1.87). The +31% required the early stops; what about them
+  costs is the 100-token run's question, below.
+- **Offset 1 reads ~+2.5% in both runs** (8 pairs, 6 positive), and offset 2,
+  with more skew, reads nothing. Non-monotone and small; unexplained.
+- **EPLB at 3.64x is now a false positive:** +3.83% ±1.02 TPOT, all four pairs
+  +2.8 to +5.1, while taking EPLB's own reading from 3.49x to 1.07x (14 of 15
+  plans applied at every point). At offset 0 it is +0.42% ±1.56 and at offset 1
+  +3.01% ±4.91 (one pair +9.6%).
+- **Baseline TPOT is lower than eplb-fp2's** (141.1-143.4 ms at offset 0 against
+  148.7-159.5) at nearly the same length (300 against 298) and despite a
+  neighbour. The longer warm-up is the obvious difference and is not verified.
+  Paired comparisons are unaffected.
+- **Contention:** other users' processes on NPUs 4, 5 and 7 throughout, never on
+  0-3, and their mix varied between points within a round (4 only, 4+5, 4+7), so
+  "alike in every arm" holds only approximately. TPOT shows no pattern against it.
+
+**What this withdraws, on DeepSeek only** (Mixtral's lengths never moved):
+
+- *At 300 tokens, tested:* "the skew costs +31% at 3.63x", and with it the EPLB
+  null at 3.63x ("balances and recovers nothing") - there was nothing to recover.
+- *At 100 tokens, tested 2026-10-15 (below):* the +22% at 3.45x and the 2.43x
+  impact threshold interpolated across it. The rotating contrast lapses with them
+  (both arms are flat once length is held). The graph-mode slope rests on the same
+  shortened point (84 tokens) and was not re-run in graph mode.
+
+### At 100 tokens, and it is not the mean length (2026-10-15)
+
+`length-held-100` (`20261014-160027`, `configs/examples/length_held_100.toml`) is
+rbias-controlled-000 again - same seed, prompts and settings - with three arms in
+shared shuffled rounds: **natural** (model stops where it likes), **held-100**
+(`ignore_eos`, every request 100) and **held-84** (`ignore_eos`, every request 84,
+offset 2's natural average). 3 offsets x 3 arms x 4 repeats, 36 of 36 points.
+Validation (held-100 traffic) reads 1.04x / 2.39x / 3.53x, 64 experts live at
+every level. Other users' processes on NPUs 4-7 throughout, varying by round,
+never on 0-3.
+
+TPOT within each arm, paired by round against that arm's own offset 0:
+
+| Arm | Tokens / request | 2.39x | 3.53x |
+|---|---|---|---|
+| natural | 100 / 100 / 84.4 | -0.19% ±2.12 | **+20.58% ±3.69** (+15.7 to +24.5) |
+| held-100 | 100 | -2.45% ±4.87 | **-2.13% ±3.91** |
+| held-84 | 84 | +0.60% ±6.91 | -1.04% ±4.06 |
+
+| Contrast, paired by round | TPOT |
+|---|---|
+| held-84 vs held-100, offset 0 (fewer tokens, no skew) | +3.28% ±4.82 |
+| natural vs held-84, offset 2 (same skew, same mean length) | **+17.70% ±6.40** (4 of 4 positive) |
+
+- **The positive control reproduces**: natural reads +20.6% and 84.4 tokens at
+  offset 2, against rbias-controlled's +22% and 84.2.
+- **Held at either length, the skew is free at 100 tokens too.** DeepSeek has no
+  measured cost of skew at any length, up to 3.5-3.6x.
+- **The mean length is not the cause.** held-84 carries the same tokens per
+  request, so the same prompt per generated token, as natural at offset 2, and
+  costs nothing; fewer tokens on their own cost at most a few percent.
+- **The spread is what differs.** At natural offset 2, 28% of requests stop
+  before 100, at scattered points (p1 11, p10 31 tokens). It is not a
+  per-request averaging artefact (token-weighted TPOT 199.2 against 201.1 ms),
+  and the cost falls on the whole server: natural requests that ran the full 100
+  tokens still averaged 198.8 ms, against 174.3 ms held. The suspicion is that
+  scattered completions change how admissions, and so prompt-reading, interleave
+  with generation. The engine's 10 s log cannot show it - prefill is present in
+  every full-batch interval in every arm - and it is not established.
+  `length-replay` (below) reproduces the cost with no bias at all.
+- **Offset 1's small cost did not reappear** at 100 tokens in any arm.
+- **So router bias is a flawed instrument on DeepSeek**: past ~3x it degrades the
+  model enough that some answers end early, and that, not the hot rank's load,
+  is what cost latency. Natural imbalance does not change the text. Mixtral's
+  lengths never moved (99.6-100 of 100, 286-291 of 300), so its results stand.
+
+### The scattered stops alone reproduce it, with no skew (2026-10-15)
+
+`length-replay` (`20261014-222445`, `configs/examples/length_replay.toml`) serves
+offset 0 - balanced routing, plugin installed with an all-zero vector - in three
+arms in shared shuffled rounds: **held-100**, **held-85** (every request 85, the
+replayed point's mean) and **replayed** (`client.lengths_from`: each prompt
+generates exactly what it generated at natural offset 2 in `length-held-100`).
+1 level x 3 arms x 6 repeats, 18 of 18 points. The replay is faithful: the same
+length for every prompt in every repeat, mean 85.2, 27.9% of requests under 100,
+p1 11 and p10 32 tokens (source: 28%, 11, 31). Another user's processes on NPUs
+4-5 at every snapshot, never on 0-3, so alike in every arm.
+
+Paired by round (± is the sd of the six paired differences):
+
+| Contrast | TPOT | e2e | Makespan | Output tokens/s |
+|---|---|---|---|---|
+| replayed vs held-85 (same mean, spread vs none) | **+19.55% ±5.64** (+11.8 to +28.5, 6 of 6) | +8.77% ±2.63 | +8.19% ±2.63 | -7.31% ±2.22 |
+| replayed vs held-100 | +20.82% ±5.68 | -2.80% ±3.47 | -3.56% ±3.47 | -11.55% ±3.19 |
+| held-85 vs held-100 (fewer tokens, no spread) | +1.40% ±8.97 | -10.54% ±4.94 | -10.78% ±4.95 | -4.48% ±5.37 |
+
+- **The spread of stops is the whole cost.** With no skew anywhere, replaying
+  offset 2's endings costs +19.6% over a uniform server at the same mean length,
+  against +17.70% ±6.40 for natural over held-84 at offset 2 in
+  `length-held-100`. Skew contributed nothing measurable to DeepSeek's
+  router-bias cost; the knob degraded the model and the degraded model's
+  stopping pattern is what was measured.
+- **It falls on every request again**, as at natural offset 2: replayed requests
+  that ran the full 100 tokens averaged 207.0 ms against 173.9 ms held-100
+  (+9.3 to +23.5 per round). Token-weighted TPOT agrees (207.8 against 209.6 ms
+  per request), and the tail moves more than the mean (p99 +29.1%).
+- **It is a real throughput loss, not TPOT bookkeeping.** The same 255k output
+  tokens take 8% longer to serve; output tokens/s falls 7%.
+- **TTFT falls** (-7.09% ±2.99 against held-85): requests that end early free
+  their slots sooner, so waiting prompts are admitted sooner. That fits the
+  suspicion that the cost is admissions interleaving with decode - every early
+  finish lets a prompt into a running batch - but it does not establish it.
+- **The held-length baselines are optimistic.** Every arm that held length, here
+  and in `fixed-length` and `length-held-100`, served a uniform batch. So did
+  natural traffic at offsets 0-1, because DeepSeek's answers run past the 100-
+  and 300-token caps. Real traffic has a spread of answer lengths, and on this
+  deployment that spread alone is worth ~20% TPOT at 100 tokens. It is the
+  largest single effect on latency the project has measured, and it is not
+  imbalance.
+
+### The cost is the step mix, not the step (2026-10-15)
+
+`length-replay-profiled` (`20261015-110149`,
+`configs/examples/length_replay_profiled.toml`) serves held-85 and replayed at
+offset 0 with the profiler on, 2 repeats, 4/4 points, replaying the same source
+file. Each point is served twice: unprofiled for timings, profiled for the
+trace.
+
+The unprofiled passes reproduce the effect in shared rounds: TPOT **+19.42%
+±9.72** (both rounds positive, +26.29 and +12.55), makespan +7.17% ±1.07, p99
++34.30%. The profiled passes keep it (201.5 → 245.2 ms, +21.7%), so the trace
+describes the effect rather than a profiler artefact. Profiling itself costs
++5.6 to +21.9% on the same point, so only within-pass contrasts are comparable.
+Both arms do the same work: ~247k decode tokens and 401-434k prompt tokens per
+point, 3000 requests, mean output 85.00 against 85.21.
+
+**The mix moves, not the rate.** Taking one arm's distribution of step kinds and
+substituting the other's per-step times (cells are batch bin x prefill-token
+bin, 100% of each arm's steps covered):
+
+| mean step wall | held-85 rates | replayed rates |
+|---|---|---|
+| **held-85 mix** | 198.5 ms | 213.4 ms |
+| **replayed mix** | 225.7 ms | 241.8 ms |
+
+Of the 43.3 ms gap, **27.3 ms (63%) is the step mix** and 14.9 ms the per-step
+rate.
+
+**Prompts arrive in dribbles instead of bursts.** Prefill-carrying steps are
+30-35% of held-85's steps and 71-74% of replayed's, for the same prompt tokens:
+2457 and 2191 prompt tokens per prefill-carrying step held, 1027 and 1069
+replayed. Held at one length a batch finishes together, so prompts enter in a
+few large chunks; with stops scattered a slot frees almost every step, so
+prefill is admitted continuously. The longest unbroken run of prefill-carrying
+steps is 117 in replayed against 23 in held-85.
+
+**A step pays for carrying prefill nearly regardless of how much.** Full batch
+(>480 requests), mean wall in ms with step count in brackets:
+
+| Prefill tokens in step | held-85 | replayed |
+|---|---|---|
+| decode only | 175.8 (451) | 183.0 (62) |
+| 1-256 | 229.3 (20) | 227.2 (94) |
+| 257-1024 | 242.5 (32) | 253.1 (411) |
+| 1025-2500 | 243.9 (70) | 279.6 (180) |
+| 2501-4096 | 237.8 (140) | 249.5 (55) |
+
+A full-batch decode-only step is the same length in both arms (175.8 against
+183.0) and so is one carrying a full 2501-4096 token chunk (237.8 against
+249.5). But a step carrying 300 prompt tokens costs about what a step carrying
+4000 costs, so the overhead is nearly fixed per chunk rather than per token -
+and replayed buys it 2.4x as often for the same prompt tokens. That is chunked
+prefill's granularity meeting a ragged batch.
+
+**It is waiting, not compute.** On full-batch steps carrying more than 512
+prompt tokens, replayed's GEMM time is *lower* (10.1 against 14.4 ms) while
+idle rises (98.7 against 76.7) and collective time rises (122.6 against 101.4).
+Per rank on those steps, replayed's rank 0 sits idle 162.9 ms of a 269.8 ms step
+with 106.9 ms busy while ranks 1 and 3 run 205-212 ms busy; held-85's spread is
+narrower. Each rank's share of a prefill chunk differs, and the ranks that
+finish early wait inside the collective, which is the reading the
+`collective_wait` split above warns about. The straggler metric is 1.049-1.051x
+held against 1.058-1.061x replayed, so this is not router imbalance.
+
+So the ~20% is scheduling: the same work admitted in 2.4x as many pieces, each
+piece paying a nearly fixed per-step price and leaving ranks unevenly loaded
+within the step. What is *not* settled is the remaining 14.9 ms of per-step
+rate, and whether a scheduler that batched admissions - or a larger
+`max_num_batched_tokens`, which sets the chunk - recovers the 27 ms. Both are
+testable on this run's config.
+
+### `step_profile.py` counted one request too many until 2026-10-15
+
+The step kernel's first input shape is `query_start_loc`, which is
+`[num_reqs + 1]`, and the script recorded it as `reqs`. So every decode-only
+step read as having fewer tokens than requests, which is impossible, and a
+`tokens == reqs` test for decode-only steps selected **nothing** - 2896 to 4804
+impossible rows per run, and no decode-only step in any of the ten runs with
+step tables. `plot_findings.py` and `detection_eval.py` both subtracted the 1
+when reading the CSV, so the figures and the 2026-10-06 table below are
+unaffected: that table reproduces to the digit through the corrected reader.
+Anything reading the CSVs directly was wrong. The column is now the request
+count, the two readers no longer compensate, and all ten runs' tables were
+regenerated from the traces on the node.
 
 ## Inter-token latency capture: usable in aggregate, not in distribution
 
@@ -620,6 +873,10 @@ TPOT: +12.3% per +1x with it, t = 27).
 | `20261007-123441` rbias-graph-threshold-002 | Eager DeepSeek threshold sweep, quiet node |
 | `20261007-202156` rotate-calibration | Rotating bias: per-layer load against the fixed target's |
 | `20261007-203534`, `-214459` rotating-skew-000, -001 | Rotating skew, DeepSeek and Mixtral, 4 offsets x 3 |
+| `20261014-115455` fixed-length | DeepSeek, eplb-fp2 with `ignore_eos`: 3 offsets x EPLB off/on x 4, 300 tokens every request |
+| `20261014-160027` length-held-100 | DeepSeek, 3 offsets x natural / held-100 / held-84 x 4, 100 tokens |
+| `20261014-222445` length-replay | DeepSeek, offset 0 x held-100 / held-85 / offset 2's lengths replayed x 6 |
+| `20261015-110149` length-replay-profiled | DeepSeek, offset 0 x held-85 / replayed x 2, profiled, for the step mix |
 
 Analysis: `scripts/dose_response.py <grid or experiment name>` for the latency
 fits; `scripts/plot_findings.py` for the figures, which needs the two
@@ -634,6 +891,17 @@ profiled prefill-only points are not used: their profiler windows caught 56 to
 
 ## Open
 
+0. **Can the scattered-stop cost be scheduled away** (2026-10-15). Held at any
+   length, DeepSeek's skew is free, so items 1 and 6 lapse. `length-replay`
+   reproduced the cost with no skew (+19.55% ±5.64 against held-85) and
+   `length-replay-profiled` located 63% of it in the step mix: the same prompt
+   tokens admitted in 2.4x as many chunks, each chunk costing a step nearly the
+   same whether it carries 300 tokens or 4000. Two measurements follow from
+   that, both on this config. Does raising `max_num_batched_tokens` (4096 here,
+   which sets the chunk) shrink the gap? And does the remaining 14.9 ms of
+   per-step rate survive at matched chunk count, or is it the same effect
+   leaking through the binning? Until one of those lands, "scheduling" names
+   where the time is, not a fix.
 1. **Replicate DeepSeek's eager curve between 2.3x and 3.5x.** Two sweeps
    disagree there and neither resolves the shape. The prior question is why the
    same configuration gives a repeat spread of 2-5 ms in one run and 9-14 ms in

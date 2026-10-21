@@ -1,0 +1,110 @@
+# What does EPLB do about imbalance that costs nothing, and what does that cost?
+#
+# EPLB rebalances on expert load. It has no notion of latency, so it cannot
+# distinguish a skew that costs from one that does not - it acts on both. This
+# deployment makes that distinction measurable, because DeepSeek-V2-Lite at 4-way
+# expert parallelism has a wide band of imbalance that is free:
+#
+#   offset 0      1.09x busiest rank    the model's own routing
+#   offset 0.5    1.73x                 -1.3% TPOT, inside a 2.75% noise floor
+#   offset 1      2.49x                 +1.0%, still inside it
+#   offset 2      3.63x                 +22.2%, the only level that costs
+#
+# (loads from the validation capture of 20261009-115011_..._eplb-fp-000, which is
+# this configuration with EPLB off; validation is off here because routing does
+# not depend on where experts sit, so those captures still describe every level.)
+#
+# Second attempt. The first (2026-10-09, eplb-fp-000/001) never measured EPLB:
+# eplb_record_map = true puts vllm-ascend in record-only mode, which plans and
+# writes the map but never applies it - 0 completed weight-update cycles in 12
+# benchmark servers, the first transfer stalled in every one. Its on arm is the
+# collect-and-plan overhead alone. Its validation servers, without the record
+# path, did rearrange: busiest rank 3.49x -> 1.01x in about four cycles.
+#
+# What changed:
+#   - eplb_record_map off. Whether EPLB acted is now read from the server log
+#     (point field eplb_activity: plans, applied cycles, EPLB's own busiest-rank
+#     reading per plan), and a point that planned without applying says so.
+#   - both arms in this one run (benchmark.arms), shuffled into the same rounds.
+#     As separate grid entries the on arm ran second, under a neighbouring job
+#     that grew from one process to eight, and read 10% slower for it.
+#   - a 600-prompt warm-up per point, same in both arms. EPLB needs ~4 cycles
+#     (~80 s here) to converge from 3.5x; without it half of every point is
+#     served before rearrangement has finished, which measures the transient.
+#     This measures the steady state a long-running deployment lives in. EPLB
+#     keeps collecting, planning and moving through the measured window, so its
+#     recurring cost is included; only the initial convergence is excluded.
+#   - 4 repeats. The arm difference we expect at three of four levels is a few
+#     percent or nothing, against a ~2.75% point-to-point noise floor.
+#
+# Read it per level, arm against arm, paired by round:
+#   eplb_activity.applied_cycles > 0       EPLB acted (it must, at every level)
+#   eplb_activity.hotness: first -> last   what it did to the skew, by its own count
+#   TPOT(eplb-on) - TPOT(eplb-off)         what acting cost or saved
+# Levels 0, 0.5 and 1 are false positives if EPLB acts there: work done, with
+# nothing to win. Level 2 is the check that it pays when there is something to win.
+#
+# Cost: 4 levels x 2 arms x 4 repeats = 32 points at ~6 min = ~3.2 NPU-hours on
+# NPUs 0-3.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_false_positive.toml'
+#   ./nrun -t eplbfp2 'uv run moe-reliability run configs/examples/eplb_false_positive.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-fp2"
+description = "EPLB on and off, interleaved, across a skew ladder that is mostly free, DeepSeek, NPUs 0-3."
+seed = 47
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; the eplb-on arm turns it on. The intervals apply to that arm:
+# a cycle is 50 + 50 + 26 = 126 forward iterations, ~20 s at this load.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only (see above).
+eplb_record_map = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# Served before every point's measurement, in both arms: long enough for EPLB to
+# converge (~4 cycles) so the measured window is its steady state.
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+# Experts 0-15 are rank 0's under contiguous placement: the same skew every
+# calibration on this deployment measured, in a form EPLB cannot invalidate.
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5, 1, 2]
+bias_plugin_at_zero = true
+# Routing does not depend on placement; the loads per level are in
+# 20261009-115011_..._eplb-fp-000/validation, same seed, prompts and levels.
+validate_imbalance = false
+
+[benchmark]
+n_samples = 1200
+repeats = 4
+arms = ["eplb-off", "eplb-on: server.enable_eplb=true"]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

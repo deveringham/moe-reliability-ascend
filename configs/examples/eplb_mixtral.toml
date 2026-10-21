@@ -1,0 +1,95 @@
+# Does EPLB pay on the model that actually pays for imbalance?
+#
+# Every EPLB run in this project is DeepSeek (5 of 5), and DeepSeek is the awkward
+# model to argue from: its cost is a threshold, nothing at all until about 2.4x,
+# so "EPLB removed the skew and recovered nothing" can be met with "there was
+# nothing to recover". Mixtral is the clean test. Its cost rises from the noise
+# floor onwards and roughly linearly (rbias-controlled-001, 4 NPUs, batch 512):
+#
+#   offset 0    1.178x busiest rank    0%        the benign ceiling
+#   offset 1    1.761x                 +6.7%
+#   offset 2    2.620x                 +17.2%
+#
+# So at offsets 1 and 2 there is a large, measured cost sitting there to be
+# recovered, and EPLB either recovers it or it does not. Either answer is worth
+# the NPU time: if it fails here too, the result generalises past DeepSeek's
+# threshold; if it succeeds, the split follows the mechanism already measured -
+# Mixtral pays per layer, DeepSeek only for a persistently hot rank - and that is
+# a sharper finding than the one this run was built to confirm.
+#
+# Offset 0 is the false-positive arm: 1.18x is under Mixtral's 1.206x alarm and
+# costs nothing, so any EPLB activity there is pure loss.
+#
+# Mixtral holds 8 experts on 4 ranks, two per rank, so EPLB has far less freedom
+# to rearrange than it has on DeepSeek's 64. That is a property of coarse MoE
+# worth stating rather than designing around: it can still move a hot expert off
+# a crowded rank, which is exactly the move being tested.
+#
+# Settings are eplb-fp2's unchanged apart from the model, the bias target and the
+# levels, so the two models' EPLB results are measured the same way and can be put
+# in one table. Streaming stays on (no capture arm here), so the measure is TPOT,
+# as it was for DeepSeek.
+#
+# Cost: 3 levels x 2 arms x 4 repeats = 24 points at ~6 min = ~2.4 NPU-hours on
+# NPUs 0-3, plus ~10 min of validation.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_mixtral.toml'
+#   ./nrun -t eplbmix 'uv run moe-reliability run configs/examples/eplb_mixtral.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-mixtral"
+description = "EPLB on and off, interleaved, on the model whose latency cost is linear in load."
+seed = 47
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; the eplb-on arm turns it on.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only.
+eplb_record_map = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# Long enough for EPLB to converge before the measured window starts.
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+# Rank 0 holds experts [0, 8/4) = 0 and 1 under contiguous placement. Naming the
+# experts rather than the rank keeps the skew where it was aimed after EPLB moves
+# them; a rank target would not, and the config layer refuses that pairing.
+bias_target = "experts:0,1"
+imbalance_levels = [0, 1, 2]
+bias_plugin_at_zero = true
+# On: this run's own loads, rather than carrying them over from a 100-token run.
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 4
+arms = ["eplb-off", "eplb-on: server.enable_eplb=true"]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

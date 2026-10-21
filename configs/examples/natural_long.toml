@@ -1,0 +1,80 @@
+# Natural routing over a long horizon: does the screen ever fire on its own?
+#
+# D1 in docs/action-items.md. Every positive the detection evaluation has is our
+# own injected router bias, and every benign capture is 1200-1600 requests - too
+# short to contain a false alarm at the rates the screen is calibrated to. The
+# simulated figures say one alarming window per 324-656 requests at 1% per
+# window, and one *confirmed* alarm per 1200-2544 requests at k = 2. A
+# 12000-request stream should therefore hold roughly five to ten confirmed
+# alarms if the simulation is right, which turns a simulated rate into a
+# measured one, and none if the simulation is pessimistic.
+#
+# Four of the six families detection-capture's balanced arm used, at 3000
+# requests each: a homogeneous per-corpus stream is then 375 windows of 8 and
+# the mixed stream is 1500, and the per-prompt labels carry the family, so both
+# come out of one capture.
+#
+# MBPP and GSM8K are left out because the datasets cannot supply the depth -
+# 500 and 1319 prompts exist, against the 3000 per family this asks for, and the
+# loader divides the sample count equally. Repeating prompts would not help:
+# prefill routing is deterministic, so a repeat adds no variability to the
+# window distribution, only weight. Both are already captured at 200 per family
+# in detection-capture, which is what breadth there is; this run buys depth.
+#
+# Capture only: one level, no sweep, and the unbiased level, so the plugin is
+# never installed. Nothing here measures latency, so a neighbour on NPUs 4-5
+# does not invalidate it.
+#
+#   ./nrun -t nlong 'uv run moe-reliability run configs/examples/natural_long.toml'
+#   (Mixtral: --set 'model.model_id="mistralai/Mixtral-8x7B-Instruct-v0.1"' \
+#             --set 'model.model_name="mixtral"' --set 'model.probe="mistral"')
+#
+# The hot-locale variant, which is where Mixtral's natural load crosses its
+# onset (Yoruba 1.47x against 1.42x) and so the stream most likely to alarm:
+#   --set 'imbalance.validation_workload="mmmlu:YO_NG"' \
+#   --set 'experiment.name="natural-long-yo"'
+
+[experiment]
+type = "forced_imbalance"
+name = "natural-long"
+description = "Unbiased routing over 12000 requests, six families, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+
+[client]
+concurrency_limit = 700
+# Prompt routing only, as in every capture this is meant to extend. The decode
+# half is natural_decode.toml, which is the axis that has never been tested.
+max_new_tokens = 1
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0]
+bias_plugin_at_zero = false
+validate_imbalance = true
+validation_samples = 12000
+validation_workload = "mixed:mmlu,dolly,ultrachat,mmmlu:DE_DE"
+validation_save_records = true
+
+[benchmark]
+n_samples = 20
+repeats = 1
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

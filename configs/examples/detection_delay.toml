@@ -1,0 +1,94 @@
+# How long after a skew begins does the screen raise it?
+#
+# D2 in docs/action-items.md, and the first run in this project where the skew
+# changes while one server runs. Every onset figure in docs/detection-findings.md
+# is a splice of two static captures: a stream drawn from the balanced pool for
+# 40 windows and from the skewed pool thereafter. That models the arrival of a
+# skew, it does not measure one - the server never changed, the batch never
+# contained a transition, and nothing in the engine had to notice.
+#
+# imbalance.bias_schedule changes the bias at a known engine step. Steps rather
+# than seconds because expert selection is replicated: two ranks holding
+# different biases on the same forward would select different experts. The screen
+# records the step per window, so the delay is read off directly as (first
+# confirmed alarm's step - onset step), with no alignment to argue about.
+#
+# Sizing, from the step profile of a comparable point (results/20261015-110149,
+# 512-request batch, 2.6 requests completing per step, ~180 ms per step):
+# 8000 requests at 200 tokens is about 3100 steps, nine minutes a point. The
+# onset at step 1200 leaves ~1200 steps of benign traffic to set the alarm on and
+# ~1900 after it. With count_window_steps = 8 that is ~390 windows a point, ~150
+# of them before the onset, each holding about 20 requests' worth of routing.
+#
+# The screen counts 8 layers at a twentieth of their tokens, which
+# detection_params.py (2026-10-16) found strictly better than the calibrated
+# 4 x 10% at the same cost on a layer-local skew and no worse here. The alarm is
+# set on this run's own pre-onset windows, so the sampling change costs nothing:
+# a window of ~20 requests is not the 8-request window the stored calibration
+# describes, and carrying that alarm over would measure the mismatch instead of
+# the delay.
+#
+# client.ignore_eos, because a strong bias shortens DeepSeek's answers and
+# scattered early stops cost ~20% on their own (docs/router-bias-findings.md).
+# Holding the length keeps the post-onset stretch comparable to the pre-onset one
+# in the only way that matters here.
+#
+# Levels: 0 is the control that never changes - its false-alarm count over ~390
+# live windows is the measured version of "one confirmed alarm per 1200-2544
+# requests". 0.5 reaches 1.39x on Mixtral, just below its 1.42x onset, which is
+# the hard case; 1 reaches 1.80x, comfortably above it.
+#
+#   ./nrun -t ddelay 'uv run moe-reliability run configs/examples/detection_delay.toml'
+#   (DeepSeek: --set 'model.model_id="deepseek-ai/DeepSeek-V2-Lite-Chat"' \
+#              --set 'model.model_name="deepseek-v2"' --set 'model.probe="deepseek"')
+
+[experiment]
+type = "forced_imbalance"
+name = "detection-delay"
+description = "Skew arriving at a known engine step, screen running live, Mixtral, NPUs 0-3."
+seed = 43
+
+[model]
+model_id = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+model_name = "mixtral"
+probe = "mistral"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+# The screen itself, running in the server rather than re-created offline.
+count_experts = true
+count_layers = 8
+count_token_fraction = 0.05
+count_window_steps = 8
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 200
+ignore_eos = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0, 0.5, 1]
+bias_plugin_at_zero = true
+# Balanced for 1200 forwards, then this point's level. The fraction multiplies
+# the level, so all three points share the onset step.
+bias_schedule = ["0:0", "1200:1"]
+# The levels' realised loads are already known from the calibration runs, and a
+# 12000-prompt validation would cost more than the measurement.
+validate_imbalance = false
+
+[benchmark]
+n_samples = 8000
+repeats = 2
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

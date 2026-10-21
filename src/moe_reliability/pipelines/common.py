@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import random
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -22,6 +24,7 @@ from typing import Any, Callable, Sequence
 from moe_reliability_results import schema
 from moe_reliability_results.metrics import summarize_requests, trace_scalars
 
+from .. import eplb_gate, expert_counter
 from ..config import ExperimentConfig
 from ..environment import contention_warning, host_snapshot
 from ..logs import log
@@ -112,17 +115,81 @@ def eplb_cycle_iterations(cfg: ExperimentConfig, n_moe_layers: int = 0) -> int:
             + n_moe_layers)
 
 
+def counting_config(cfg: ExperimentConfig, out: str | None) -> expert_counter.CountConfig | None:
+    """The screen's counting knobs, or None when the arm does not count."""
+    if not cfg.server.count_experts:
+        return None
+    return expert_counter.CountConfig(layers=cfg.server.count_layers,
+                                      token_fraction=cfg.server.count_token_fraction,
+                                      window_steps=cfg.server.count_window_steps,
+                                      min_assignments=cfg.server.count_min_assignments,
+                                      out=out)
+
+
+def counting_summary(path: Path) -> dict | None:
+    """What the counting hook actually wrote: windows, layers drawn, tokens counted.
+
+    A counting arm that wrote nothing measured nothing, the same way an EPLB arm
+    that applied nothing did, so this is read back rather than assumed.
+    """
+    if not path.exists():
+        return None
+    windows = 0
+    layers: set[int] = set()
+    counted = 0
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        windows += 1
+        layers.update(record.get("layers") or ())
+        counted += sum(sum(row) for row in record.get("counts") or ())
+    return {"windows": windows, "distinct_layers": len(layers), "assignments_counted": counted}
+
+
+def replay_lengths(path: str | Path, prompts: Sequence[Any]) -> list[int]:
+    """Each prompt's output length in the point recorded at ``path``.
+
+    Matched by prompt content rather than position, so warm-up (a prefix of the
+    benchmark prompts) and the benchmark itself both find theirs, and a prompt
+    list that differs from the recorded one is refused rather than paired with
+    another prompt's length.
+    """
+    import gzip
+
+    records = json.load(gzip.open(path, "rt"))["requests"]
+    lengths = {json.dumps(r["prompt"], sort_keys=True): r["num_output_tokens"] for r in records}
+    out, missing = [], 0
+    for prompt in prompts:
+        n = lengths.get(json.dumps(prompt, sort_keys=True))
+        if n is None:
+            missing += 1
+        else:
+            out.append(max(1, int(n)))
+    if missing:
+        raise ValueError(f"client.lengths_from: {missing} of {len(prompts)} prompts have no recorded length "
+                         f"in {path}; it must come from a point that served these prompts")
+    return out
+
+
 def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[Any],
                        trace_dir: str | None, enable_expert_capture: bool = False,
                        eplb_record_path: str | None = None,
                        server_env: dict[str, str] | None = None) -> list[dict] | None:
     from ..core.vllm_serving import measure_vllm_throughput
 
+    max_new_tokens: int | list[int] = cfg.client.max_new_tokens
+    if cfg.client.lengths_from:
+        max_new_tokens = replay_lengths(cfg.client.lengths_from, prompts)
+        if max(max_new_tokens) > cfg.client.max_new_tokens:
+            raise ValueError(f"client.lengths_from replays up to {max(max_new_tokens)} tokens, above "
+                             f"client.max_new_tokens = {cfg.client.max_new_tokens}")
+
     return asyncio.run(measure_vllm_throughput(
         model_path,
         list(prompts),
         seed=cfg.experiment.seed,
-        max_new_tokens=cfg.client.max_new_tokens,
+        max_new_tokens=max_new_tokens,
         max_model_len=cfg.server.max_model_len,
         batch_size=cfg.server.batch_size,
         max_num_batched_tokens=cfg.server.max_num_batched_tokens,
@@ -142,7 +209,9 @@ def serve_and_measure(cfg: ExperimentConfig, model_path: str, prompts: Sequence[
         trace_start_iteration=cfg.benchmark.trace_start_iteration,
         port=cfg.server.port,
         extra_env=server_env,
-        collect_itl=cfg.benchmark.save_itl,
+        collect_itl=cfg.benchmark.save_itl and cfg.client.stream,
+        stream=cfg.client.stream,
+        ignore_eos=cfg.client.ignore_eos,
     ))
 
 # Runs and records metrics for all pending sweep points
@@ -199,13 +268,40 @@ def _warn_if_eplb_cannot_fire(cfg: ExperimentConfig) -> None:
             f"server.eplb_heat_collection_interval or raise client.max_new_tokens.")
 
 
+def _require_eplb_gate_patch(cfg: ExperimentConfig) -> None:
+    """Refuse to start a gated arm against an unpatched vllm-ascend.
+
+    The gate is a source patch on the installed package (see ``eplb_gate``), and
+    ``uv sync`` reverts it. An unpatched server ignores the environment variable
+    and serves plain EPLB, which would read as "gating changes nothing" - the
+    one answer this run must not be able to produce by accident.
+    """
+    if not (cfg.server.eplb_min_imbalance or cfg.server.eplb_honor_changed):
+        return
+    which = "eplb_min_imbalance" if cfg.server.eplb_min_imbalance else "eplb_honor_changed"
+    try:
+        import vllm_ascend
+    except ImportError as e:  # pragma: no cover - only reachable off the node
+        raise RuntimeError(f"server.{which} needs vllm_ascend installed; this runs on the node") from e
+    path = Path(vllm_ascend.__file__).parent / eplb_gate.TARGET
+    if not eplb_gate.is_patched(path.read_text()):
+        raise RuntimeError(f"server.{which} is set but {path} does not carry the gate patch. "
+                           f"Install it with: ./nrun 'uv run python scripts/apply_node_patch.py' "
+                           f"(re-run it after every uv sync).")
+
+
 def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                      point_inputs: Callable[[dict[str, Any]], tuple[str, Sequence[Any]]],
                      retry_failed: bool = False) -> None:
     
     bench = cfg.benchmark
-    _warn_if_eplb_cannot_fire(cfg)
-    for order, p in enumerate(_execution_order(ctx, cfg)):
+    for arm in [None] + [name for name, _ in cfg.arms]:
+        _warn_if_eplb_cannot_fire(cfg.for_arm(arm))
+        _require_eplb_gate_patch(cfg.for_arm(arm))
+    base_cfg = cfg
+    for order, p in enumerate(_execution_order(ctx, base_cfg)):
+        # Everything below serves this point's arm; the prompts and validation are shared.
+        cfg = base_cfg.for_arm(p.get("arm"))
         label = p["label"]
         status = p.get("status", schema.STATUS_PENDING)
         if status == schema.STATUS_COMPLETED:
@@ -246,9 +342,22 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         eplb_rel = f"{label}_eplb_expert_map.json" if cfg.server.eplb_record_map else None
         eplb_path = str(ctx.abspath(eplb_rel)) if eplb_rel else None
         # Per-point server environment, e.g. an injected router bias.
-        server_env = p.get("server_env") or None
+        server_env = dict(p.get("server_env") or {})
+        # The screen's counting runs inside the server, so its output is a server
+        # artefact like the EPLB map, not something the client can see.
+        counts_rel = f"{label}_expert_counts.jsonl" if cfg.server.count_experts else None
+        if counts_rel:
+            server_env.update(expert_counter.server_env(counting_config(cfg, str(ctx.abspath(counts_rel)))))
+        # Arms the node patch for this point only, which is what lets an EPLB-on
+        # and an EPLB-gated arm share one run's shuffled rounds.
+        server_env.update(eplb_gate.server_env(cfg.server.eplb_min_imbalance,
+                                               cfg.server.eplb_honor_changed))
+        server_env = server_env or None
+        log_path = ctx.abspath(schema.LOG_FILE)
+        log_offset = log_path.stat().st_size if log_path.exists() else None
         results = serve_and_measure(cfg, model_path, prompts,
                                     trace_dir=None if separate else trace_path,
+                                    enable_expert_capture=cfg.benchmark.capture_experts,
                                     eplb_record_path=eplb_path, server_env=server_env)
 
         if results is None:
@@ -262,6 +371,7 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         if separate:
             log(f"{label}: profiling pass")
             profiled = serve_and_measure(cfg, model_path, prompts, trace_dir=trace_path,
+                                         enable_expert_capture=cfg.benchmark.capture_experts,
                                          eplb_record_path=eplb_path, server_env=server_env)
             if profiled is None:
                 # The measurements stand on their own; only the traces are lost.
@@ -278,9 +388,24 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
         if profiled_summary is not None:
             fields["profiled_request_summary"] = profiled_summary
         if eplb_rel:
-            # Absent means EPLB never completed a cycle, which is a result in
-            # itself rather than a failure, so it is recorded either way.
+            # The *planned* placement: in record mode vllm-ascend never applies it
+            # (see server.eplb_record_map), so it is not the layout that served.
             fields["eplb_expert_map"] = eplb_rel if ctx.abspath(eplb_rel).exists() else None
+        if counts_rel:
+            summary = counting_summary(ctx.abspath(counts_rel))
+            fields["expert_counts"] = counts_rel if summary else None
+            fields["counting_summary"] = summary
+            if summary:
+                log(f"{label}: counted {summary['assignments_counted']} expert assignments over "
+                    f"{summary['windows']} windows, {summary['distinct_layers']} distinct layers drawn")
+            else:
+                log(f"{label}: warning: counting was on but no counts were written - the hook did not run")
+        if cfg.server.enable_eplb and log_offset is not None:
+            with open(log_path, "rb") as f:
+                f.seek(log_offset)
+                activity = eplb_activity(f.read().decode(errors="replace"), cfg.hardware.n_npus)
+            fields["eplb_activity"] = activity
+            log(f"{label}: {describe_eplb_activity(activity)}")
         if profiling_error:
             fields["profiling_error"] = profiling_error
         if bench.save_request_metrics:
@@ -301,6 +426,62 @@ def benchmark_points(ctx: RunContext, cfg: ExperimentConfig,
                     f"({100 * (profiled_summary['tpot_ms_mean'] / s['tpot_ms_mean'] - 1):+.1f}%)")
         log(f"{label}: completed ({s.get('n_requests')} requests, "
             f"mean TTFT {_fmt(s.get('ttft_ms_mean'))} ms, mean TPOT {_fmt(s.get('tpot_ms_mean'))} ms{cost})")
+
+
+_EPLB_PLAN = re.compile(r"Expert hotness imbalance, current: mean=([\d.]+) max=([\d.]+), "
+                        r"updated: mean=([\d.]+) max=([\d.]+)")
+
+
+def eplb_activity(log_text: str, n_ranks: int) -> dict[str, Any]:
+    """What EPLB did while serving one point, read from the server's log.
+
+    A placement map says what EPLB *planned*. Whether it was applied shows only in
+    the log: every rank reports each completed weight-update cycle, and the
+    planner reports the imbalance it measured (``current``) and the imbalance its
+    plan would leave (``updated``). Once plans are applied, ``current`` falls
+    towards the previous plan's ``updated``; when it stays put, nothing moved.
+    Both are per-layer busiest-rank load over the mean - ``mean`` averaged over
+    MoE layers, ``max`` the worst layer - which is the statistic our screen uses.
+
+    ``stalled`` is vllm-ascend refusing a transfer because the previous one never
+    finished, which is what record-only mode looks like.
+    """
+    plans = [[float(x) for x in m.groups()] for m in _EPLB_PLAN.finditer(log_text)]
+    completed = log_text.count("Full expert weight update cycle completed")
+    # Every rank's planner logs its own verdict, so the raw counts come in
+    # multiples of n_ranks; a remainder means the ranks disagreed, which would be
+    # a divergent placement rather than a gate.
+    shut, opened = log_text.count(eplb_gate.LOG_SHUT), log_text.count(eplb_gate.LOG_OPEN)
+    activity = {
+        "plans": len(plans),
+        "applied_cycles": -(-completed // max(1, n_ranks)),
+        "stalled": "D2D weight update is on-going" in log_text,
+        # [current mean, current max, updated mean, updated max] per plan, in order
+        "hotness": plans,
+    }
+    if shut or opened:
+        activity.update({
+            "gate_shut": -(-shut // max(1, n_ranks)),
+            "gate_open": -(-opened // max(1, n_ranks)),
+            "gate_consistent": shut % max(1, n_ranks) == 0 and opened % max(1, n_ranks) == 0,
+        })
+    return activity
+
+
+def describe_eplb_activity(activity: dict[str, Any]) -> str:
+    plans, applied, hot = activity["plans"], activity["applied_cycles"], activity["hotness"]
+    if not plans:
+        return "EPLB never planned - the point is shorter than one collection interval"
+    trend = f"busiest rank {hot[0][0]:.2f}x -> {hot[-1][0]:.2f}x by EPLB's count"
+    gate = ""
+    if "gate_shut" in activity:
+        gate = f", gate shut {activity['gate_shut']}/{activity['gate_shut'] + activity['gate_open']} times"
+        if not activity["gate_consistent"]:
+            gate += " (warning: the ranks did not all reach the same verdict)"
+    if not applied:
+        stall = ", transfer stalled (record-only mode?)" if activity["stalled"] else ""
+        return f"warning: EPLB planned {plans} times and applied none{stall}{gate}; {trend}"
+    return f"EPLB planned {plans} times and applied {applied}{gate}; {trend}"
 
 
 def _fmt(value: float | None) -> str:

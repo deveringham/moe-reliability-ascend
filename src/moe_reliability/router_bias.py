@@ -42,6 +42,22 @@ adds its zero vector on the same layers, so both arms still pay alike. Under gra
 capture the Python runs once per layer at capture time, so each captured layer
 keeps its own decision.
 
+Changing the skew mid-server: ``imbalance.bias_schedule`` lists engine steps at
+which the strength changes, as fractions of the point's level, so one sweep gets
+the same onset step at each of its skews. Two properties make it correct rather
+than convenient. The trigger is a *step count*, not a clock: expert selection is
+replicated, so two ranks holding different biases on the same forward would
+select different experts and the dispatch would disagree - and every rank runs
+every forward, so a step count is identical on all of them where a clock is not.
+And the change is written into the existing bias tensor with ``copy_`` rather
+than replacing it, because a captured graph holds a reference to the tensor it
+was captured with; replacing it would leave the graph adding the old values. Step
+boundaries are read off the layer index the same way ``expert_counter`` reads
+them, and that plugin records the step per window, so an onset and an alarm are
+in the same units. Without a schedule the strength is fixed for the server's
+life, which is what every run before 2026-10-16 did - and why detection delay
+could only be simulated by splicing two captures.
+
 The bias also shifts the combine weights the top-k softmax produces, not only
 the selection. That changes the model's outputs but not what the experiment
 measures: expert load and the time it costs.
@@ -66,7 +82,8 @@ ROTATE = "rotate"
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ENV_VAR", "parse_target", "target_experts", "bias_vector", "server_env", "parse_env", "register"]
+__all__ = ["ENV_VAR", "parse_target", "target_experts", "bias_vector", "server_env", "parse_env",
+           "parse_schedule_spec", "normalise_schedule", "register"]
 
 
 def parse_target(spec: str) -> tuple[str, list[int]]:
@@ -131,14 +148,29 @@ class Bias:
     n_ranks: int
     target: str | None = None          # a fixed target spec, or None when rotating
     layers: frozenset[int] | None = None   # None: every layer
+    #: ``(step, strength)`` pairs in step order: the strength in force from that
+    #: engine step until the next pair. ``None`` holds ``strength`` for the
+    #: server's life, which is what every run before 2026-10-16 did.
+    schedule: tuple[tuple[int, float], ...] | None = None
 
     def applies_to(self, layer: int | None) -> bool:
         return self.layers is None or (layer is not None and layer in self.layers)
 
-    def vector(self, layer: int | None, n_experts: int) -> list[float]:
-        """Per-expert logit offsets for one layer."""
+    def vector(self, layer: int | None, n_experts: int, strength: float | None = None) -> list[float]:
+        """Per-expert logit offsets for one layer, at ``strength`` or the baseline."""
         target = self.target if self.target is not None else f"rank:{(layer or 0) % self.n_ranks}"
-        return bias_vector(target, self.strength, n_experts, self.n_ranks)
+        return bias_vector(target, self.strength if strength is None else strength,
+                           n_experts, self.n_ranks)
+
+    @property
+    def initial_strength(self) -> float:
+        """The strength to install before any scheduled change."""
+        return self.schedule[0][1] if self.schedule else self.strength
+
+    @property
+    def strengths(self) -> list[float]:
+        """Every strength the server will serve at, for logging and for the manifest."""
+        return [s for _, s in self.schedule] if self.schedule else [self.strength]
 
     @property
     def rotating(self) -> bool:
@@ -146,7 +178,8 @@ class Bias:
 
 
 def server_env(spec: str, strength: float, n_experts: int, n_ranks: int,
-               at_zero: bool = False, layers: Sequence[int] | None = None) -> dict[str, str]:
+               at_zero: bool = False, layers: Sequence[int] | None = None,
+               schedule: Sequence[Sequence[float]] | None = None) -> dict[str, str]:
     """Environment for a server that should route with this bias.
 
     Empty at strength 0, which serves without the plugin and so without its
@@ -155,14 +188,58 @@ def server_env(spec: str, strength: float, n_experts: int, n_ranks: int,
     for everything the plugin itself costs. ``layers`` limits the bias (and the
     control's zero vector) to those model layers; empty or None means all.
     """
-    if strength == 0 and not at_zero:
+    if strength == 0 and not at_zero and not schedule:
         return {}
     payload: dict = {"strength": float(strength), "n_ranks": int(n_ranks)}
     if spec != ROTATE:
         payload["target"] = spec
     if layers:
         payload["layers"] = sorted({int(i) for i in layers})
+    if schedule:
+        payload["schedule"] = [[int(step), float(value)] for step, value in normalise_schedule(schedule)]
     return {ENV_VAR: json.dumps(payload)}
+
+
+def parse_schedule_spec(specs: Sequence[str]) -> list[tuple[int, float]]:
+    """``["0:0", "600:1"]`` -> ``[(0, 0.0), (600, 1.0)]``.
+
+    The config grammar, kept as strings because the schema's list types are flat.
+    The second field is a *fraction of the point's level*, so one schedule gives
+    a whole sweep the same onset step at each of its skews.
+    """
+    pairs = []
+    for spec in specs:
+        step, sep, fraction = str(spec).partition(":")
+        if not sep:
+            raise ValueError(f"schedule entry {spec!r}: expected '<engine step>:<fraction of the level>'")
+        try:
+            pairs.append((int(step.strip()), float(fraction.strip())))
+        except ValueError:
+            raise ValueError(f"schedule entry {spec!r}: step must be an integer and fraction a number") from None
+    return normalise_schedule(pairs)
+
+
+def normalise_schedule(schedule: Sequence[Sequence[float]]) -> list[tuple[int, float]]:
+    """Validate and sort ``(step, strength)`` pairs, which must start at step 0.
+
+    A schedule that does not say what to serve from the first forward would leave
+    the opening stretch at the baseline strength, which is a second, silent
+    setting - the whole point of a schedule is that the onset instant is known.
+    """
+    pairs = []
+    for entry in schedule:
+        step, value = entry
+        if int(step) < 0:
+            raise ValueError(f"router bias schedule: steps must be non-negative, got {step}")
+        pairs.append((int(step), float(value)))
+    pairs.sort()
+    if not pairs or pairs[0][0] != 0:
+        raise ValueError("router bias schedule: the first pair must be at step 0, so that what the "
+                         f"server serves before the first change is explicit; got {pairs}")
+    steps = [s for s, _ in pairs]
+    if len(set(steps)) != len(steps):
+        raise ValueError(f"router bias schedule: two strengths at the same step, {pairs}")
+    return pairs
 
 
 def parse_env(raw: str) -> Bias:
@@ -177,9 +254,11 @@ def parse_env(raw: str) -> Bias:
                     target=f"experts:{','.join(map(str, experts))}" if experts else "experts:0",
                     layers=None)
     layers = value.get("layers")
+    schedule = value.get("schedule")
     return Bias(strength=float(value["strength"]), n_ranks=int(value["n_ranks"]),
                 target=value.get("target"),
-                layers=frozenset(int(i) for i in layers) if layers is not None else None)
+                layers=frozenset(int(i) for i in layers) if layers is not None else None,
+                schedule=tuple(normalise_schedule(schedule)) if schedule else None)
 
 
 # --- inside the vLLM server -------------------------------------------------
@@ -208,12 +287,73 @@ def _track_layer(forward_impl):
     return tracked
 
 
-def _wrap(fn, bias: Bias):
+class _Schedule:
+    """Advances the bias strength at known engine steps, in place.
+
+    Steps rather than seconds, because expert selection is replicated: if two
+    ranks hold different biases on the same forward they select different
+    experts and the dispatch disagrees. Every rank runs every forward, so a step
+    count is identical on all of them by construction, where a clock is not.
+
+    The vector is never replaced, only overwritten with ``copy_``. A captured
+    graph holds a reference to the tensor it was captured with, so mutating that
+    tensor is what lets a schedule change the skew under graph capture as well
+    as in eager mode - replacing it would leave the graph adding the old values.
+
+    Step boundaries come from the layer index, as in ``expert_counter``: layers
+    run in increasing order within a forward, so an index that does not advance
+    is the next step.
+    """
+
+    def __init__(self, bias: Bias):
+        self.bias = bias
+        self.index = 0                       # the schedule entry in force
+        self.step = 0                        # completed forwards
+        self.last_layer = -1
+        self.live: list = []                 # (tensor, layer, n_experts) to refresh
+
+    @property
+    def strength(self) -> float:
+        return self.bias.schedule[self.index][1]
+
+    def register(self, tensor, layer: int | None, n_experts: int) -> None:
+        self.live.append((tensor, layer, n_experts))
+
+    def saw_layer(self, layer: int | None) -> None:
+        if layer is None:
+            return
+        if layer <= self.last_layer:
+            self.step += 1
+            self._advance()
+        self.last_layer = layer
+
+    def _advance(self) -> None:
+        schedule = self.bias.schedule or ()
+        moved = False
+        while self.index + 1 < len(schedule) and self.step >= schedule[self.index + 1][0]:
+            self.index += 1
+            moved = True
+        if not moved:
+            return
+        import torch
+
+        for tensor, layer, n_experts in self.live:
+            values = self.bias.vector(layer, n_experts, strength=self.strength)
+            tensor.copy_(torch.tensor(values, dtype=tensor.dtype, device=tensor.device))
+        # Every rank logs its own line: a run can then check they agree, the way
+        # the EPLB gate's decisions are checked, rather than trusting that they do.
+        logger.warning("router bias (pid %d): step %d -> strength %s", os.getpid(),
+                       self.step, self.strength)
+
+
+def _wrap(fn, bias: Bias, schedule: _Schedule | None = None):
     cache: dict = {}
     seen: set = set()
 
     def biased(*args, **kwargs):
         layer = _current_layer[0]
+        if schedule is not None:
+            schedule.saw_layer(layer)
         if bias.layers is not None or bias.rotating:
             if layer is None:
                 # Guessing here would bias every layer or none, or every layer the
@@ -237,12 +377,17 @@ def _wrap(fn, bias: Bias):
         if b is None:
             import torch
 
-            values = bias.vector(layer, n_experts)
+            values = bias.vector(layer, n_experts,
+                                 strength=schedule.strength if schedule is not None else None)
             if layer not in seen:
                 seen.add(layer)
                 logger.info("router bias (pid %d): layer %s biases experts %s of %d", os.getpid(), layer,
                             [i for i, v in enumerate(values) if v] or "none", n_experts)
             b = cache[key] = torch.tensor(values, dtype=logits.dtype, device=logits.device)
+            if schedule is not None:
+                # Registered, not re-created: the next scheduled strength is
+                # written into this tensor so a captured graph keeps working.
+                schedule.register(b, layer if bias.rotating else None, n_experts)
         kwargs["router_logits"] = logits + b
         return fn(*args, **kwargs)
 
@@ -256,22 +401,43 @@ def register() -> None:
     if not raw:
         return
     bias = parse_env(raw)
+    # One driver for both selection paths, so a scheduled change moves every
+    # vector the server has built, whichever kernel built it.
+    schedule = _Schedule(bias) if bias.schedule else None
     from vllm_ascend.ops.fused_moe import experts_selector as sel
 
     names = ("_select_experts_with_fusion_ops", "_native_select_experts")
     for name in names:
         fn = getattr(sel, name)
-        if getattr(fn, "__wrapped__", None) is not None:
+        # Our own sentinel, not ``__wrapped__``: ``expert_counter`` sets that too,
+        # and entry points load sorted by name, so the counter always loads first.
+        # Skipping on ``__wrapped__`` therefore skipped the bias entirely whenever
+        # the screen was on - gate-closure's count-on arm recorded 1.13x where its
+        # validation reported 1.73x (2026-10-16).
+        if getattr(fn, "_biasing", False):
             continue  # plugins can load more than once per process
-        setattr(sel, name, _wrap(fn, bias))
-    if bias.layers is not None or bias.rotating:
+        wrapped = _wrap(fn, bias, schedule)
+        wrapped._biasing = True
+        setattr(sel, name, wrapped)
+    # A schedule needs the layer tracker too: step boundaries are read off the
+    # layer index, so without it the strength would never advance.
+    if bias.layers is not None or bias.rotating or schedule is not None:
         from vllm_ascend.ops.fused_moe.fused_moe import AscendMoERunner
 
-        if getattr(AscendMoERunner.forward_impl, "__wrapped__", None) is None:
-            AscendMoERunner.forward_impl = _track_layer(AscendMoERunner.forward_impl)
+        impl = AscendMoERunner.forward_impl
+        # Either tracker maintains _current_layer, so one is enough - but the test
+        # is for a tracker specifically, not for "something wrapped this".
+        if not getattr(impl, "_tracking_layer", False) and not getattr(impl, "_counting_steps", False):
+            tracked = _track_layer(impl)
+            tracked._tracking_layer = True
+            AscendMoERunner.forward_impl = tracked
     where = "every layer" if bias.layers is None else f"layers {sorted(bias.layers)}"
     how = f"rotating over {bias.n_ranks} ranks" if bias.rotating else bias.target
-    if not bias.strength:
+    if bias.schedule:
+        logger.warning("router bias active (pid %d): %s, on %s, scheduled %s - strength changes at the "
+                       "listed engine step, counted from this process's first forward", os.getpid(),
+                       how, where, [list(p) for p in bias.schedule])
+    elif not bias.strength:
         logger.warning("router bias active (pid %d): strength 0 on %s, the zero-bias control - routing is "
                        "unchanged and the wrapper's cost is paid", os.getpid(), where)
     else:

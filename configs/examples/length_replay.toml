@@ -1,0 +1,89 @@
+# Is DeepSeek's "cost of skew" the scatter of early stops, with no skew needed?
+#
+# length-held-100 (20261014-160027) found that router bias at offset 2 costs
+# DeepSeek +20.6% TPOT at natural length and nothing when every request is held
+# to the same length - including held at 84, offset 2's average. So it is not the
+# skew, and not the mean length either. What differs is the spread: at offset 2,
+# 28% of requests stop early at scattered points (p10 31 tokens), and the cost
+# falls on every request in the server - the ones that ran a full 100 tokens
+# still averaged 198.8 ms against 174.3 ms held. The suspicion is that scattered
+# completions change how prompt-reading interleaves with generation.
+#
+# This replays that point's lengths with no bias at all. client.lengths_from
+# gives each prompt exactly the length it had in imbalance_2_natural (matched by
+# prompt content; same seed and prompts as that run), so the server sees the same
+# pattern of early stops with balanced routing. Three arms in shared rounds, at
+# offset 0 only (plugin installed, all-zero vector, as there):
+#
+#   held-100   every request 100 tokens. The baseline.
+#   held-85    every request 85 tokens: the replayed point's mean (85.05), with
+#              no spread.
+#   replayed   each request its own length from offset 2, mean 85.05, 3 to 100.
+#
+#   replayed vs held-85 ~ +17-20%: the spread of stops is the whole cost, skew
+#     never entered into it, and DeepSeek's router-bias cost is an artefact of
+#     the instrument degrading the model.
+#   replayed vs held-85 ~ 0: the spread alone does not do it; what the biased
+#     model generated, or the bias acting with the spread, does. Then the next
+#     test is replayed lengths at offset 2.
+#
+# Validation is off: routing at offset 0 is known (1.04x in length-held-100), and
+# the validation capture serves prompts with no replayed length.
+#
+# Cost: 1 level x 3 arms x 6 repeats = 18 points at ~4 min = ~1.2 h on NPUs 0-3,
+# ~5 NPU-hours. Six repeats rather than four because the held arms' paired spread
+# was 4-7% in length-held-100.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/length_replay.toml'
+#   ./nrun -t replay 'uv run moe-reliability run configs/examples/length_replay.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "length-replay"
+description = "Offset 0 with offset 2's per-request output lengths replayed, against uniform 100 and 85, to test whether scattered early stops alone explain DeepSeek's router-bias cost."
+seed = 43
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.6
+enable_eplb = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 100
+ignore_eos = true
+n_warmup_samples = 10
+stream = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "rank:0"
+imbalance_levels = [0]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 3000
+repeats = 6
+arms = [
+    "held-100",
+    "held-85: client.max_new_tokens=85",
+    "replayed: client.lengths_from=results/20261014-160027_imbalance_deepseek-v2_npu4_bs512_length-held-100/metrics/imbalance_2_natural.json.gz",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

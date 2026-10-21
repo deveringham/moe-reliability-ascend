@@ -1,0 +1,289 @@
+model,stream,tokens,alarm_source,requests,windows,window,layers,of_layers,token_fraction,pooled_load,window_median,window_p99,window_max,alarm,impact_threshold,windows_alarming,per_window_rate,confirmed_k1,requests_per_alarm_k1,confirmed_k2,requests_per_alarm_k2,confirmed_k3,requests_per_alarm_k3,self_alarm_0.005,self_alarm_0.01,run
+deepseek-v2,mixed,prompt,stored,12000,1500,8,26,26,1.0,1.0769,1.1096,1.1582,1.1868,1.788,,0,0.0,0,,0,,0,,1.169,1.1582,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,1500,8,26,26,1.0,1.0769,1.1096,1.1582,1.1868,1.1582,,15,0.01,15,800.0,0,,0,,1.169,1.1582,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,3000,375,8,26,26,1.0,1.0858,1.1292,1.2487,1.2875,1.788,,0,0.0,0,,0,,0,,1.2554,1.2487,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",3000,375,8,26,26,1.0,1.0858,1.1292,1.2487,1.2875,1.1582,,80,0.2133,67,44.8,10,300.0,2,1500.0,1.2554,1.2487,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,3000,375,8,26,26,1.0,1.0932,1.1101,1.1437,1.1489,1.788,,0,0.0,0,,0,,0,,1.1458,1.1437,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",3000,375,8,26,26,1.0,1.0932,1.1101,1.1437,1.1489,1.1582,,0,0.0,0,,0,,0,,1.1458,1.1437,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,3000,375,8,26,26,1.0,1.1338,1.144,1.1664,1.1702,1.788,,0,0.0,0,,0,,0,,1.1677,1.1664,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,26,26,1.0,1.1338,1.144,1.1664,1.1702,1.1582,,37,0.0987,35,85.7,2,1500.0,0,,1.1677,1.1664,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,3000,375,8,26,26,1.0,1.0742,1.1089,1.1672,1.1781,1.788,,0,0.0,0,,0,,0,,1.1696,1.1672,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",3000,375,8,26,26,1.0,1.0742,1.1089,1.1672,1.1781,1.1582,,12,0.032,12,250.0,0,,0,,1.1696,1.1672,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,12000,1500,8,4,26,0.1,1.0769,1.1313,1.2425,1.3027,1.788,,0,0.0,0,,0,,0,,1.2653,1.2425,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,1500,8,4,26,0.1,1.0769,1.1313,1.2425,1.3027,1.2425,,15,0.01,15,800.0,0,,0,,1.2653,1.2425,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,3000,375,8,4,26,0.1,1.0858,1.165,1.3769,1.417,1.788,,0,0.0,0,,0,,0,,1.4029,1.3769,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",3000,375,8,4,26,0.1,1.0858,1.165,1.3769,1.417,1.2425,,48,0.128,44,68.2,3,1000.0,1,3000.0,1.4029,1.3769,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,3000,375,8,4,26,0.1,1.0932,1.1323,1.221,1.2355,1.788,,0,0.0,0,,0,,0,,1.2311,1.221,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",3000,375,8,4,26,0.1,1.0932,1.1323,1.221,1.2355,1.2425,,0,0.0,0,,0,,0,,1.2311,1.221,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,3000,375,8,4,26,0.1,1.1338,1.153,1.2748,1.297,1.788,,0,0.0,0,,0,,0,,1.2898,1.2748,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,4,26,0.1,1.1338,1.153,1.2748,1.297,1.2425,,19,0.0507,17,176.5,2,1500.0,0,,1.2898,1.2748,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,3000,375,8,4,26,0.1,1.0742,1.1295,1.2476,1.3022,1.788,,0,0.0,0,,0,,0,,1.2586,1.2476,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",3000,375,8,4,26,0.1,1.0742,1.1295,1.2476,1.3022,1.2425,,5,0.0133,5,600.0,0,,0,,1.2586,1.2476,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,12000,1500,8,8,26,0.05,1.0769,1.1528,1.2611,1.3798,1.788,,0,0.0,0,,0,,0,,1.2689,1.2611,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,1500,8,8,26,0.05,1.0769,1.1528,1.2611,1.3798,1.2611,,15,0.01,14,857.1,1,12000.0,0,,1.2689,1.2611,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,3000,375,8,8,26,0.05,1.0858,1.1929,1.3764,1.435,1.788,,0,0.0,0,,0,,0,,1.3854,1.3764,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",3000,375,8,8,26,0.05,1.0858,1.1929,1.3764,1.435,1.2611,,57,0.152,49,61.2,8,375.0,0,,1.3854,1.3764,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,3000,375,8,8,26,0.05,1.0932,1.1579,1.2385,1.2609,1.788,,0,0.0,0,,0,,0,,1.2416,1.2385,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",3000,375,8,8,26,0.05,1.0932,1.1579,1.2385,1.2609,1.2611,,0,0.0,0,,0,,0,,1.2416,1.2385,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,3000,375,8,8,26,0.05,1.1338,1.1762,1.2469,1.2645,1.788,,0,0.0,0,,0,,0,,1.2534,1.2469,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,8,26,0.05,1.1338,1.1762,1.2469,1.2645,1.2611,,1,0.0027,1,3000.0,0,,0,,1.2534,1.2469,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,3000,375,8,8,26,0.05,1.0742,1.1512,1.2558,1.2844,1.788,,0,0.0,0,,0,,0,,1.2597,1.2558,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",3000,375,8,8,26,0.05,1.0742,1.1512,1.2558,1.2844,1.2611,,2,0.0053,2,1500.0,0,,0,,1.2597,1.2558,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,12000,375,32,26,26,1.0,1.0769,1.086,1.1171,1.1256,1.788,,0,0.0,0,,0,,0,,1.1187,1.1171,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,375,32,26,26,1.0,1.0769,1.086,1.1171,1.1256,1.1171,,4,0.0107,4,3000.0,0,,0,,1.1187,1.1171,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,2976,93,32,26,26,1.0,1.0858,1.1004,1.1355,1.1367,1.788,,0,0.0,0,,0,,0,,1.1361,1.1355,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",2976,93,32,26,26,1.0,1.0858,1.1004,1.1355,1.1367,1.1171,,10,0.1075,10,297.6,0,,0,,1.1361,1.1355,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,2976,93,32,26,26,1.0,1.0932,1.0967,1.1192,1.1208,1.788,,0,0.0,0,,0,,0,,1.12,1.1192,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",2976,93,32,26,26,1.0,1.0932,1.0967,1.1192,1.1208,1.1171,,3,0.0323,3,992.0,0,,0,,1.12,1.1192,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,2976,93,32,26,26,1.0,1.1338,1.1368,1.1491,1.1492,1.788,,0,0.0,0,,0,,0,,1.1492,1.1491,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,26,26,1.0,1.1338,1.1368,1.1491,1.1492,1.1171,,93,1.0,1,2976.0,1,2976.0,1,2976.0,1.1492,1.1491,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,2976,93,32,26,26,1.0,1.0742,1.0856,1.1105,1.1219,1.788,,0,0.0,0,,0,,0,,1.1162,1.1105,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",2976,93,32,26,26,1.0,1.0742,1.0856,1.1105,1.1219,1.1171,,1,0.0108,1,2976.0,0,,0,,1.1162,1.1105,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,12000,375,32,4,26,0.1,1.0769,1.0941,1.1625,1.1893,1.788,,0,0.0,0,,0,,0,,1.1742,1.1625,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,375,32,4,26,0.1,1.0769,1.0941,1.1625,1.1893,1.1625,,4,0.0107,4,3000.0,0,,0,,1.1742,1.1625,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,2976,93,32,4,26,0.1,1.0858,1.1055,1.1828,1.216,1.788,,0,0.0,0,,0,,0,,1.1994,1.1828,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",2976,93,32,4,26,0.1,1.0858,1.1055,1.1828,1.216,1.1625,,6,0.0645,5,595.2,1,2976.0,0,,1.1994,1.1828,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,2976,93,32,4,26,0.1,1.0932,1.1087,1.1777,1.1821,1.788,,0,0.0,0,,0,,0,,1.1799,1.1777,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",2976,93,32,4,26,0.1,1.0932,1.1087,1.1777,1.1821,1.1625,,2,0.0215,2,1488.0,0,,0,,1.1799,1.1777,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,2976,93,32,4,26,0.1,1.1338,1.1331,1.2607,1.2817,1.788,,0,0.0,0,,0,,0,,1.2712,1.2607,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,4,26,0.1,1.1338,1.1331,1.2607,1.2817,1.1625,,31,0.3333,17,175.1,10,297.6,3,992.0,1.2712,1.2607,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,2976,93,32,4,26,0.1,1.0742,1.0871,1.1367,1.1379,1.788,,0,0.0,0,,0,,0,,1.1373,1.1367,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",2976,93,32,4,26,0.1,1.0742,1.0871,1.1367,1.1379,1.1625,,0,0.0,0,,0,,0,,1.1373,1.1367,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,12000,375,32,8,26,0.05,1.0769,1.1027,1.157,1.1716,1.788,,0,0.0,0,,0,,0,,1.1691,1.157,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,"self, mixed at 1%",12000,375,32,8,26,0.05,1.0769,1.1027,1.157,1.1716,1.157,,4,0.0107,4,3000.0,0,,0,,1.1691,1.157,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,stored,2976,93,32,8,26,0.05,1.0858,1.1227,1.1799,1.182,1.788,,0,0.0,0,,0,,0,,1.181,1.1799,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,dolly,prompt,"self, mixed at 1%",2976,93,32,8,26,0.05,1.0858,1.1227,1.1799,1.182,1.157,,8,0.086,8,372.0,0,,0,,1.181,1.1799,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,stored,2976,93,32,8,26,0.05,1.0932,1.1102,1.1454,1.1551,1.788,,0,0.0,0,,0,,0,,1.1502,1.1454,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",2976,93,32,8,26,0.05,1.0932,1.1102,1.1454,1.1551,1.157,,0,0.0,0,,0,,0,,1.1502,1.1454,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,stored,2976,93,32,8,26,0.05,1.1338,1.1455,1.2078,1.213,1.788,,0,0.0,0,,0,,0,,1.2104,1.2078,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,8,26,0.05,1.1338,1.1455,1.2078,1.213,1.157,,32,0.3441,22,135.3,7,425.1,3,992.0,1.2104,1.2078,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,stored,2976,93,32,8,26,0.05,1.0742,1.1007,1.1416,1.156,1.788,,0,0.0,0,,0,,0,,1.1488,1.1416,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",2976,93,32,8,26,0.05,1.0742,1.1007,1.1416,1.156,1.157,,0,0.0,0,,0,,0,,1.1488,1.1416,20261016-125841_imbalance_deepseek-v2_npu4_bs512_natural-long
+deepseek-v2,mixed,prompt,stored,2496,312,8,26,26,1.0,1.078,1.1096,1.1498,1.189,1.788,,0,0.0,0,,0,,0,,1.1549,1.1498,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,312,8,26,26,1.0,1.078,1.1096,1.1498,1.189,1.1498,,4,0.0128,4,624.0,0,,0,,1.1549,1.1498,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,52,8,26,26,1.0,1.0842,1.1253,1.2405,1.2593,1.788,,0,0.0,0,,0,,0,,1.2499,1.2405,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.0842,1.1253,1.2405,1.2593,1.1498,,13,0.25,9,46.2,3,138.7,1,416.0,1.2499,1.2405,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,52,8,26,26,1.0,1.122,1.1316,1.1448,1.147,1.788,,0,0.0,0,,0,,0,,1.1459,1.1448,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.122,1.1316,1.1448,1.147,1.1498,,0,0.0,0,,0,,0,,1.1459,1.1448,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,52,8,26,26,1.0,1.1393,1.1592,1.1838,1.1854,1.788,,0,0.0,0,,0,,0,,1.1846,1.1838,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.1393,1.1592,1.1838,1.1854,1.1498,,46,0.8846,6,69.3,5,83.2,4,104.0,1.1846,1.1838,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,52,8,26,26,1.0,1.1037,1.1144,1.1424,1.1465,1.788,,0,0.0,0,,0,,0,,1.1444,1.1424,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.1037,1.1144,1.1424,1.1465,1.1498,,0,0.0,0,,0,,0,,1.1444,1.1424,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,52,8,26,26,1.0,1.1356,1.1451,1.1647,1.1651,1.788,,0,0.0,0,,0,,0,,1.1649,1.1647,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.1356,1.1451,1.1647,1.1651,1.1498,,20,0.3846,13,32.0,4,104.0,2,208.0,1.1649,1.1647,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,52,8,26,26,1.0,1.075,1.1101,1.1558,1.1579,1.788,,0,0.0,0,,0,,0,,1.1568,1.1558,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,52,8,26,26,1.0,1.075,1.1101,1.1558,1.1579,1.1498,,5,0.0962,5,83.2,0,,0,,1.1568,1.1558,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,stored,2496,312,8,4,26,0.1,1.078,1.1364,1.2283,1.2483,1.788,,0,0.0,0,,0,,0,,1.2305,1.2283,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,312,8,4,26,0.1,1.078,1.1364,1.2283,1.2483,1.2283,,4,0.0128,4,624.0,0,,0,,1.2305,1.2283,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,52,8,4,26,0.1,1.0842,1.1542,1.3118,1.3293,1.788,,0,0.0,0,,0,,0,,1.3206,1.3118,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.0842,1.1542,1.3118,1.3293,1.2283,,7,0.1346,7,59.4,0,,0,,1.3206,1.3118,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,52,8,4,26,0.1,1.122,1.1636,1.2227,1.2256,1.788,,0,0.0,0,,0,,0,,1.2242,1.2227,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.122,1.1636,1.2227,1.2256,1.2283,,0,0.0,0,,0,,0,,1.2242,1.2227,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,52,8,4,26,0.1,1.1393,1.1923,1.3083,1.3129,1.788,,0,0.0,0,,0,,0,,1.3106,1.3083,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.1393,1.1923,1.3083,1.3129,1.2283,,13,0.25,6,69.3,3,138.7,1,416.0,1.3106,1.3083,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,52,8,4,26,0.1,1.1037,1.1402,1.2094,1.2196,1.788,,0,0.0,0,,0,,0,,1.2145,1.2094,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.1037,1.1402,1.2094,1.2196,1.2283,,0,0.0,0,,0,,0,,1.2145,1.2094,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,52,8,4,26,0.1,1.1356,1.1588,1.2707,1.2866,1.788,,0,0.0,0,,0,,0,,1.2786,1.2707,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.1356,1.1588,1.2707,1.2866,1.2283,,3,0.0577,3,138.7,0,,0,,1.2786,1.2707,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,52,8,4,26,0.1,1.075,1.1302,1.2153,1.2184,1.788,,0,0.0,0,,0,,0,,1.2169,1.2153,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,52,8,4,26,0.1,1.075,1.1302,1.2153,1.2184,1.2283,,0,0.0,0,,0,,0,,1.2169,1.2153,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,stored,2496,312,8,8,26,0.05,1.078,1.1613,1.25,1.2791,1.788,,0,0.0,0,,0,,0,,1.259,1.25,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,312,8,8,26,0.05,1.078,1.1613,1.25,1.2791,1.25,,4,0.0128,4,624.0,0,,0,,1.259,1.25,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,52,8,8,26,0.05,1.0842,1.1723,1.3298,1.3846,1.788,,0,0.0,0,,0,,0,,1.3572,1.3298,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.0842,1.1723,1.3298,1.3846,1.25,,4,0.0769,3,138.7,1,416.0,0,,1.3572,1.3298,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,52,8,8,26,0.05,1.122,1.194,1.2471,1.2542,1.788,,0,0.0,0,,0,,0,,1.2507,1.2471,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.122,1.194,1.2471,1.2542,1.25,,1,0.0192,1,416.0,0,,0,,1.2507,1.2471,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,52,8,8,26,0.05,1.1393,1.2199,1.3148,1.3201,1.788,,0,0.0,0,,0,,0,,1.3174,1.3148,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.1393,1.2199,1.3148,1.3201,1.25,,18,0.3462,13,32.0,2,208.0,2,208.0,1.3174,1.3148,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,52,8,8,26,0.05,1.1037,1.1627,1.2211,1.2238,1.788,,0,0.0,0,,0,,0,,1.2225,1.2211,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.1037,1.1627,1.2211,1.2238,1.25,,0,0.0,0,,0,,0,,1.2225,1.2211,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,52,8,8,26,0.05,1.1356,1.1834,1.2449,1.2601,1.788,,0,0.0,0,,0,,0,,1.2525,1.2449,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.1356,1.1834,1.2449,1.2601,1.25,,1,0.0192,1,416.0,0,,0,,1.2525,1.2449,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,52,8,8,26,0.05,1.075,1.1516,1.244,1.2579,1.788,,0,0.0,0,,0,,0,,1.2509,1.244,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,52,8,8,26,0.05,1.075,1.1516,1.244,1.2579,1.25,,1,0.0192,1,416.0,0,,0,,1.2509,1.244,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,stored,2496,78,32,26,26,1.0,1.078,1.0855,1.1137,1.1166,1.788,,0,0.0,0,,0,,0,,1.1152,1.1137,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,78,32,26,26,1.0,1.078,1.0855,1.1137,1.1166,1.1137,,1,0.0128,1,2496.0,0,,0,,1.1152,1.1137,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,13,32,26,26,1.0,1.0842,1.0933,1.1164,1.1167,1.788,,0,0.0,0,,0,,0,,1.1165,1.1164,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.0842,1.0933,1.1164,1.1167,1.1137,,2,0.1538,2,208.0,0,,0,,1.1165,1.1164,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,13,32,26,26,1.0,1.122,1.1244,1.1321,1.1322,1.788,,0,0.0,0,,0,,0,,1.1321,1.1321,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.122,1.1244,1.1321,1.1322,1.1137,,13,1.0,1,416.0,1,416.0,1,416.0,1.1321,1.1321,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,13,32,26,26,1.0,1.1393,1.1472,1.1624,1.1628,1.788,,0,0.0,0,,0,,0,,1.1626,1.1624,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.1393,1.1472,1.1624,1.1628,1.1137,,13,1.0,1,416.0,1,416.0,1,416.0,1.1626,1.1624,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,13,32,26,26,1.0,1.1037,1.1096,1.1208,1.1212,1.788,,0,0.0,0,,0,,0,,1.121,1.1208,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.1037,1.1096,1.1208,1.1212,1.1137,,4,0.3077,3,138.7,1,416.0,0,,1.121,1.1208,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,13,32,26,26,1.0,1.1356,1.1394,1.144,1.1441,1.788,,0,0.0,0,,0,,0,,1.144,1.144,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.1356,1.1394,1.144,1.1441,1.1137,,13,1.0,1,416.0,1,416.0,1,416.0,1.144,1.144,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,13,32,26,26,1.0,1.075,1.0869,1.108,1.1095,1.788,,0,0.0,0,,0,,0,,1.1087,1.108,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,13,32,26,26,1.0,1.075,1.0869,1.108,1.1095,1.1137,,0,0.0,0,,0,,0,,1.1087,1.108,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,stored,2496,78,32,4,26,0.1,1.078,1.0927,1.1712,1.1868,1.788,,0,0.0,0,,0,,0,,1.179,1.1712,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,78,32,4,26,0.1,1.078,1.0927,1.1712,1.1868,1.1712,,1,0.0128,1,2496.0,0,,0,,1.179,1.1712,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,13,32,4,26,0.1,1.0842,1.1215,1.1563,1.1573,1.788,,0,0.0,0,,0,,0,,1.1568,1.1563,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.0842,1.1215,1.1563,1.1573,1.1712,,0,0.0,0,,0,,0,,1.1568,1.1563,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,13,32,4,26,0.1,1.122,1.1412,1.2262,1.234,1.788,,0,0.0,0,,0,,0,,1.2301,1.2262,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.122,1.1412,1.2262,1.234,1.1712,,1,0.0769,1,416.0,0,,0,,1.2301,1.2262,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,13,32,4,26,0.1,1.1393,1.1585,1.2855,1.2924,1.788,,0,0.0,0,,0,,0,,1.2889,1.2855,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.1393,1.1585,1.2855,1.2924,1.1712,,5,0.3846,3,138.7,2,208.0,0,,1.2889,1.2855,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,13,32,4,26,0.1,1.1037,1.1194,1.1502,1.1506,1.788,,0,0.0,0,,0,,0,,1.1504,1.1502,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.1037,1.1194,1.1502,1.1506,1.1712,,0,0.0,0,,0,,0,,1.1504,1.1502,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,13,32,4,26,0.1,1.1356,1.1074,1.1716,1.1757,1.788,,0,0.0,0,,0,,0,,1.1737,1.1716,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.1356,1.1074,1.1716,1.1757,1.1712,,1,0.0769,1,416.0,0,,0,,1.1737,1.1716,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,13,32,4,26,0.1,1.075,1.0932,1.1558,1.1571,1.788,,0,0.0,0,,0,,0,,1.1564,1.1558,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,13,32,4,26,0.1,1.075,1.0932,1.1558,1.1571,1.1712,,0,0.0,0,,0,,0,,1.1564,1.1558,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,stored,2496,78,32,8,26,0.05,1.078,1.0986,1.1637,1.1676,1.788,,0,0.0,0,,0,,0,,1.1656,1.1637,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt,"self, mixed at 1%",2496,78,32,8,26,0.05,1.078,1.0986,1.1637,1.1676,1.1637,,1,0.0128,1,2496.0,0,,0,,1.1656,1.1637,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,stored,416,13,32,8,26,0.05,1.0842,1.1169,1.1699,1.171,1.788,,0,0.0,0,,0,,0,,1.1705,1.1699,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.0842,1.1169,1.1699,1.171,1.1637,,1,0.0769,1,416.0,0,,0,,1.1705,1.1699,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,stored,416,13,32,8,26,0.05,1.122,1.1615,1.178,1.1785,1.788,,0,0.0,0,,0,,0,,1.1783,1.178,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.122,1.1615,1.178,1.1785,1.1637,,5,0.3846,4,104.0,1,416.0,0,,1.1783,1.178,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,stored,416,13,32,8,26,0.05,1.1393,1.151,1.2554,1.2575,1.788,,0,0.0,0,,0,,0,,1.2565,1.2554,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.1393,1.151,1.2554,1.2575,1.1637,,5,0.3846,2,208.0,2,208.0,1,416.0,1.2565,1.2554,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,stored,416,13,32,8,26,0.05,1.1037,1.1185,1.1583,1.1614,1.788,,0,0.0,0,,0,,0,,1.1598,1.1583,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.1037,1.1185,1.1583,1.1614,1.1637,,0,0.0,0,,0,,0,,1.1598,1.1583,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,stored,416,13,32,8,26,0.05,1.1356,1.1463,1.1866,1.1874,1.788,,0,0.0,0,,0,,0,,1.187,1.1866,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.1356,1.1463,1.1866,1.1874,1.1637,,3,0.2308,2,208.0,1,416.0,0,,1.187,1.1866,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,stored,416,13,32,8,26,0.05,1.075,1.1203,1.1576,1.1615,1.788,,0,0.0,0,,0,,0,,1.1596,1.1576,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt,"self, mixed at 1%",416,13,32,8,26,0.05,1.075,1.1203,1.1576,1.1615,1.1637,,0,0.0,0,,0,,0,,1.1596,1.1576,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,312,8,26,26,1.0,1.0517,1.0785,1.1044,1.1138,1.788,,0,0.0,0,,0,,0,,1.1096,1.1044,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,312,8,26,26,1.0,1.0517,1.0785,1.1044,1.1138,1.1044,,4,0.0128,4,624.0,0,,0,,1.1096,1.1044,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,52,8,26,26,1.0,1.0692,1.0942,1.1217,1.1263,1.788,,0,0.0,0,,0,,0,,1.124,1.1217,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.0692,1.0942,1.1217,1.1263,1.1044,,11,0.2115,10,41.6,1,416.0,0,,1.124,1.1217,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,52,8,26,26,1.0,1.1244,1.1297,1.1463,1.148,1.788,,0,0.0,0,,0,,0,,1.1472,1.1463,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.1244,1.1297,1.1463,1.148,1.1044,,52,1.0,1,416.0,1,416.0,1,416.0,1.1472,1.1463,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,52,8,26,26,1.0,1.1066,1.12,1.1486,1.1493,1.788,,0,0.0,0,,0,,0,,1.1489,1.1486,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.1066,1.12,1.1486,1.1493,1.1044,,49,0.9423,4,104.0,4,104.0,4,104.0,1.1489,1.1486,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,52,8,26,26,1.0,1.0779,1.0893,1.1025,1.1033,1.788,,0,0.0,0,,0,,0,,1.1029,1.1025,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.0779,1.0893,1.1025,1.1033,1.1044,,0,0.0,0,,0,,0,,1.1029,1.1025,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,52,8,26,26,1.0,1.1071,1.1158,1.1306,1.1316,1.788,,0,0.0,0,,0,,0,,1.1311,1.1306,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.1071,1.1158,1.1306,1.1316,1.1044,,46,0.8846,7,59.4,7,59.4,6,69.3,1.1311,1.1306,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,52,8,26,26,1.0,1.0604,1.0865,1.1192,1.1193,1.788,,0,0.0,0,,0,,0,,1.1192,1.1192,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,52,8,26,26,1.0,1.0604,1.0865,1.1192,1.1193,1.1044,,8,0.1538,5,83.2,2,208.0,1,416.0,1.1192,1.1192,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,312,8,4,26,0.1,1.0517,1.0986,1.1797,1.2156,1.788,,0,0.0,0,,0,,0,,1.1836,1.1797,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,312,8,4,26,0.1,1.0517,1.0986,1.1797,1.2156,1.1797,,4,0.0128,4,624.0,0,,0,,1.1836,1.1797,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,52,8,4,26,0.1,1.0692,1.1128,1.1932,1.2049,1.788,,0,0.0,0,,0,,0,,1.1991,1.1932,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.0692,1.1128,1.1932,1.2049,1.1797,,3,0.0577,3,138.7,0,,0,,1.1991,1.1932,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,52,8,4,26,0.1,1.1244,1.152,1.2632,1.2949,1.788,,0,0.0,0,,0,,0,,1.279,1.2632,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.1244,1.152,1.2632,1.2949,1.1797,,10,0.1923,7,59.4,3,138.7,0,,1.279,1.2632,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,52,8,4,26,0.1,1.1066,1.1423,1.2305,1.2329,1.788,,0,0.0,0,,0,,0,,1.2317,1.2305,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.1066,1.1423,1.2305,1.2329,1.1797,,14,0.2692,12,34.7,2,208.0,0,,1.2317,1.2305,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,52,8,4,26,0.1,1.0779,1.1019,1.1708,1.1863,1.788,,0,0.0,0,,0,,0,,1.1785,1.1708,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.0779,1.1019,1.1708,1.1863,1.1797,,1,0.0192,1,416.0,0,,0,,1.1785,1.1708,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,52,8,4,26,0.1,1.1071,1.1273,1.1762,1.1851,1.788,,0,0.0,0,,0,,0,,1.1806,1.1762,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.1071,1.1273,1.1762,1.1851,1.1797,,1,0.0192,1,416.0,0,,0,,1.1806,1.1762,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,52,8,4,26,0.1,1.0604,1.0993,1.1574,1.1618,1.788,,0,0.0,0,,0,,0,,1.1596,1.1574,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,52,8,4,26,0.1,1.0604,1.0993,1.1574,1.1618,1.1797,,0,0.0,0,,0,,0,,1.1596,1.1574,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,312,8,8,26,0.05,1.0517,1.1164,1.1761,1.1924,1.788,,0,0.0,0,,0,,0,,1.1822,1.1761,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,312,8,8,26,0.05,1.0517,1.1164,1.1761,1.1924,1.1761,,4,0.0128,4,624.0,0,,0,,1.1822,1.1761,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,52,8,8,26,0.05,1.0692,1.1332,1.1847,1.1923,1.788,,0,0.0,0,,0,,0,,1.1885,1.1847,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.0692,1.1332,1.1847,1.1923,1.1761,,2,0.0385,2,208.0,0,,0,,1.1885,1.1847,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,52,8,8,26,0.05,1.1244,1.155,1.2283,1.2347,1.788,,0,0.0,0,,0,,0,,1.2315,1.2283,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.1244,1.155,1.2283,1.2347,1.1761,,13,0.25,9,46.2,4,104.0,0,,1.2315,1.2283,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,52,8,8,26,0.05,1.1066,1.1635,1.227,1.2382,1.788,,0,0.0,0,,0,,0,,1.2326,1.227,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.1066,1.1635,1.227,1.2382,1.1761,,18,0.3462,12,34.7,3,138.7,2,208.0,1.2326,1.227,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,52,8,8,26,0.05,1.0779,1.1222,1.1571,1.1582,1.788,,0,0.0,0,,0,,0,,1.1576,1.1571,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.0779,1.1222,1.1571,1.1582,1.1761,,0,0.0,0,,0,,0,,1.1576,1.1571,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,52,8,8,26,0.05,1.1071,1.1376,1.1915,1.1955,1.788,,0,0.0,0,,0,,0,,1.1935,1.1915,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.1071,1.1376,1.1915,1.1955,1.1761,,5,0.0962,4,104.0,1,416.0,0,,1.1935,1.1915,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,52,8,8,26,0.05,1.0604,1.117,1.1559,1.158,1.788,,0,0.0,0,,0,,0,,1.1569,1.1559,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,52,8,8,26,0.05,1.0604,1.117,1.1559,1.158,1.1761,,0,0.0,0,,0,,0,,1.1569,1.1559,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,78,32,26,26,1.0,1.0517,1.0598,1.0722,1.0779,1.788,,0,0.0,0,,0,,0,,1.075,1.0722,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,78,32,26,26,1.0,1.0517,1.0598,1.0722,1.0779,1.0722,,1,0.0128,1,2496.0,0,,0,,1.075,1.0722,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,13,32,26,26,1.0,1.0692,1.077,1.0881,1.0882,1.788,,0,0.0,0,,0,,0,,1.0881,1.0881,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.0692,1.077,1.0881,1.0882,1.0722,,11,0.8462,1,416.0,1,416.0,1,416.0,1.0881,1.0881,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,13,32,26,26,1.0,1.1244,1.1252,1.1339,1.1341,1.788,,0,0.0,0,,0,,0,,1.134,1.1339,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.1244,1.1252,1.1339,1.1341,1.0722,,13,1.0,1,416.0,1,416.0,1,416.0,1.134,1.1339,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,13,32,26,26,1.0,1.1066,1.1103,1.1241,1.1246,1.788,,0,0.0,0,,0,,0,,1.1243,1.1241,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.1066,1.1103,1.1241,1.1246,1.0722,,13,1.0,1,416.0,1,416.0,1,416.0,1.1243,1.1241,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,13,32,26,26,1.0,1.0779,1.0813,1.0868,1.0872,1.788,,0,0.0,0,,0,,0,,1.087,1.0868,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.0779,1.0813,1.0868,1.0872,1.0722,,13,1.0,1,416.0,1,416.0,1,416.0,1.087,1.0868,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,13,32,26,26,1.0,1.1071,1.1082,1.1163,1.1165,1.788,,0,0.0,0,,0,,0,,1.1164,1.1163,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.1071,1.1082,1.1163,1.1165,1.0722,,13,1.0,1,416.0,1,416.0,1,416.0,1.1164,1.1163,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,13,32,26,26,1.0,1.0604,1.0665,1.076,1.076,1.788,,0,0.0,0,,0,,0,,1.076,1.076,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,13,32,26,26,1.0,1.0604,1.0665,1.076,1.076,1.0722,,4,0.3077,3,138.7,1,416.0,0,,1.076,1.076,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,78,32,4,26,0.1,1.0517,1.0641,1.1072,1.11,1.788,,0,0.0,0,,0,,0,,1.1086,1.1072,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,78,32,4,26,0.1,1.0517,1.0641,1.1072,1.11,1.1072,,1,0.0128,1,2496.0,0,,0,,1.1086,1.1072,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,13,32,4,26,0.1,1.0692,1.077,1.1077,1.1097,1.788,,0,0.0,0,,0,,0,,1.1087,1.1077,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.0692,1.077,1.1077,1.1097,1.1072,,1,0.0769,1,416.0,0,,0,,1.1087,1.1077,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,13,32,4,26,0.1,1.1244,1.1364,1.1791,1.1796,1.788,,0,0.0,0,,0,,0,,1.1793,1.1791,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.1244,1.1364,1.1791,1.1796,1.1072,,8,0.6154,5,83.2,3,138.7,0,,1.1793,1.1791,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,13,32,4,26,0.1,1.1066,1.1239,1.2243,1.2257,1.788,,0,0.0,0,,0,,0,,1.225,1.2243,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.1066,1.1239,1.2243,1.2257,1.1072,,8,0.6154,5,83.2,2,208.0,1,416.0,1.225,1.2243,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,13,32,4,26,0.1,1.0779,1.0813,1.1277,1.1311,1.788,,0,0.0,0,,0,,0,,1.1294,1.1277,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.0779,1.0813,1.1277,1.1311,1.1072,,1,0.0769,1,416.0,0,,0,,1.1294,1.1277,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,13,32,4,26,0.1,1.1071,1.0956,1.1223,1.1244,1.788,,0,0.0,0,,0,,0,,1.1233,1.1223,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.1071,1.0956,1.1223,1.1244,1.1072,,1,0.0769,1,416.0,0,,0,,1.1233,1.1223,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,13,32,4,26,0.1,1.0604,1.079,1.1036,1.1037,1.788,,0,0.0,0,,0,,0,,1.1037,1.1036,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,13,32,4,26,0.1,1.0604,1.079,1.1036,1.1037,1.1072,,0,0.0,0,,0,,0,,1.1037,1.1036,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,stored,2496,78,32,8,26,0.05,1.0517,1.0739,1.1048,1.1107,1.788,,0,0.0,0,,0,,0,,1.1077,1.1048,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mixed,prompt+decode,"self, mixed at 1%",2496,78,32,8,26,0.05,1.0517,1.0739,1.1048,1.1107,1.1048,,1,0.0128,1,2496.0,0,,0,,1.1077,1.1048,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,stored,416,13,32,8,26,0.05,1.0692,1.0902,1.108,1.1085,1.788,,0,0.0,0,,0,,0,,1.1082,1.108,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,dolly,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.0692,1.0902,1.108,1.1085,1.1048,,1,0.0769,1,416.0,0,,0,,1.1082,1.108,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,stored,416,13,32,8,26,0.05,1.1244,1.1488,1.1709,1.1723,1.788,,0,0.0,0,,0,,0,,1.1716,1.1709,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,gsm8k,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.1244,1.1488,1.1709,1.1723,1.1048,,12,0.9231,2,208.0,1,416.0,1,416.0,1.1716,1.1709,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,stored,416,13,32,8,26,0.05,1.1066,1.1231,1.181,1.1834,1.788,,0,0.0,0,,0,,0,,1.1822,1.181,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mbpp,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.1066,1.1231,1.181,1.1834,1.1048,,11,0.8462,3,138.7,3,138.7,3,138.7,1.1822,1.181,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,stored,416,13,32,8,26,0.05,1.0779,1.0903,1.1184,1.1205,1.788,,0,0.0,0,,0,,0,,1.1194,1.1184,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmlu,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.0779,1.0903,1.1184,1.1205,1.1048,,1,0.0769,1,416.0,0,,0,,1.1194,1.1184,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,stored,416,13,32,8,26,0.05,1.1071,1.11,1.1372,1.1374,1.788,,0,0.0,0,,0,,0,,1.1373,1.1372,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,mmmlu:DE_DE,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.1071,1.11,1.1372,1.1374,1.1048,,8,0.6154,3,138.7,2,208.0,2,208.0,1.1373,1.1372,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,stored,416,13,32,8,26,0.05,1.0604,1.0825,1.0943,1.0943,1.788,,0,0.0,0,,0,,0,,1.0943,1.0943,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+deepseek-v2,ultrachat,prompt+decode,"self, mixed at 1%",416,13,32,8,26,0.05,1.0604,1.0825,1.0943,1.0943,1.1048,,0,0.0,0,,0,,0,,1.0943,1.0943,20261016-132619_imbalance_deepseek-v2_npu4_bs512_natural-decode
+mixtral,mixed,prompt,stored,12000,1500,8,32,32,1.0,1.0916,1.1389,1.2146,1.261,1.349,1.42,0,0.0,0,,0,,0,,1.2248,1.2146,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,1500,8,32,32,1.0,1.0916,1.1389,1.2146,1.261,1.2146,1.42,15,0.01,15,800.0,0,,0,,1.2248,1.2146,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,3000,375,8,32,32,1.0,1.1307,1.1825,1.3138,1.3979,1.349,1.42,1,0.0027,1,3000.0,0,,0,,1.3212,1.3138,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",3000,375,8,32,32,1.0,1.1307,1.1825,1.3138,1.3979,1.2146,1.42,99,0.264,72,41.7,18,166.7,7,428.6,1.3212,1.3138,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,3000,375,8,32,32,1.0,1.1369,1.157,1.2109,1.2231,1.349,1.42,0,0.0,0,,0,,0,,1.2152,1.2109,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",3000,375,8,32,32,1.0,1.1369,1.157,1.2109,1.2231,1.2146,1.42,3,0.008,3,1000.0,0,,0,,1.2152,1.2109,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,3000,375,8,32,32,1.0,1.1229,1.1443,1.1951,1.1975,1.349,1.42,0,0.0,0,,0,,0,,1.1964,1.1951,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,32,32,1.0,1.1229,1.1443,1.1951,1.1975,1.2146,1.42,0,0.0,0,,0,,0,,1.1964,1.1951,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,3000,375,8,32,32,1.0,1.0843,1.1271,1.194,1.2605,1.349,1.42,0,0.0,0,,0,,0,,1.1999,1.194,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",3000,375,8,32,32,1.0,1.0843,1.1271,1.194,1.2605,1.2146,1.42,1,0.0027,1,3000.0,0,,0,,1.1999,1.194,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,stored,12000,1500,8,4,32,0.1,1.0916,1.1852,1.3665,1.4808,1.349,1.42,24,0.016,22,545.5,1,12000.0,1,12000.0,1.3931,1.3665,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,1500,8,4,32,0.1,1.0916,1.1852,1.3665,1.4808,1.3665,1.42,15,0.01,15,800.0,0,,0,,1.3931,1.3665,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,3000,375,8,4,32,0.1,1.1307,1.2446,1.5475,1.664,1.349,1.42,61,0.1627,53,56.6,8,375.0,0,,1.6378,1.5475,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",3000,375,8,4,32,0.1,1.1307,1.2446,1.5475,1.664,1.3665,1.42,46,0.1227,42,71.4,4,750.0,0,,1.6378,1.5475,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,3000,375,8,4,32,0.1,1.1369,1.195,1.3465,1.3691,1.349,1.42,3,0.008,3,1000.0,0,,0,,1.3511,1.3465,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",3000,375,8,4,32,0.1,1.1369,1.195,1.3465,1.3691,1.3665,1.42,1,0.0027,1,3000.0,0,,0,,1.3511,1.3465,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,3000,375,8,4,32,0.1,1.1229,1.1845,1.3108,1.3459,1.349,1.42,0,0.0,0,,0,,0,,1.3185,1.3108,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,4,32,0.1,1.1229,1.1845,1.3108,1.3459,1.3665,1.42,0,0.0,0,,0,,0,,1.3185,1.3108,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,3000,375,8,4,32,0.1,1.0843,1.1737,1.343,1.3937,1.349,1.42,3,0.008,3,1000.0,0,,0,,1.3645,1.343,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",3000,375,8,4,32,0.1,1.0843,1.1737,1.343,1.3937,1.3665,1.42,2,0.0053,2,1500.0,0,,0,,1.3645,1.343,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,stored,12000,1500,8,8,32,0.05,1.0916,1.2323,1.4026,1.5023,1.349,1.42,68,0.0453,63,190.5,5,2400.0,0,,1.4263,1.4026,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,1500,8,8,32,0.05,1.0916,1.2323,1.4026,1.5023,1.4026,1.42,15,0.01,15,800.0,0,,0,,1.4263,1.4026,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,3000,375,8,8,32,0.05,1.1307,1.2894,1.6569,1.8634,1.349,1.42,107,0.2853,80,37.5,21,142.9,5,600.0,1.6833,1.6569,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",3000,375,8,8,32,0.05,1.1307,1.2894,1.6569,1.8634,1.4026,1.42,66,0.176,58,51.7,7,428.6,1,3000.0,1.6833,1.6569,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,3000,375,8,8,32,0.05,1.1369,1.2455,1.3855,1.4005,1.349,1.42,17,0.0453,14,214.3,3,1000.0,0,,1.3948,1.3855,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",3000,375,8,8,32,0.05,1.1369,1.2455,1.3855,1.4005,1.4026,1.42,0,0.0,0,,0,,0,,1.3948,1.3855,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,3000,375,8,8,32,0.05,1.1229,1.2149,1.3425,1.3965,1.349,1.42,3,0.008,3,1000.0,0,,0,,1.3533,1.3425,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",3000,375,8,8,32,0.05,1.1229,1.2149,1.3425,1.3965,1.4026,1.42,0,0.0,0,,0,,0,,1.3533,1.3425,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,3000,375,8,8,32,0.05,1.0843,1.2095,1.3957,1.4194,1.349,1.42,12,0.032,11,272.7,1,3000.0,0,,1.4078,1.3957,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",3000,375,8,8,32,0.05,1.0843,1.2095,1.3957,1.4194,1.4026,1.42,3,0.008,3,1000.0,0,,0,,1.4078,1.3957,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,stored,12000,375,32,32,32,1.0,1.0916,1.1076,1.1469,1.1632,1.349,1.42,0,0.0,0,,0,,0,,1.1503,1.1469,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,375,32,32,32,1.0,1.0916,1.1076,1.1469,1.1632,1.1469,1.42,4,0.0107,4,3000.0,0,,0,,1.1503,1.1469,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,2976,93,32,32,32,1.0,1.1307,1.1483,1.1895,1.1951,1.349,1.42,0,0.0,0,,0,,0,,1.1923,1.1895,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",2976,93,32,32,32,1.0,1.1307,1.1483,1.1895,1.1951,1.1469,1.42,50,0.5376,28,106.3,11,270.5,4,744.0,1.1923,1.1895,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,2976,93,32,32,32,1.0,1.1369,1.1425,1.1736,1.1817,1.349,1.42,0,0.0,0,,0,,0,,1.1776,1.1736,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",2976,93,32,32,32,1.0,1.1369,1.1425,1.1736,1.1817,1.1469,1.42,36,0.3871,18,165.3,7,425.1,4,744.0,1.1776,1.1736,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,2976,93,32,32,32,1.0,1.1229,1.1273,1.1602,1.1615,1.349,1.42,0,0.0,0,,0,,0,,1.1609,1.1602,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,32,32,1.0,1.1229,1.1273,1.1602,1.1615,1.1469,1.42,15,0.1613,12,248.0,2,1488.0,1,2976.0,1.1609,1.1602,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,2976,93,32,32,32,1.0,1.0843,1.0987,1.1374,1.14,1.349,1.42,0,0.0,0,,0,,0,,1.1387,1.1374,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",2976,93,32,32,32,1.0,1.0843,1.0987,1.1374,1.14,1.1469,1.42,0,0.0,0,,0,,0,,1.1387,1.1374,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,stored,12000,375,32,4,32,0.1,1.0916,1.1254,1.2095,1.2478,1.349,1.42,0,0.0,0,,0,,0,,1.2143,1.2095,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,375,32,4,32,0.1,1.0916,1.1254,1.2095,1.2478,1.2095,1.42,4,0.0107,4,3000.0,0,,0,,1.2143,1.2095,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,2976,93,32,4,32,0.1,1.1307,1.1589,1.2956,1.3116,1.349,1.42,0,0.0,0,,0,,0,,1.3036,1.2956,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",2976,93,32,4,32,0.1,1.1307,1.1589,1.2956,1.3116,1.2095,1.42,24,0.2581,17,175.1,7,425.1,0,,1.3036,1.2956,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,2976,93,32,4,32,0.1,1.1369,1.1633,1.2632,1.3115,1.349,1.42,0,0.0,0,,0,,0,,1.2874,1.2632,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",2976,93,32,4,32,0.1,1.1369,1.1633,1.2632,1.3115,1.2095,1.42,14,0.1505,13,228.9,1,2976.0,0,,1.2874,1.2632,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,2976,93,32,4,32,0.1,1.1229,1.1383,1.2235,1.2236,1.349,1.42,0,0.0,0,,0,,0,,1.2235,1.2235,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,4,32,0.1,1.1229,1.1383,1.2235,1.2236,1.2095,1.42,5,0.0538,3,992.0,1,2976.0,1,2976.0,1.2235,1.2235,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,2976,93,32,4,32,0.1,1.0843,1.118,1.1846,1.1906,1.349,1.42,0,0.0,0,,0,,0,,1.1876,1.1846,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",2976,93,32,4,32,0.1,1.0843,1.118,1.1846,1.1906,1.2095,1.42,0,0.0,0,,0,,0,,1.1876,1.1846,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,stored,12000,375,32,8,32,0.05,1.0916,1.142,1.2339,1.2611,1.349,1.42,0,0.0,0,,0,,0,,1.2368,1.2339,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mixed,prompt,"self, mixed at 1%",12000,375,32,8,32,0.05,1.0916,1.142,1.2339,1.2611,1.2339,1.42,4,0.0107,4,3000.0,0,,0,,1.2368,1.2339,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,stored,2976,93,32,8,32,0.05,1.1307,1.1792,1.2782,1.2965,1.349,1.42,0,0.0,0,,0,,0,,1.2874,1.2782,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,dolly,prompt,"self, mixed at 1%",2976,93,32,8,32,0.05,1.1307,1.1792,1.2782,1.2965,1.2339,1.42,11,0.1183,8,372.0,2,1488.0,1,2976.0,1.2874,1.2782,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,stored,2976,93,32,8,32,0.05,1.1369,1.1764,1.2577,1.2867,1.349,1.42,0,0.0,0,,0,,0,,1.2722,1.2577,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmlu,prompt,"self, mixed at 1%",2976,93,32,8,32,0.05,1.1369,1.1764,1.2577,1.2867,1.2339,1.42,4,0.043,4,744.0,0,,0,,1.2722,1.2577,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,stored,2976,93,32,8,32,0.05,1.1229,1.1549,1.2232,1.2246,1.349,1.42,0,0.0,0,,0,,0,,1.2239,1.2232,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,mmmlu:DE_DE,prompt,"self, mixed at 1%",2976,93,32,8,32,0.05,1.1229,1.1549,1.2232,1.2246,1.2339,1.42,0,0.0,0,,0,,0,,1.2239,1.2232,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,stored,2976,93,32,8,32,0.05,1.0843,1.1269,1.1977,1.2117,1.349,1.42,0,0.0,0,,0,,0,,1.2047,1.1977,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long
+mixtral,ultrachat,prompt,"self, mixed at 1%",2976,93,32,8,32,0.05,1.0843,1.1269,1.1977,1.2117,1.2339,1.42,0,0.0,0,,0,,0,,1.2047,1.1977,20261016-133754_imbalance_mixtral_npu4_bs512_natural-long

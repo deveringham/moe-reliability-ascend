@@ -39,8 +39,8 @@ import numpy as np
 
 __all__ = ["request_counts", "busiest_rank", "pooled_busiest_rank", "per_layer_load", "localise",
            "WindowSampler", "SampleCost", "estimate_loads", "threshold_at_fpr", "impact_threshold",
-           "roc", "screen_scores", "alarm_stream", "onset_delay", "mean_windows_to_false_alarm",
-           "batch_busiest_rank", "pipeline_overhead"]
+           "roc", "screen_scores", "alarm_stream", "stream_loads", "onset_delay", "mean_windows_to_false_alarm",
+           "batch_busiest_rank", "pipeline_overhead", "accumulate_layers", "calibrate", "margin_sweep", "Screen"]
 
 
 def request_counts(records: Iterable[Mapping], n_experts: int, include_generated: bool = True) -> np.ndarray:
@@ -72,23 +72,55 @@ def request_counts(records: Iterable[Mapping], n_experts: int, include_generated
     return c[:, c[:, :, 1:].sum(axis=(0, 2)) > 0]
 
 
-def _per_rank(counts: np.ndarray, n_ranks: int) -> np.ndarray:
+def _per_rank(counts: np.ndarray, n_ranks: int, placement: np.ndarray | None = None) -> np.ndarray:
     """Share of each layer's assignments on each rank: ``(layers, ranks)``.
 
-    Contiguous placement, which is what vLLM does without EPLB.
+    Contiguous placement, which is what vLLM does without EPLB, unless
+    ``placement`` gives the rank each expert sits on per layer.
     """
     totals = counts.sum(axis=1, keepdims=True)
     shares = np.divide(counts, totals, out=np.zeros_like(counts), where=totals > 0)
-    return shares.reshape(shares.shape[0], n_ranks, -1).sum(axis=2)
+    if placement is None:
+        return shares.reshape(shares.shape[0], n_ranks, -1).sum(axis=2)
+    out = np.zeros((shares.shape[0], n_ranks))
+    for layer in range(shares.shape[0]):
+        np.add.at(out[layer], placement[layer], shares[layer])
+    return out
 
 
-def busiest_rank(counts: np.ndarray, n_ranks: int) -> float:
+def placement_from_expert_map(expert_map: dict, n_experts: int) -> np.ndarray:
+    """``(layers, experts)`` rank index, from the map EPLB records at ``eplb_record_map``.
+
+    Expert ids in a routing capture are stable; the rank an expert sits on is not,
+    once EPLB is rearranging. Every rank statistic here assumes contiguous
+    placement, so reading an EPLB run's capture without this measures the skew
+    against a layout the server stopped using.
+
+    The map is the placement at the end of the run, so it describes the whole run
+    only for a point whose rearrangements settled. A replicated expert - EPLB may
+    hold one on several ranks when given redundant slots - is attributed to the
+    first rank listed, which undercounts the spreading it bought.
+    """
+    layers = expert_map["layer_list"]
+    out = np.zeros((len(layers), n_experts), dtype=int)
+    for i, layer in enumerate(layers):
+        placed = np.zeros(n_experts, dtype=bool)
+        for device in layer["device_list"]:
+            for expert in device["device_expert"]:
+                if expert < n_experts and not placed[expert]:
+                    out[i, expert], placed[expert] = device["device_id"], True
+    return out
+
+
+def busiest_rank(counts: np.ndarray, n_ranks: int, placement: np.ndarray | None = None) -> float:
     """Busiest rank's load over the mean, per layer, averaged over layers.
 
     ``counts`` is ``(layers, experts)``. 1.0 is perfectly balanced; 2.0 means the
     busiest rank carries twice the mean rank's assignments in the average layer.
+    ``placement`` is needed whenever EPLB was running: see
+    :func:`placement_from_expert_map`.
     """
-    return float((_per_rank(counts, n_ranks).max(axis=1) * n_ranks).mean())
+    return float((_per_rank(counts, n_ranks, placement).max(axis=1) * n_ranks).mean())
 
 
 def pooled_busiest_rank(counts: np.ndarray, n_ranks: int) -> float:
@@ -108,6 +140,30 @@ def per_layer_load(counts: np.ndarray, n_ranks: int) -> tuple[np.ndarray, np.nda
     """
     per_rank = _per_rank(counts, n_ranks)
     return per_rank.max(axis=1) * n_ranks, per_rank.argmax(axis=1)
+
+
+def accumulate_layers(counts: np.ndarray, n_ranks: int, sampler: WindowSampler, windows: int,
+                      seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Mean load observed per layer, and how often each was counted, over many windows.
+
+    This is what random layer sampling buys: no single window sees every layer,
+    but over enough of them each layer accumulates its own evidence, so the skew
+    can be placed without ever counting more than ``sampler.layers`` at a time.
+    Layers never drawn come back as NaN rather than as a reading.
+    """
+    rng = np.random.default_rng(seed)
+    n_layers = counts.shape[1]
+    total = np.zeros(n_layers)
+    seen = np.zeros(n_layers, dtype=int)
+    for _ in range(windows):
+        idx = sampler._layer_index(n_layers, rng)
+        rows = counts[rng.choice(len(counts), min(sampler.window, len(counts)), replace=False)][:, idx]
+        pooled = rows.sum(axis=0)
+        if sampler.token_fraction < 1.0:
+            pooled = rng.binomial(pooled.astype(np.int64), sampler.token_fraction).astype(float)
+        total[idx] += per_layer_load(pooled, n_ranks)[0]
+        seen[idx] += 1
+    return np.where(seen > 0, total / np.maximum(seen, 1), np.nan), seen
 
 
 def localise(counts: np.ndarray, n_ranks: int, threshold: float) -> dict:
@@ -161,14 +217,24 @@ class WindowSampler:
     layers: int | None = None
     token_fraction: float = 1.0
     draws: int = 200
+    #: "spaced" counts the same evenly spaced layers every window, which is cheap
+    #: and has a blind spot: a skew confined to layers between them is invisible,
+    #: for detection as well as for localisation. "random" redraws the layers each
+    #: window, so every layer is eventually counted at the same per-window cost.
+    layer_choice: str = "spaced"
 
     def cost(self, n_layers: int) -> SampleCost:
         layers = n_layers if self.layers is None else min(self.layers, n_layers)
         return SampleCost(layer_fraction=layers / n_layers, token_fraction=self.token_fraction)
 
-    def _layer_index(self, n_layers: int) -> np.ndarray:
+    def _layer_index(self, n_layers: int, rng=None) -> np.ndarray:
         if self.layers is None or self.layers >= n_layers:
             return np.arange(n_layers)
+        if self.layer_choice == "random":
+            if rng is None:
+                raise ValueError("random layer sampling needs a generator: the point is that the layers "
+                                 "differ between windows")
+            return np.sort(rng.choice(n_layers, self.layers, replace=False))
         return np.unique(np.linspace(0, n_layers - 1, self.layers).round().astype(int))
 
 
@@ -196,6 +262,27 @@ def _window_loads(rows: np.ndarray, n_ranks: int, sampler: WindowSampler, rng) -
     return batch_busiest_rank(pooled, n_ranks)
 
 
+def stream_loads(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
+                 rng) -> np.ndarray:
+    """What the screen reads, window by window, for a stream built from successive pools.
+
+    The same construction :func:`alarm_stream` scores, returned before the
+    threshold is applied - so a timeline can show the estimate itself rather than
+    only the decision.
+    """
+    n_layers = pools[0][0].shape[1]
+    rows = np.concatenate([pool[rng.choice(len(pool), n, replace=True)] for pool, n in pools])
+    if sampler.layer_choice != "random":
+        return _window_loads(rows[:, sampler._layer_index(n_layers)], n_ranks, sampler, rng)
+    # Redraw the layers for each window, which is the whole point of the mode:
+    # choosing them once for the stream would be fixed sampling under another name.
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    return np.array([
+        _window_loads(rows[i * sampler.window:(i + 1) * sampler.window][
+            :, sampler._layer_index(n_layers, rng)], n_ranks, flat, rng)[0]
+        for i in range(len(rows) // sampler.window)])
+
+
 def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler: WindowSampler,
                  alarm: float, rng) -> np.ndarray:
     """Per-window alarm decisions for a stream built from successive pools.
@@ -205,9 +292,23 @@ def alarm_stream(pools: Sequence[tuple[np.ndarray, int]], n_ranks: int, sampler:
     tumble: a monitor that accumulates counts and resets is the cheap
     implementation, and a window may straddle the join, as it would in service.
     """
-    layers = sampler._layer_index(pools[0][0].shape[1])
-    rows = np.concatenate([pool[:, layers][rng.choice(len(pool), n, replace=True)] for pool, n in pools])
-    return _window_loads(rows, n_ranks, sampler, rng) >= alarm
+    return stream_loads(pools, n_ranks, sampler, rng) >= alarm
+
+
+def _counted(*pools: np.ndarray, sampler: WindowSampler):
+    """The arrays a stream should draw from, and the sampler to score them with.
+
+    Restricting to the counted layers once is the cheap arrangement and the right
+    one for fixed sampling: the draws then copy only what is counted. Random
+    sampling has to keep the full layer axis, because choosing the layers before
+    the stream starts is fixed sampling under another name - which is what these
+    two functions were quietly doing.
+    """
+    if sampler.layer_choice == "random" and sampler.layers is not None:
+        return (*pools, sampler)
+    layers = sampler._layer_index(pools[0].shape[1])
+    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    return (*(p[:, layers] for p in pools), flat)
 
 
 def _first_run(flags: np.ndarray, consecutive: int) -> int | None:
@@ -232,10 +333,7 @@ def onset_delay(balanced: np.ndarray, skewed: np.ndarray, n_ranks: int, sampler:
     """
     rng = np.random.default_rng(seed)
     pre_requests = pre_windows * sampler.window
-    layers = sampler._layer_index(balanced.shape[1])
-    # Restrict to the counted layers once; the draws then copy only what is counted.
-    pre, post = balanced[:, layers], skewed[:, layers]
-    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    pre, post, flat = _counted(balanced, skewed, sampler=sampler)
     delays, false_starts, misses = [], 0, 0
     for _ in range(draws):
         flags = alarm_stream([(pre, pre_requests), (post, post_windows * sampler.window)],
@@ -267,8 +365,7 @@ def mean_windows_to_false_alarm(balanced: np.ndarray, n_ranks: int, sampler: Win
     tuning knob an operator actually has.
     """
     rng = np.random.default_rng(seed)
-    pre = balanced[:, sampler._layer_index(balanced.shape[1])]
-    flat = WindowSampler(window=sampler.window, layers=None, token_fraction=sampler.token_fraction)
+    pre, flat = _counted(balanced, sampler=sampler)
     runs, survived = [], 0
     for _ in range(draws):
         flags = alarm_stream([(pre, horizon * sampler.window)], n_ranks, flat, alarm, rng)
@@ -294,13 +391,18 @@ def estimate_loads(counts: np.ndarray, n_ranks: int, sampler: WindowSampler,
     per token, which is the same multinomial and far cheaper.
     """
     rng = np.random.default_rng(seed)
-    layers = sampler._layer_index(counts.shape[1])
     window = min(sampler.window, len(counts))
+    drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
+    if sampler.layer_choice == "random":
+        # Each window sees a different set of layers, so they cannot share one pass.
+        return np.array([_window_loads(counts[:, sampler._layer_index(counts.shape[1], rng)][
+            rng.choice(len(counts), window, replace=False)], n_ranks, drawn, rng)[0]
+            for _ in range(sampler.draws)])
+    layers = sampler._layer_index(counts.shape[1])
     # Windows are drawn without replacement within themselves but independently of
     # each other, so they are laid end to end and reduced in one pass.
     chosen = np.concatenate([rng.choice(len(counts), window, replace=False)
                              for _ in range(sampler.draws)])
-    drawn = WindowSampler(window=window, layers=sampler.layers, token_fraction=sampler.token_fraction)
     return _window_loads(counts[:, layers][chosen], n_ranks, drawn, rng)
 
 
@@ -312,23 +414,196 @@ def threshold_at_fpr(benign: Sequence[float], fpr: float) -> float:
 
 
 def impact_threshold(loads: Sequence[float], costs: Sequence[float], noise_pct: float) -> float | None:
-    """The lowest measured load whose cost clears ``noise_pct``, by linear interpolation.
+    """The lowest measured load whose cost clears ``noise_pct`` and stays clear.
 
     ``costs`` are percentage changes in latency against the balanced point and
     ``noise_pct`` is the run-to-run drift between identical points - the floor
     below which a cost is not distinguishable. Returns None when no measured
     point reaches it, which is the honest answer for a model swept only below
     its threshold.
+
+    The crossing has to be *sustained*: every higher level must also be above the
+    floor. A fine sweep spends several levels near the floor and one of them
+    clearing it by chance is the likeliest reading there, not the onset - on the
+    mixtral calibration sweep the first crossing sat at 1.24x and the next level
+    fell back to +0.15%, while the sustained crossing is at 1.45x. On a coarse
+    sweep, where every level above the first crossing is well past the floor,
+    this is the same answer as taking the first.
     """
     order = np.argsort(np.asarray(loads, dtype=float))
     x, y = np.asarray(loads, dtype=float)[order], np.asarray(costs, dtype=float)[order]
-    for i in range(1, len(x)):
-        if y[i] >= noise_pct > y[i - 1]:
-            span = y[i] - y[i - 1]
-            # Interpolate so a coarse sweep does not round the threshold up to its
-            # next measured level.
-            return float(x[i - 1] + (x[i] - x[i - 1]) * ((noise_pct - y[i - 1]) / span)) if span else float(x[i])
-    return float(x[0]) if len(y) and y[0] >= noise_pct else None
+    above = y >= noise_pct
+    for i in range(len(x)):
+        if not above[i] or not above[i:].all():
+            continue
+        if i == 0:
+            return float(x[0])
+        span = y[i] - y[i - 1]
+        # Interpolate so a coarse sweep does not round the threshold up to its
+        # next measured level.
+        return float(x[i - 1] + (x[i] - x[i - 1]) * ((noise_pct - y[i - 1]) / span)) if span else float(x[i])
+    return None
+
+
+def calibrate(loads: Sequence[float], costs: Sequence[float], balanced_repeats: Sequence[float],
+              benign_loads: Sequence[float], sampling: dict, alarm_margin: float = 0.5,
+              fpr: float = 0.01) -> dict:
+    """Turn one deployment's measured skew sweep into what a screen needs to run on it.
+
+    Two thresholds, and they are not the same thing:
+
+    - the **impact threshold** is where cost rises above this deployment's own
+      noise floor, which is physical and measured here;
+    - the **alarm level** is where the screen should speak up, which is a choice.
+
+    Setting the alarm from the benign distribution alone - the obvious thing, and
+    what this project did first - ignores impact entirely. On a deployment whose
+    benign traffic sits far below anything costly it alarms constantly on
+    harmless skew: DeepSeek's 1% false-alarm level is 1.23x where nothing costs
+    anything until 2.41x. So the alarm is placed between the two instead,
+    ``alarm_margin`` of the way back from impact toward what benign traffic
+    already reaches: 0 alarms only once it is costing, 1 alarms at the benign
+    ceiling and buys the earliest warning the data allows.
+
+    The gap between those two is the deployment's **headroom**, and it is a
+    result in its own right. Without it there is no early warning to be had at
+    any margin, and the screen can only confirm what latency already shows.
+    """
+    noise_pct = float(np.max(np.abs(
+        100 * (np.asarray(balanced_repeats, dtype=float) / np.mean(balanced_repeats) - 1))))
+    impact = impact_threshold(loads, costs, noise_pct)
+    benign = np.asarray(benign_loads, dtype=float)
+    ceiling = float(np.quantile(benign, 1 - fpr))
+    out = {
+        "noise_floor_pct": round(noise_pct, 2),
+        "impact_threshold": None if impact is None else round(impact, 3),
+        "benign_ceiling": round(ceiling, 3),
+        "benign_median": round(float(np.median(benign)), 3),
+        "sampling": dict(sampling),
+        "curve": [{"load": round(float(a), 3), "cost_pct": round(float(b), 2)}
+                  for a, b in zip(loads, costs)],
+    }
+    if impact is None:
+        out["alarm"] = None
+        out["headroom"] = None
+        out["note"] = "no swept level cost more than the noise floor; nothing to calibrate against"
+        return out
+    headroom = impact - ceiling
+    alarm = impact - alarm_margin * headroom
+    out["headroom"] = round(headroom, 3)
+    out["alarm"] = {
+        "level": round(float(alarm), 3),
+        "margin": alarm_margin,
+        "false_alarm_rate": round(float((benign >= alarm).mean()), 4),
+        "warns_before_cost": bool(alarm < impact),
+    }
+    if headroom <= 0:
+        out["note"] = ("benign traffic already reaches the load that costs latency: no alarm level "
+                       "separates them, and the screen cannot warn before the cost arrives")
+    elif headroom < 0.1:
+        out["note"] = (f"only {headroom:.2f}x of headroom between benign traffic and the cost: an alarm "
+                       "set for early warning will fire often")
+    return out
+
+
+def margin_sweep(impact: float, benign_loads: Sequence[float],
+                 level_loads: Mapping[float, Sequence[float]],
+                 margins: Sequence[float] = (0.0, 0.25, 0.5, 0.75, 1.0),
+                 fpr: float = 0.01) -> list[dict]:
+    """What each alarm margin buys and costs, on one deployment's own traffic.
+
+    ``level_loads`` maps a level's realised load to the window estimates the
+    screen reads there, so detection is measured rather than assumed. The
+    trade is the whole point: a margin near 1 warns while the skew is still
+    harmless and fires on benign traffic doing so; a margin of 0 never
+    false-alarms and never warns either, because by the time it speaks the cost
+    has already arrived.
+
+    ``caught_before_cost`` is the share of levels that are detected *and* still
+    below the impact threshold - the warnings that were actually worth having.
+    """
+    benign = np.asarray(benign_loads, dtype=float)
+    ceiling = float(np.quantile(benign, 1 - fpr))
+    rows = []
+    for margin in margins:
+        alarm = impact - margin * (impact - ceiling)
+        detected = {load: float((np.asarray(v, dtype=float) >= alarm).mean())
+                    for load, v in level_loads.items()}
+        harmless = [load for load in level_loads if load < impact]
+        rows.append({
+            "margin": margin,
+            "alarm": round(float(alarm), 3),
+            "false_alarm_rate": round(float((benign >= alarm).mean()), 4),
+            "detection": {round(float(k), 3): round(v, 3) for k, v in sorted(detected.items())},
+            "caught_before_cost": (round(float(np.mean([detected[load] for load in harmless])), 3)
+                                   if harmless else None),
+            "caught_once_costly": (round(float(np.mean([detected[load] for load in level_loads
+                                                        if load >= impact])), 3)
+                                   if any(load >= impact for load in level_loads) else None),
+        })
+    return rows
+
+
+@dataclass(frozen=True)
+class Screen:
+    """A calibrated screen: the sampling it runs at, and what it alarms on.
+
+    Built from a calibration artefact so a deployment's thresholds travel with
+    it, rather than being typed in from another deployment's. :meth:`decide`
+    applies the whole rule - window loads in, a decision out - so the alarm
+    level, the consecutive-window requirement and the impact threshold cannot
+    drift apart from each other.
+    """
+
+    alarm: float
+    sampler: WindowSampler
+    consecutive: int = 3
+    impact_threshold: float | None = None
+    headroom: float | None = None
+    source: str = ""
+
+    @classmethod
+    def from_calibration(cls, calibration: Mapping, consecutive: int = 3,
+                         draws: int = 600) -> "Screen":
+        if not calibration.get("alarm"):
+            raise ValueError(f"calibration {calibration.get('run', '?')} has no alarm level: "
+                             f"{calibration.get('note', 'its sweep never cost more than the noise floor')}")
+        s = calibration["sampling"]
+        return cls(alarm=float(calibration["alarm"]["level"]),
+                   sampler=WindowSampler(window=int(s["window"]), layers=s["layers"],
+                                         token_fraction=float(s["token_fraction"]),
+                                         draws=draws, layer_choice=s.get("layer_choice", "spaced")),
+                   consecutive=consecutive,
+                   impact_threshold=calibration.get("impact_threshold"),
+                   headroom=calibration.get("headroom"),
+                   source=str(calibration.get("run", "")))
+
+    def decide(self, window_loads: Sequence[float]) -> dict:
+        """Apply the rule to a sequence of window readings.
+
+        ``raised`` is the index of the window that completed the run of alarms,
+        not the first window over the level: one window over is not an alarm,
+        which is the whole point of ``consecutive``.
+        """
+        loads = np.asarray(window_loads, dtype=float)
+        flags = loads >= self.alarm
+        at = _first_run(flags, self.consecutive)
+        # The load that raised the alarm is the median of the run that raised it,
+        # not the highest window seen. A peak is one draw and benign traffic
+        # produces high ones: comparing a peak against the impact threshold says
+        # "costing" about traffic that is doing nothing of the sort.
+        raising = (float(np.median(loads[at + 1 - self.consecutive:at + 1]))
+                   if at is not None else None)
+        return {"raised": at,
+                "raised_after_requests": None if at is None else (at + 1) * self.sampler.window,
+                "windows_over": int(flags.sum()),
+                "raising_load": None if raising is None else round(raising, 3),
+                "peak_load": float(loads.max()) if loads.size else float("nan"),
+                # Whether what raised the alarm is in the range measured to cost
+                # time here - a different question from whether to alarm at all,
+                # and None when nothing was raised.
+                "above_impact_threshold": (None if raising is None or self.impact_threshold is None
+                                           else bool(raising >= self.impact_threshold))}
 
 
 def roc(positive: Sequence[float], negative: Sequence[float]) -> dict:

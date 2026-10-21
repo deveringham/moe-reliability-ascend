@@ -1,0 +1,84 @@
+# The submitted diff, not the prototype: does fix-eplb-honour-changed work on hardware?
+#
+# eplb-honour-changed (2026-10-19) measured the *mechanism* through our node
+# patch's MOE_EPLB_HONOR_CHANGED switch. That patch is not the branch we would
+# send: it keeps the decision behind an env var and inside the gate helper, it
+# guards with (bool, int, np.integer) rather than bool | int | np.bool_ |
+# np.integer, and it keeps upstream's `return` when no load is available
+# instead of routing it through keep-placement. So the submitted text had never
+# run on hardware.
+#
+# For this run the branch's eplb_worker.py replaces the installed one outright
+# - the gate patch is removed for the duration and restored afterwards with
+# scripts/apply_node_patch.py. The branch honours the flag unconditionally, so a
+# plain EPLB-on arm *is* the test; there is no second arm to run, because with
+# this code installed every arm would behave the same.
+#
+# What to read, from the server log rather than eplb_activity (the parser keys
+# on the node patch's "EPLB gate shut" string, which this code does not emit):
+#
+#   count of "Plan does not improve balance enough, keeping the current
+#   placement" - every rank logs its own verdict, so the count must be an exact
+#   multiple of 4 or the ranks disagreed, which is the condition that would
+#   deadlock the collectives after a divergent placement.
+#
+# The control is eplb-honour-changed's own eplb-on arm, same settings and
+# skew: 12 plans, busiest rank 1.676 -> 1.024x. This arm should plan 12 times,
+# decline some, and still converge.
+#
+# Cost: 2 points at ~4 min = ~10 NPU-minutes on NPUs 0-3.
+#
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_honour_pr.toml'
+#   ./nrun -t honpr 'uv run moe-reliability run configs/examples/eplb_honour_pr.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-honour-pr"
+description = "The fix-eplb-honour-changed branch itself, running on hardware: skip count and rank consistency."
+seed = 53
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+enable_eplb = true
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+eplb_record_map = false
+# The branch decides unconditionally, so our switch stays off.
+eplb_honor_changed = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0.5]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 1200
+repeats = 2
+arms = ["eplb-on"]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

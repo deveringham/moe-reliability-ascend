@@ -1,0 +1,23 @@
+axis,setting,levels,repeats,capture_fraction,calibrated,points,npu_minutes,noise_floor_pct,impact_threshold,threshold_error,alarm,false_alarm_rate,catches_costly,fires_on_harmless
+resolution,"2 levels: 0,2",2,3,1.0,True,6,19.8,0.95,1.211,-0.209,1.235,0.0433,1.0,0.467
+resolution,"3 levels: 0,0.125,2",3,3,1.0,True,9,29.5,0.95,1.328,-0.092,1.293,0.005,1.0,0.28
+resolution,"4 levels: 0,0.125,0.25,2",4,3,1.0,True,12,39.3,0.95,1.312,-0.108,1.285,0.005,1.0,0.305
+resolution,"5 levels: 0,0.125,0.25,0.375,2",5,3,1.0,True,15,49.1,0.95,1.238,-0.182,1.248,0.02,1.0,0.417
+resolution,"6 levels: 0,0.125,0.25,0.375,0.5,2",6,3,1.0,True,18,59.2,0.95,1.435,0.015,1.347,0.0,1.0,0.165
+resolution,"7 levels: 0,0.125,0.25,0.375,0.5,1,2",7,3,1.0,True,21,69.0,0.95,1.42,0.0,1.339,0.0,1.0,0.18
+range,stops at offset 0.125 (1.13x),2,3,1.0,False,,,,,,,,,
+range,stops at offset 0.25 (1.20x),3,3,1.0,False,,,,,,,,,
+range,stops at offset 0.375 (1.27x),4,3,1.0,True,12,39.2,0.95,1.238,-0.182,1.248,0.02,1.0,0.417
+range,stops at offset 0.5 (1.36x),5,3,1.0,False,,,,,,,,,
+range,stops at offset 1 (1.76x),6,3,1.0,True,18,59.1,0.95,1.42,0.0,1.339,0.0,1.0,0.18
+range,stops at offset 2 (2.62x),7,3,1.0,True,21,69.0,0.95,1.42,0.0,1.339,0.0,1.0,0.18
+repeats,1 repeat(s),7,1,1.0,True,7,23.0,0.0,1.149,-0.271,1.204,0.1467,1.0,0.591
+repeats,2 repeat(s),7,2,1.0,True,14,46.0,0.63,1.212,-0.208,1.235,0.0433,1.0,0.467
+repeats,3 repeat(s),7,3,1.0,True,21,69.0,0.95,1.42,0.0,1.339,0.0,1.0,0.18
+capture,2% of the capture,7,3,0.02,True,21,69.0,0.95,1.42,0.0,1.335,0.0,1.0,0.192
+capture,5% of the capture,7,3,0.05,True,21,69.0,0.95,1.42,0.0,1.34,0.0,1.0,0.177
+capture,10% of the capture,7,3,0.1,True,21,69.0,0.95,1.42,0.0,1.342,0.0,1.0,0.173
+capture,25% of the capture,7,3,0.25,True,21,69.0,0.95,1.42,0.0,1.343,0.0,1.0,0.172
+capture,50% of the capture,7,3,0.5,True,21,69.0,0.95,1.42,0.0,1.356,0.0,1.0,0.149
+capture,100% of the capture,7,3,1.0,True,21,69.0,0.95,1.42,0.0,1.339,0.0,1.0,0.18
+cheapest,"0,0.5,1 x 3",3,3,1.0,True,9,29.7,0.95,1.42,0.0,1.339,0.0,1.0,0.18

@@ -157,6 +157,8 @@ class Run:
             df = df.rename(columns={"ttft": "ttft_s", "tpot": "tpot_s", "total_time": "total_time_s"})
             df["ttft_ms"] = df["ttft_s"] * 1000.0
             df["tpot_ms"] = df["tpot_s"] * 1000.0
+            df.insert(0, "repeat", p.get("repeat", 1))
+            df.insert(0, "arm", p.get("arm"))
             df.insert(0, "sweep_value", p["value"])
             df.insert(0, "sweep_parameter", self.sweep_parameter)
             df.insert(0, "experiment", self.experiment)
@@ -237,8 +239,20 @@ class Run:
         rows = []
         for p in self.points:
             row: dict[str, Any] = dict(base)
-            row.update({"sweep_value": p["value"], "label": p["label"], "point_status": p.get("status")})
+            row.update({"sweep_value": p["value"], "arm": p.get("arm"), "repeat": p.get("repeat", 1),
+                        "label": p["label"], "point_status": p.get("status"), "exec_order": p.get("exec_order")})
             row.update(flat)
+            # An arm's own settings, over the run's: flat_config describes the run as written.
+            for item in _arm_overrides(self.config, p.get("arm")):
+                key, _, raw = item.partition("=")
+                row[key.strip().split(".", 1)[1]] = _toml_scalar(raw.strip())
+            activity = p.get("eplb_activity")
+            if activity:
+                hot = activity.get("hotness") or []
+                row.update({"eplb_plans": activity.get("plans"), "eplb_applied_cycles": activity.get("applied_cycles"),
+                            "eplb_stalled": activity.get("stalled"),
+                            "eplb_hotness_first": hot[0][0] if hot else None,
+                            "eplb_hotness_last": hot[-1][0] if hot else None})
             req = p.get("request_summary")
             if req is None and p.get("metrics_file"):
                 req = summarize_requests(self.request_records(p["label"]))
@@ -258,3 +272,22 @@ class Run:
             if p.get("trace_metrics_file"):
                 p["trace_summary"] = trace_scalars(self.trace_summary(p["label"]))
 
+
+def _arm_overrides(config: dict[str, Any], arm: str | None) -> list[str]:
+    """The ``section.key=value`` overrides of one benchmark arm, as the run recorded them."""
+    if not arm:
+        return []
+    for spec in (config.get("benchmark") or {}).get("arms", []):
+        name, _, rest = spec.partition(":")
+        if name.strip() == arm:
+            return [item.strip() for item in rest.split(";") if item.strip()]
+    return []
+
+
+def _toml_scalar(raw: str) -> Any:
+    import tomllib
+
+    try:
+        return tomllib.loads(f"v = {raw}")["v"]
+    except tomllib.TOMLDecodeError:
+        return raw

@@ -21,3 +21,6 @@ models/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# LibreOffice lock files, left while a CSV in docs/ is open
+.~lock.*#

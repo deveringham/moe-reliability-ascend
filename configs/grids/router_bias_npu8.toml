@@ -1,0 +1,41 @@
+# Does the cost of skew grow with expert-parallel width?
+#
+#   Mixtral, 8-way expert parallelism, 4 offsets x 3 repeats = 12 points
+#
+# Width is the one lever that has moved the straggler: for the same workloads the
+# busiest rank carries 1.04x the mean at 2 ranks, 1.13x at 4, 1.31x at 8, and an
+# extrapolated 1.63x at 16. Every latency dose-response we have is at 4 ranks, so
+# "does imbalance cost more at 8-way?" is currently unanswered - and it is the
+# direction in which the null is most likely to break.
+#
+# Mixtral at 8-way is the sharpest version: 8 experts over 8 ranks is one expert
+# per rank, so rank load *is* expert load with no averaging, and it is the same
+# configuration the 2026-10-02 natural-alpha sweeps used. It is also the model
+# with the cleanest 4-way dose-response, so the two widths are comparable.
+#
+# The offsets are not comparable across widths - at 4-way "rank:0" biases two of
+# eight experts, at 8-way just one - so the sweep is calibrated first and every
+# comparison is made on *realised* busiest-rank load, which is the x-axis of
+# every figure anyway. Tokens per expert per decode call is unchanged by width
+# (batch x top_k / experts), so the GEMM regime is held constant.
+#
+#   ./nrun -t npu8 'uv run moe-reliability run configs/examples/router_bias_calibration.toml \
+#       --set "hardware.n_npus=8" --set "hardware.visible_devices=\"0,1,2,3,4,5,6,7\"" \
+#       --set "model.model_id=\"mistralai/Mixtral-8x7B-Instruct-v0.1\"" ... ; \
+#       uv run moe-reliability grid configs/grids/router_bias_npu8.toml'
+
+[grid]
+name = "rbias-npu8"
+base = "../examples/router_bias_sweep.toml"
+
+[set]
+"model.model_id" = "mistralai/Mixtral-8x7B-Instruct-v0.1"
+"model.model_name" = "mixtral"
+"model.probe" = "mistral"
+"hardware.n_npus" = 8
+"hardware.visible_devices" = "0,1,2,3,4,5,6,7"
+"client.max_new_tokens" = 100
+"benchmark.n_samples" = 2000
+"benchmark.repeats" = 3
+"imbalance.bias_plugin_at_zero" = true
+"imbalance.imbalance_levels" = [0, 0.5, 1, 2]

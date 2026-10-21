@@ -1,0 +1,113 @@
+# E3, on a quiet node: where does EPLB's standing cost actually live?
+#
+# Pooled over three runs, at a 1.73x skew that costs DeepSeek nothing, EPLB on
+# costs +3.56% TPOT [+1.0, +6.1] and the shut gate +3.20% [+0.5, +5.9]. So a
+# threshold averts about 0.4 of 3.6 points and the rest is unattributed. The
+# open question is how much of it survives when EPLB is enabled but dormant: if
+# idle already carries most of it, an imbalance threshold saves only the
+# transfers and the RFC must say so instead of promising a latency gain.
+#
+# screen-vs-eplb (2026-10-19) put an eplb-idle arm on the node and could not
+# answer: it read +1.31% +-3.56 with both eplb-off and the shut gate inside its
+# interval, because a neighbour held NPUs 4-7 at loadavg 24-40 and DeepSeek's
+# eager decode is host-bound, so their CPU landed on our step time. Repeating
+# one arm varied by 2.0-3.8%. This run is the same comparison with the noise
+# removed by waiting for the node rather than by design: **do not start it while
+# another job is resident, and check host_before/host_after.foreign_npu_processes
+# on every point before believing the result.**
+#
+# The ladder, each arm adding one mechanism to the one above:
+#
+#   eplb-off    baseline
+#   eplb-idle   enabled, heat collection interval longer than the point: the
+#               per-step heat add_ and the dynamic-EPLB serving path. The cycle
+#               is heat + algo + num_moe_layers and the all-gather fires at
+#               heat - 1, so nothing gathers, plans or moves (one warm-up
+#               gather at start). Trips _warn_if_eplb_cannot_fire; that is the
+#               arm, not a mistake.
+#   eplb-gated  the patch at 2.43x, shut at this level: adds the all-gather,
+#               the planner and the loader's empty cycles, moves no weights.
+#   eplb-on     plain EPLB: adds the transfers. ~12 plans, all applied.
+#
+# There is no "gathers but never plans" rung. Making algorithm_execution_interval
+# huge does not give one: the gather fires once at heat - 1 and the counter
+# never resets, so the whole cycle happens a single time.
+#
+# One level, not two. Both quoted figures are at 1.73x, so every repeat goes
+# there rather than splitting power with 1.09x, which screen-vs-eplb found too
+# noisy to tell anything at either level anyway. Settings are eplb-gated's and
+# screen-vs-eplb's unchanged apart from the arms, levels and repeats, so the
+# deltas pool with them.
+#
+# Predictions: eplb-gated about +3%, eplb-on about +3.5%. eplb-idle is the
+# question - near eplb-off and the standing cost is the gather/planner/loader
+# cycle, which a dormant mode removes and a threshold partly averts; near
+# eplb-gated and merely enabling dynamic EPLB costs it, so a screen-gated design
+# has to start and stop EPLB rather than gate it, and the RFC's claim shrinks to
+# "skip pointless transfers".
+#
+# Cost: 1 level x 4 arms x 6 repeats = 24 points at ~6 min = ~2.5 NPU-hours on
+# NPUs 0-3, plus one validation pass.
+#
+#   ./nrun 'uv run python scripts/apply_node_patch.py --check'
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_standing_cost.toml'
+#   ./nrun -t standing 'uv run moe-reliability run configs/examples/eplb_standing_cost.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-standing"
+description = "E3 on a quiet node: EPLB off / idle / gated / on at a free skew, to attribute the standing cost."
+seed = 59
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; three arms turn it on.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+eplb_record_map = false
+eplb_min_imbalance = 0.0
+count_experts = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0.5]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 6
+arms = [
+    "eplb-off",
+    "eplb-idle: server.enable_eplb=true; server.eplb_heat_collection_interval=10000000",
+    "eplb-gated: server.enable_eplb=true; server.eplb_min_imbalance=2.43",
+    "eplb-on: server.enable_eplb=true",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

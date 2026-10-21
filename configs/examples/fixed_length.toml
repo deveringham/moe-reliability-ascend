@@ -1,0 +1,123 @@
+# Is DeepSeek's cost of skew the skew, or the shorter answers the skew causes?
+#
+# RESULT (20261014-115455, 24/24 points): the answers ending early. With length
+# held at 300, offset 2 (3.64x) costs -0.27% +-1.84 TPOT against eplb-fp2's
+# +30.86%, and EPLB-on there costs +3.83% +-1.02. The "prefill/decode mix" account
+# below was then withdrawn by length_held_100.toml: holding every request at the
+# shortened mean is free too; it is the scatter of early stops that costs. See
+# docs/router-bias-findings.md, "Fixed-length output".
+#
+# On DeepSeek-V2-Lite the one bias level that costs latency is also the one
+# level where the model writes shorter answers:
+#
+#   run (max tokens)        offset   tokens/request   prompt/generated   TPOT
+#   eplb-fp2 (300)          0-1      297-298          0.55               153-158 ms
+#                           2        205              0.79               202 ms
+#   rbias-controlled (100)  0-1      100              1.64               172-176 ms
+#                           2         84              1.95               213 ms
+#   rotating-skew (100)     2         99.3            ~1.64              175 ms
+#
+# Mixtral's lengths do not move at any level (286-291 of 300, 99.6-100 of 100).
+# Since 2026-10-14 we know the prefill/decode mix moves TPOT on its own, so on
+# DeepSeek four results rest on points where the mix moved with the skew: the
+# +22% / +31% cost at offset 2, the 2.43x impact threshold interpolated from it,
+# "DeepSeek pays only for a persistently hot rank" (the rotating arm kept its
+# length, the fixed one did not), and "EPLB balances 3.63x and recovers
+# nothing" (rebalancing cannot change the text). On Mixtral's scale a shift this
+# size explains a few percent, not 31%, so the confound probably does not carry
+# all of it, but nothing has separated the two.
+#
+# client.ignore_eos makes every request generate exactly max_new_tokens, so the
+# mix is the same at every level and arm, and validation captures the routing of
+# that same traffic. Everything else is eplb-fp2's, so each level pairs with a
+# published row: same bias target, same traffic, same EPLB settings.
+#
+# What it decides, on the eplb-off arm (paired by round against level 0):
+#   - offset 2 still costs ~+31%: the skew is the cost, the four results stand,
+#     and the eplb-on arm then measures EPLB against a clean target.
+#   - it costs much less: the cost was largely the text. The threshold, the
+#     rotating contrast and the EPLB null at 3.63x all need re-measuring with
+#     fixed lengths before they are quoted again.
+# Offset 1 (2.49x, free in eplb-fp2) checks that forcing length does not itself
+# create a cost below offset 2. Offset 0.5 is left out: it is free, has the
+# same lengths as 0 already, and the live-gate run measured it last.
+#
+# Warm-up is 1800 requests rather than 600, as in eplb_npu8.toml: with 600, EPLB's
+# converging plan at offset 2 landed ~35 s into the measured window. This only
+# matters to the eplb-on arm; the off arm's comparison across levels is the
+# primary result and does not depend on it.
+#
+# Forced length makes the text after the model's own end-of-sequence
+# meaningless, which does not matter here: the question is what the serving
+# stack does with a fixed amount of work, not what the model says.
+#
+# Cost: 3 levels x 2 arms x 4 repeats = 24 points at ~7.5 min (eplb-fp2's ~5.5
+# min, plus the longer warm-up, plus offset 2 now generating its full 300
+# tokens) = ~3 h, plus ~10 min of validation, on NPUs 0-3: ~12 NPU-hours.
+#
+#   ./nrun 'npu-smi info'
+#   ./nrun 'uv run moe-reliability validate configs/examples/fixed_length.toml'
+#   ./nrun -t fixedlen 'uv run moe-reliability run configs/examples/fixed_length.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "fixed-length"
+description = "eplb-fp2 with every request generating exactly 300 tokens, to separate the cost of skew from the shorter text it causes."
+seed = 49
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; the eplb-on arm turns it on.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+# Never on in an arm meant to rearrange: it makes EPLB record-only.
+eplb_record_map = false
+eplb_min_imbalance = 0.0
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+# The one change that matters: every request generates exactly 300 tokens.
+ignore_eos = true
+# Past EPLB's ~90 s convergence at offset 2 (see above).
+n_warmup_samples = 1800
+stream = true
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 1, 2]
+bias_plugin_at_zero = true
+# On: with forced length the generated tokens' routing is new traffic, so the
+# loads are read here rather than carried over from eplb-fp2.
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 4
+arms = [
+    "eplb-off",
+    "eplb-on: server.enable_eplb=true",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

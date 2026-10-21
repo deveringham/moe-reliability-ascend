@@ -37,6 +37,36 @@ COND = ("#2a78d6", "#eb6834", "#1baf7a")
 OFFSET_RAMP = ("#86b6ef", "#2a78d6", "#104281")  # ordinal, light -> dark
 RESULTS = "results"
 
+#: Bare mode draws the data and the axes and nothing that argues: no titles, no
+#: captions, no callouts. Series identity (legends, direct labels where a legend
+#: was dropped) and numeric value labels stay, because without them a reader
+#: cannot tell what a mark is or read it. Set by main(); figures/bare/ holds the
+#: result, for slides where the speaker does the explaining.
+BARE = False
+
+
+def explain(target, *args, **kwargs):
+    """An annotation that argues rather than labels: suppressed in bare mode."""
+    if not BARE:
+        target.annotate(*args, **kwargs)
+
+
+def caption(fig, *args, **kwargs):
+    """A figure-level note: suppressed in bare mode."""
+    if not BARE:
+        fig.text(*args, **kwargs)
+
+
+def frame(rect):
+    """Layout margins, reclaimed in bare mode where the title and caption are gone."""
+    return (0.0, 0.0, 1.0, 1.0) if BARE else rect
+
+
+def heading(fig, *args, **kwargs):
+    """A figure title: suppressed in bare mode."""
+    if not BARE:
+        fig.suptitle(*args, **kwargs)
+
 
 def manifests(pattern):
     for d in sorted(glob.glob(os.path.join(RESULTS, pattern))):
@@ -149,9 +179,9 @@ def style(ax, xlabel, ylabel, title=None, subtitle=None):
     ax.tick_params(colors=INK2, labelsize=9, length=0)
     ax.set_xlabel(xlabel, color=INK2, fontsize=9.5)
     ax.set_ylabel(ylabel, color=INK2, fontsize=9.5)
-    if title:
+    if title and not BARE:
         ax.set_title(title, color=INK, fontsize=12, fontweight="bold", loc="left", pad=30 if subtitle else 8)
-    if subtitle:
+    if subtitle and not BARE:
         ax.annotate(subtitle, xy=(0, 1.0), xytext=(0, 7), xycoords="axes fraction",
                     textcoords="offset points", color=INK2, fontsize=9.5, va="bottom")
 
@@ -166,7 +196,7 @@ def fig_dose_response(out, store):
           "4 NPUs, 100-token requests, 3 repeats per point. Error bars are the spread over repeats.")
     lo, hi = store["natural_band"]
     ax.axvspan(lo, hi, color="#f0efec", zorder=0)
-    ax.annotate("where natural\ntraffic sits", xy=((lo + hi) / 2, 0.995), xycoords=("data", "axes fraction"),
+    explain(ax, "where natural\ntraffic sits", xy=((lo + hi) / 2, 0.995), xycoords=("data", "axes fraction"),
                 ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
     rows = []
     for pattern, mode, ls, marker in ((EAGER[0], "eager", "-", "o"), (EAGER[1], "eager", "-", "o"),
@@ -185,12 +215,12 @@ def fig_dose_response(out, store):
     ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.14, 1.0))
     ax.set_xlim(1.0, 3.7)
     ax.set_ylim(132, 232)
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Every point carries the measurement plugin, the balanced one included. Levels that collapse "
              "routing onto fewer live experts are excluded.\nGraph mode's repeat spread is widest at its "
              "lowest levels, where a fast engine outruns the client: read its slope, not its per-level values.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.075, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.075, 1, 1)))
     fig.savefig(os.path.join(out, "dose_response.png"), dpi=200, facecolor=SURFACE)
     store["dose_response"] = rows
 
@@ -208,6 +238,11 @@ def fig_instrument(out, store):
         for p in m["points"]:
             runs.setdefault((model, flag, float(p["value"])), []).append(p["request_summary"]["tpot_ms_mean"])
 
+    cal = calibration()
+    # The legend names the realised load of the skewed arm, which the calibration
+    # measures: typing it would let the legend drift from the experiment.
+    skew_label = "skewed " + " / ".join(
+        f"{cal[m][2.0][0]:.1f}x" for m in ("deepseek-v2", "mixtral") if 2.0 in cal.get(m, {}))
     fig, ax = plt.subplots(figsize=(9.0, 4.6), facecolor=SURFACE)
     style(ax, "", "Time per output token (ms)",
           "Part of the measured cost was our own measurement plugin",
@@ -224,7 +259,7 @@ def fig_instrument(out, store):
             for bi, (v, colour) in enumerate(((lo, COND[0]), (hi, COND[1]))):
                 x = base + (bi - 0.5) * inner
                 ax.bar(x, v.mean(), width, color=colour, zorder=3,
-                       label=("balanced" if bi == 0 else "skewed 3.5x / 2.6x") if (mi, fi) == (0, 0) else None)
+                       label=(("balanced" if bi == 0 else skew_label) if (mi, fi) == (0, 0) else None))
                 ax.errorbar(x, v.mean(), yerr=v.std(ddof=1), color=INK2, lw=1, capsize=3, zorder=4)
                 ax.annotate(f"{v.mean():.0f}", xy=(x, v.mean()), xytext=(0, 8), textcoords="offset points",
                             ha="center", color=INK, fontsize=9.5, fontweight="bold", zorder=5)
@@ -247,14 +282,14 @@ def fig_instrument(out, store):
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, ncol=2, loc="lower center",
               bbox_to_anchor=(0.5, -0.36), columnspacing=2.2)
     d = {(r["model"], r["method"]): r["delta_ms"] for r in rows}
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Installing the plugin at the balanced point too cuts DeepSeek's measured cost from "
              f"{d[('deepseek-v2', 'as first measured')]:+.1f} to {d[('deepseek-v2', 'with the control')]:+.1f} ms; "
              f"Mixtral moves from {d[('mixtral', 'as first measured')]:+.1f} to "
              f"{d[('mixtral', 'with the control')]:+.1f},\nwhich is within the 1.5-2.2% drift between runs "
              "that the repeated identical points measure. So the plugin costs DeepSeek time and Mixtral none.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.1, 1, 1)))
     fig.savefig(os.path.join(out, "instrument_cost.png"), dpi=200, facecolor=SURFACE)
     store["instrument"] = rows
 
@@ -270,7 +305,7 @@ def step_table(run_dir, label):
         i, s = ranks.index(int(r["rank"])), int(r["step"])
         wall[i, s] = float(r["wall_us"])
         if i == 0:
-            reqs[s], tok[s] = int(r["reqs"]) - 1, int(r["tokens"])
+            reqs[s], tok[s] = int(r["reqs"]), int(r["tokens"])
     return reqs, tok, wall.mean(0) / 1e3
 
 
@@ -308,23 +343,23 @@ def fig_steps(out, store):
                       [b[2] for b in BINS] + ["2500+\nprefill"], fontsize=8.5)
         ax.tick_params(axis="x", labelcolor=INK2)
         ax.axvline(3.6, color=GRID, lw=1)
-        ax.annotate("decode-only steps, by batch size", xy=(1.5, 0.96), xycoords=("data", "axes fraction"),
+        explain(ax, "decode-only steps, by batch size", xy=(1.5, 0.96), xycoords=("data", "axes fraction"),
                     ha="center", color=INK3, fontsize=8.5)
-        ax.annotate("steps carrying\nprefill", xy=(4.22, 0.99), xycoords=("data", "axes fraction"),
+        explain(ax, "steps carrying\nprefill", xy=(4.22, 0.99), xycoords=("data", "axes fraction"),
                     ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
     axes[0].legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
-    fig.suptitle("A saturated decode step does not lengthen under imbalance",
+    heading(fig, "A saturated decode step does not lengthen under imbalance",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.915,
+    caption(fig, 0.008, 0.915,
              "Eager mode, 100-token requests. Small numbers above each bar are the steps it averages; "
              "cells with fewer than 8 steps are omitted.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "At full batch (480-512) the step is the same length at every offset on both models - so the "
              "hot rank's extra work is absorbed, not passed on.\nThe cost appears elsewhere: in "
              "below-full-batch decode steps on DeepSeek, and in prefill-carrying steps on Mixtral.",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.07, 1, 0.9))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.9)))
     fig.savefig(os.path.join(out, "step_level.png"), dpi=200, facecolor=SURFACE)
     store["steps"] = rows
 
@@ -356,15 +391,15 @@ def fig_calibration(out, store):
             rows.append({"model": model, "offset": x, "load": round(load, 3), "live_experts": live})
     lo, hi = store["natural_band"]
     ax.axhspan(lo, hi, color="#f0efec", zorder=0)
-    ax.annotate("natural traffic sits here", xy=(4.05, (lo + hi) / 2), ha="right", va="center",
+    explain(ax, "natural traffic sits here", xy=(4.05, (lo + hi) / 2), ha="right", va="center",
                 color=INK3, fontsize=8.5)
     ax.set_ylim(0.85, 4.45)
     ax.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.03, 0.99))
-    fig.text(0.012, 0.015,
+    caption(fig, 0.012, 0.015,
              "Hollow points also collapse routing onto fewer live experts, so they vary the expert\n"
              "count as well as the skew: " + "; ".join(collapsed) + ".",
              color=INK3, fontsize=8, va="bottom")
-    fig.tight_layout(rect=(0, 0.1, 1, 1))
+    fig.tight_layout(rect=frame((0, 0.1, 1, 1)))
     fig.savefig(os.path.join(out, "calibration.png"), dpi=200, facecolor=SURFACE)
     store["calibration"] = rows
 
@@ -392,6 +427,22 @@ def natural(store):
     store["natural_detail"] = detail
 
 
+def _impact_caption(rows):
+    """The disagreement between DeepSeek's two eager sweeps, read off the plotted points."""
+    pair = [r for r in rows if r["model"] == "deepseek-v2" and r.get("mode") != "graph"]
+    if len(pair) < 2:
+        return "Levels that collapse routing onto fewer live experts are excluded."
+    first, second = (r for r in sorted(pair, key=lambda r: r.get("run") == "second"))
+    shared = sorted(set(first["load"]) & set(second["load"]))
+    if not shared:
+        return "DeepSeek's two eager sweeps cover different loads."
+    at = max(shared, key=lambda v: v if v < 3 else 0)
+    a = first["tpot_pct"][first["load"].index(at)]
+    b = second["tpot_pct"][second["load"].index(at)]
+    return (f"DeepSeek's two eager sweeps disagree at {at:.2f}x: one reads {a:+.0f}%, the other {b:+.0f}%. "
+            "Where its cost begins is unresolved;\nMixtral's rise reproduces.")
+
+
 def fig_impact_map(out, store):
     """What it costs, against where natural traffic falls, on one load axis."""
     cal = calibration()
@@ -407,9 +458,9 @@ def fig_impact_map(out, store):
         ax.axvspan(lo, hi, color="#f0efec", zorder=0)
     top.axhspan(-DRIFT_PCT, DRIFT_PCT, color="#f0efec", zorder=0)
     top.axhline(0, color=GRID, lw=1, zorder=1)
-    top.annotate(f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(3.68, DRIFT_PCT), xytext=(0, 4),
+    explain(top, f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(3.68, DRIFT_PCT), xytext=(0, 4),
                  textcoords="offset points", ha="right", va="bottom", color=INK3, fontsize=8.5)
-    top.annotate("natural\ntraffic", xy=((lo + hi) / 2, 0.98), xycoords=("data", "axes fraction"),
+    explain(top, "natural\ntraffic", xy=((lo + hi) / 2, 0.98), xycoords=("data", "axes fraction"),
                  ha="center", va="top", color=INK3, fontsize=8.5, linespacing=1.3)
 
     rows = []
@@ -427,7 +478,7 @@ def fig_impact_map(out, store):
         if first is not None and model not in EAGER_SECOND:
             # Placed in the clear space beside each curve, with a leader to the point.
             spot = {"mixtral": (1.42, 12.5, "bottom"), "deepseek-v2": (2.9, 9.5, "top")}[model]
-            top.annotate(f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
+            explain(top, f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}: first cost beyond drift,\n"
                          f"{y[first]:+.1f}% at {x[first]:.2f}x",
                          xy=(x[first], y[first]), xytext=spot[:2], ha="left", va=spot[2],
                          color=INK2, fontsize=8.5, linespacing=1.3,
@@ -461,11 +512,11 @@ def fig_impact_map(out, store):
         if len(crossings) < 2:
             continue
         lo_x, hi_x = min(crossings), max(crossings)
-        top.annotate(f"{MODEL_LABEL[model].split('-')[0]}: cost begins somewhere in\n"
+        explain(top, f"{MODEL_LABEL[model].split('-')[0]}: cost begins somewhere in\n"
                      f"{lo_x:.1f}x-{hi_x:.1f}x; the two sweeps disagree",
                      xy=(lo_x - 0.05, 27.2), ha="left", va="bottom",
                      color=INK2, fontsize=8.5, linespacing=1.3)
-        top.annotate("", xy=(lo_x, 26.4), xytext=(hi_x, 26.4),
+        explain(top, "", xy=(lo_x, 26.4), xytext=(hi_x, 26.4),
                      arrowprops={"arrowstyle": "|-|,widthA=0.4,widthB=0.4", "color": INK3, "lw": 0.9})
 
     top.legend(frameon=False, fontsize=9.5, labelcolor=INK2, loc="upper left", bbox_to_anchor=(0.12, 0.98))
@@ -484,18 +535,18 @@ def fig_impact_map(out, store):
     bot.tick_params(axis="y", labelcolor=INK2)
     bot.grid(False)
     bot.set_ylim(-0.7, len(nat) + 0.2)
-    bot.annotate(f"natural traffic peaks at {hi:.2f}x", xy=(hi, len(nat) - 0.4),
+    explain(bot, f"natural traffic peaks at {hi:.2f}x", xy=(hi, len(nat) - 0.4),
                  xytext=(10, 0), textcoords="offset points", ha="left", va="center", color=INK2, fontsize=8.5)
     bot.set_xlim(1.0, 3.7)
-    fig.text(0.012, 0.012,
+    caption(fig, 0.012, 0.012,
              "Load: the busiest rank's share of token-expert assignments in each MoE layer, averaged over layers; "
              "4-way contiguous placement.\nNatural ranges: single prompts and random 200-prompt mixes p1-p99, "
              "one-subject windows min-max; dot = median. Levels that collapse routing are excluded.\n"
-             "DeepSeek's two eager sweeps disagree between 2.3x and 3.4x: the filled one reads +1% at 2.35x, "
-             "the hollow one +7%.\nWhere its cost begins is unresolved; Mixtral's rise from 1.3x reproduces.",
+             + _impact_caption(rows),
              color=INK3, fontsize=7.5, va="bottom", linespacing=1.4)
     # Explicit margins: tight_layout cannot place shared axes with long tick labels.
-    fig.subplots_adjust(left=0.215, right=0.975, top=0.875, bottom=0.165)
+    fig.subplots_adjust(left=0.215, right=0.975, top=0.995 if BARE else 0.875,
+                        bottom=0.075 if BARE else 0.165)
     fig.savefig(os.path.join(out, "impact_map.png"), dpi=200, facecolor=SURFACE)
     store["impact_map"] = rows
 
@@ -512,6 +563,28 @@ def per_layer_loads(pattern):
             f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
             out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
     return out
+
+
+def _rotating_caption(rows):
+    """Mixtral's matched-load pairs and DeepSeek's gap, read off the plotted points."""
+    def series(model, skew):
+        return next((r for r in rows if r["model"] == model and r["skew"] == skew), None)
+
+    pairs = []
+    rot, fixed = series("mixtral", "rotating"), series("mixtral", "one fixed rank")
+    if rot and fixed:
+        for i, load in enumerate(rot["load"]):
+            j = min(range(len(fixed["load"])), key=lambda k: abs(fixed["load"][k] - load))
+            if abs(fixed["load"][j] - load) < 0.05 and load > 1.5:
+                pairs.append(f"{rot['tpot_ms'][i]:.1f} against {fixed['tpot_ms'][j]:.1f}")
+    ds_rot, ds_fixed = series("deepseek-v2", "rotating"), series("deepseek-v2", "one fixed rank")
+    gap = ""
+    if ds_rot and ds_fixed:
+        gap = (f"\nwhile DeepSeek stays at {ds_rot['tpot_ms'][-1]:.0f} ms when the skew rotates and reaches "
+               f"{ds_fixed['tpot_ms'][-1]:.0f} ms when it does not")
+    lead = ("At matched per-layer load Mixtral lands on the same millisecond either way ("
+            + "; ".join(pairs) + ")," if pairs else "At matched per-layer load,")
+    return lead + gap + ". Natural traffic rotates, so this is a second reason DeepSeek's null holds."
 
 
 def fig_rotating(out, store):
@@ -549,18 +622,16 @@ def fig_rotating(out, store):
                          "tpot_ms": [round(v, 1) for v in y], "sd": [round(v, 1) for v in e]})
         ax.set_xlim(1.0, 3.9)
     axes[0].set_ylim(150, 220)
-    fig.suptitle("Mixtral does not care which rank is hot; DeepSeek only pays when one always is",
+    heading(fig, "Mixtral does not care which rank is hot; DeepSeek only pays when one always is",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Rotating biases rank (layer mod 4), so each layer is skewed as hard as a fixed target makes it "
              "but no rank is hot throughout.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
-             "At matched per-layer load Mixtral lands on the same millisecond either way (176.4 against 176.6; "
-             "193.2 against 193.9), while DeepSeek\nstays flat when the skew rotates and rises 22% when it does "
-             "not. Natural traffic rotates, so this is a second reason DeepSeek's null holds.",
+    caption(fig, 0.008, 0.015,
+             _rotating_caption(rows),
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "rotating_skew.png"), dpi=200, facecolor=SURFACE)
     store["rotating"] = rows
 
@@ -644,21 +715,174 @@ def fig_statistic(out, store):
     rows["routing"] = [{"condition": c[0].replace("\n", " "), "per_layer": round(c[1], 3),
                         "pooled": round(c[2], 3)} for c in conditions]
 
-    fig.suptitle("Summing before you take the maximum hides imbalance",
+    heading(fig, "Summing before you take the maximum hides imbalance",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Both panels measure the same routing two ways. Mixtral 8x7B; the right-hand panel is the "
              "strongest injected skew that keeps every expert live.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "Left: a step runs its layers in sequence, so what it waits for is the sum over calls of the "
              "maximum over ranks. Summing each rank first lets a\nbusiest rank that changes between layers "
              "cancel. Right: the same cancellation in the router's counters - and for a skew that rotates "
-             "between layers,\nthe pooled form reads 1.03x, which is what benign traffic reads.",
+             "between layers,\nthe pooled form reads "
+             + (f"{rows['routing'][-1]['pooled']:.2f}x" if rows.get("routing") else "near 1.0x")
+             + ", which is what benign traffic reads.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.08, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.08, 1, 0.89)))
     fig.savefig(os.path.join(out, "statistic.png"), dpi=200, facecolor=SURFACE)
     store["statistic"] = rows
+
+
+def top_level_cost(pattern, loads=None, live_only=True, model=None):
+    """Cost of the strongest clean skew in one run: (load, % over balanced, sd %).
+
+    ``loads`` maps level to realised busiest-rank load; without it the shared
+    calibration is used. Levels where routing collapses onto fewer live experts
+    are dropped, since they vary the expert count as well as the skew.
+    """
+    runs = list(manifests(pattern))
+    if not runs:
+        return None
+    model = model or os.path.basename(runs[0][0]).split("_")[2]
+    _, by = sweep(pattern)
+    if loads is None:
+        cal = calibration()
+        full = max(n for _, n in cal[model].values())
+        loads = {lv: cal[model][lv][0] for lv in by
+                 if lv in cal[model] and (not live_only or cal[model][lv][1] == full)}
+    levels = [lv for lv in sorted(by) if lv in loads]
+    if len(levels) < 2:
+        return None
+    base = float(np.mean(by[levels[0]]))
+    top_level = max(levels, key=lambda lv: loads[lv])
+    top = float(np.mean(by[top_level]))
+
+    def spread(values):
+        return float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+
+    # The ratio's uncertainty comes from both arms, and for graph mode the
+    # balanced arm is the noisy one: quoting only the skewed arm's spread would
+    # make a +43% reading look precise to a third of a point when it is not.
+    rel = np.hypot(spread(by[top_level]) / top, spread(by[levels[0]]) / base)
+    return loads[top_level], 100 * (top / base - 1), 100 * rel * (top / base), base, top
+
+
+def fig_regimes(out, store):
+    """Which serving regimes turn expert imbalance into latency, and which do not."""
+    rows: list = []
+
+    def add(group, label, model, result, note=""):
+        if result:
+            rows.append({"group": group, "label": label, "model": model, "load": round(result[0], 2),
+                         "pct": round(result[1], 1), "sd": round(result[2], 1),
+                         "balanced_ms": round(result[3], 1), "skewed_ms": round(result[4], 1),
+                         "note": note})
+
+    # Natural traffic is the null, and the content of the row is its error bar:
+    # the balanced arm of each sweep, repeated three times, is the noise floor
+    # that any claimed cost has to clear. The two models differ threefold here,
+    # so one shared bar would misreport both.
+    for pattern, model in ((EAGER[0], "deepseek-v2"), (EAGER[1], "mixtral")):
+        runs = list(manifests(pattern))
+        if not runs:
+            continue
+        _, by = sweep(pattern)
+        arm = by.get(0.0)
+        if not arm or len(arm) < 2:
+            continue
+        mean = float(np.mean(arm))
+        add("Natural traffic (the noise floor)",
+            f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}, English, 4 ranks", model,
+            (1.15, 0.0, 100 * float(np.std(arm, ddof=1)) / mean, mean, mean),
+            "balanced arm, 3 repeats")
+    for pattern, model in (("*language-latency-007", "mixtral"),):
+        r = top_level_cost(pattern, loads={0.0: 1.47})  # unbiased; load is the corpus's own
+        add("Natural traffic", "Yoruba, 4 ranks", model, r)
+
+    add("Injected skew, eager", "Mixtral, one hot rank", "mixtral", top_level_cost(EAGER[1]))
+    add("Injected skew, eager", "DeepSeek, one hot rank", "deepseek-v2", top_level_cost(EAGER[0]))
+    add("Injected skew, graph", "Mixtral, one hot rank", "mixtral", top_level_cost(GRAPH[1]))
+    add("Injected skew, graph", "DeepSeek, one hot rank", "deepseek-v2", top_level_cost(GRAPH[0]))
+
+    for model in ("mixtral", "deepseek-v2"):
+        loads = per_layer_loads(ROTATING[model]) if list(manifests(ROTATING[model])) else None
+        add("Skew that rotates", f"{MODEL_LABEL[model].split('-')[0].split(' ')[0]}, hot rank per layer",
+            model, top_level_cost(ROTATING[model], loads=loads, model=model))
+
+    for pattern, label in (("*decode-ridge-000", "batch 512 (128 tok/expert)"),
+                           ("*decode-ridge-001", "batch 1024 (256)"),
+                           ("*decode-ridge-002", "batch 2048 (512)")):
+        add("Decode batch size", label, "mixtral", top_level_cost(pattern))
+
+    add("Expert-parallel width", "Mixtral, 8 ranks", "mixtral",
+        top_level_cost("*rbias-npu8-000", loads=_npu8_loads()))
+
+    if not rows:
+        return
+    fig, ax = plt.subplots(figsize=(9.6, 0.42 * len(rows) + 2.6), facecolor=SURFACE)
+    style(ax, "Change in time per output token against the balanced arm (%)", "",
+          "Where expert imbalance turns into latency, and where it does not",
+          "Each bar is the strongest skew that keeps every expert live, measured against that run's own "
+          "balanced point.")
+    ax.axvspan(-DRIFT_PCT, DRIFT_PCT, color="#f0efec", zorder=0)
+    y, ticks, labels = 0.0, [], []
+    last = None
+    for r in rows:
+        if r["group"] != last:
+            if last is not None:
+                y += 0.6
+            ax.annotate(r["group"], xy=(0, y + 0.42), xycoords=("axes fraction", "data"), xytext=(2, 0),
+                        textcoords="offset points", ha="left", va="center", color=INK, fontsize=9,
+                        fontweight="bold")
+            y += 0.95
+            last = r["group"]
+        ax.barh(y, r["pct"], 0.62, color=MODEL_COLOUR[r["model"]], zorder=3)
+        if r["sd"]:
+            ax.errorbar(r["pct"], y, xerr=r["sd"], color=INK2, lw=1, capsize=3, zorder=4)
+        # The millisecond pair matters: graph mode is faster at rest, so the same
+        # absolute cost is a larger percentage there.
+        detail = f"  at {r['load']:.2f}x" if r["load"] > 1.2 else ""
+        if r["balanced_ms"] != r["skewed_ms"]:
+            detail += f"   {r['balanced_ms']:.0f}\u2192{r['skewed_ms']:.0f} ms"
+        elif r["sd"]:
+            detail = f"  \u00b1{r['sd']:.1f}% over repeats"
+        ax.annotate(f"{r['pct']:+.1f}%" + detail,
+                    xy=(r["pct"] + (r["sd"] if r["pct"] >= 0 else -r["sd"]), y),
+                    xytext=(8 if r["pct"] >= 0 else -8, 0), textcoords="offset points",
+                    ha="left" if r["pct"] >= 0 else "right", va="center", color=INK2, fontsize=8.5)
+        ticks.append(y)
+        labels.append(r["label"])
+        y += 1.0
+    ax.set_yticks(ticks, labels, fontsize=9)
+    ax.tick_params(axis="y", labelcolor=INK2)
+    ax.invert_yaxis()
+    ax.grid(axis="y", visible=False)
+    ax.grid(axis="x", color=GRID, lw=0.8)
+    ax.axvline(0, color=GRID, lw=1)
+    ax.set_xlim(min(-6, min(r["pct"] for r in rows) - 8), max(r["pct"] for r in rows) + 34)
+    explain(ax, f"run-to-run drift (\u00b1{DRIFT_PCT:g}%)", xy=(DRIFT_PCT, 0.0),
+                xycoords=("data", "axes fraction"), xytext=(5, 6), textcoords="offset points",
+                ha="left", va="bottom", color=INK3, fontsize=8.5)
+    caption(fig, 0.012, 0.012,
+             "Blue is DeepSeek-V2-Lite, orange Mixtral 8x7B. 4 ranks and eager mode unless the row says "
+             "otherwise. Error bars carry the spread of both\narms, which is why graph mode - fast at rest, "
+             "and noisiest there - is the least precise row despite the largest percentage.",
+             color=INK3, fontsize=8, va="bottom")
+    fig.tight_layout(rect=frame((0, 0.05, 1, 1)))
+    fig.savefig(os.path.join(out, "regimes.png"), dpi=200, facecolor=SURFACE)
+    store["regimes"] = rows
+
+
+def _npu8_loads():
+    """Realised per-layer load by level from the 8-way calibration, if it has run."""
+    out = {}
+    for d, m in manifests("*rbias-npu8-calibration"):
+        for p in m["points"]:
+            if p.get("validation_file"):
+                f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+                out[float(p["value"])] = float(np.mean(f["rank_max_over_mean_per_layer"]))
+    return out or None
 
 
 def fig_detection(out, store):
@@ -681,7 +905,7 @@ def fig_detection(out, store):
         threshold = impact.get(model)
         if threshold:
             ax.axvspan(threshold, 4.0, color="#f0efec", zorder=0)
-            ax.annotate("costs latency", xy=(threshold + 0.06, 0.985), xycoords=("data", "axes fraction"),
+            explain(ax, "costs latency", xy=(threshold + 0.06, 0.985), xycoords=("data", "axes fraction"),
                         ha="left", va="top", color=INK3, fontsize=8.5)
         for window, layers, token_fraction, ls in shown:
             match = [t for t in row["settings"] if (t["window"], t["layers"], t["token_fraction"])
@@ -701,23 +925,836 @@ def fig_detection(out, store):
         ax.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="lower right",
                   borderpad=0.2, labelspacing=0.35)
     axes[0].set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
-    fig.suptitle("A window of 8 requests catches every costly skew, counting ~1% of routing",
+    heading(fig, "A window of 8 requests catches every costly skew, counting ~1% of routing",
                  color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
-    fig.text(0.008, 0.905,
+    caption(fig, 0.008, 0.905,
              "Alarm set at a 1% false-alarm rate on each capture's own balanced arm. 1200 prompts per "
              "level over six workload families.",
              color=INK2, fontsize=9.5)
-    fig.text(0.008, 0.015,
+    caption(fig, 0.008, 0.015,
              "Counting a tenth of the tokens in a single request is the one setting that fails: one prompt "
              "is itself skewed, so the alarm has to sit high.\nWindow length buys more than counting more - "
              "8 requests at 1.3% beats 1 request at 100%.",
              color=INK3, fontsize=8, va="bottom", linespacing=1.4)
-    fig.tight_layout(rect=(0, 0.07, 1, 0.89))
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
     fig.savefig(os.path.join(out, "detection.png"), dpi=200, facecolor=SURFACE)
     store["detection"] = rows
 
 
-def main(out="docs/figures"):
+def fig_detection_cost(out, store):
+    """What the detector buys, against what the whole pipeline costs to run."""
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    data = json.load(open(os.path.join("docs", "detection.json")))
+    if not data.get("timing"):
+        return
+    # A confirmation pass was measured at +15-19% on DeepSeek and +1.6-6.8% on
+    # Mixtral; the midpoint prices the amortised cost, and the screen itself is
+    # still a placeholder.
+    CONFIRM_PCT, CONFIRM_REQS, SCREEN_PCT = 12.0, 100, 0.2
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 5.0), facecolor=SURFACE)
+    rows = []
+    style(left, "Amortised cost of running the detector (% of serving time)",
+          "Skews caught, at the lowest costly level")
+    left.set_title("What it buys, and what it costs", color=INK, fontsize=11, fontweight="bold", loc="left")
+    for model, row in data["timing"].items():
+        if "skipped" in row:
+            continue
+        by_window: dict = {}
+        for r in row["settings"]:
+            cost = D.pipeline_overhead(SCREEN_PCT, r["requests_to_false_alarm_p50"], CONFIRM_PCT,
+                                       CONFIRM_REQS, stage2_rejects=0.0)["total_pct"]
+            by_window.setdefault(r["window"], []).append((r["consecutive"], cost, r["detected_fraction"]))
+            rows.append({"model": model, "window": r["window"], "k": r["consecutive"],
+                         "cost_pct": cost, "detected": r["detected_fraction"],
+                         "delay_requests": r["delay_requests_p50"]})
+        for window, pts in sorted(by_window.items()):
+            pts.sort()
+            xs = [p[1] for p in pts]
+            ys = [p[2] for p in pts]
+            # One line per window; walking it is raising k, which moves up and left.
+            left.plot(xs, ys, "-o", ms=6, lw=1.6, color=MODEL_COLOUR[model], mec=SURFACE, mew=1.4,
+                      zorder=3, alpha=0.95 if window == 8 else 0.45,
+                      label=MODEL_LABEL[model] if window == 8 else None)
+            if window == 8:
+                for k, x, y in pts:
+                    left.annotate(f"k={k}", xy=(x, y), xytext=(0, -15 if k == 1 else 10),
+                                  textcoords="offset points", ha="center", color=INK2, fontsize=8.5,
+                                  fontweight="bold" if k == 3 else "normal")
+    left.set_xscale("log")
+    left.set_xticks([0.2, 0.5, 1, 2, 5], ["0.2%", "0.5%", "1%", "2%", "5%"])
+    left.minorticks_off()
+    left.set_ylim(0.15, 1.12)
+    left.set_yticks([0.25, 0.5, 0.75, 1.0], ["25%", "50%", "75%", "100%"])
+    left.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="lower left")
+    explain(left, "the solid line is an 8-request window;\nfainter lines are 32 and 128",
+                  xy=(0.97, 0.10), xycoords="axes fraction", ha="right", va="bottom",
+                  color=INK3, fontsize=8.5, linespacing=1.3)
+
+    # Right: whether the screen's own sampling can place a layer-local skew.
+    loc = (data.get("localisation") or {})
+    run = next(iter(loc.values()), None)
+    style(right, "", "Detection of a skew confined to 6 of 26 layers")
+    right.set_title("Fixed layers have a blind spot", color=INK, fontsize=11, fontweight="bold", loc="left")
+    sampling = (run or {}).get("sampling") or []
+    if sampling:
+        labels, values, colours = [], [], []
+        for r in sampling:
+            how = "every layer" if r["layers_counted"] == r["of_layers"] else \
+                f"{r['layers_counted']} layers,\n{r['layer_choice']}"
+            labels.append(f"{how}\n{r['assignment_fraction']:.1%} counted")
+            values.append(r["detection_rate"])
+            colours.append(GRID if r["detection_rate"] < 0.1 else MODEL_COLOUR["deepseek-v2"])
+        right.bar(range(len(values)), values, 0.62, color=colours, zorder=3)
+        for i, r in enumerate(sampling):
+            right.annotate(f"{r['detection_rate']:.2f}", xy=(i, r["detection_rate"]), xytext=(0, 4),
+                           textcoords="offset points", ha="center", color=INK, fontsize=9,
+                           fontweight="bold")
+            right.annotate(f"{r['biased_layers_reachable']}/{r['biased_layers']} reachable",
+                           xy=(i, 0.03), ha="center", va="bottom", color=INK2, fontsize=8)
+        right.set_xticks(range(len(labels)), labels, fontsize=8)
+        right.tick_params(axis="x", labelcolor=INK2)
+        right.set_ylim(0, 1.15)
+        right.set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
+    accum = (run or {}).get("accumulation") or []
+    if accum:
+        best = next((a for a in accum if a["recall"] >= 1.0 and a["precision"] >= 1.0), accum[-1])
+        explain(right, f"random layers also place it:\nrecall and precision {best['recall']:.0%} after "
+                       f"{best['requests']} requests", xy=(len(sampling) - 1, 1.12), ha="right", va="top",
+                color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold", linespacing=1.3)
+
+    heading(fig, "The detector: what it costs, and why the layers must be sampled at random",
+                 color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.905,
+             "Left: each point is one sampling setting; k is how many consecutive alarming windows are "
+             "required before raising one.",
+             color=INK2, fontsize=9.5)
+    caption(fig, 0.008, 0.015,
+             "Left: requiring three consecutive windows improves detection and cost at once, because a "
+             "screen that cries wolf keeps paying for confirmation.\nRight: a layer can only be flagged if "
+             "it is counted. Counting the same four layers every window misses a skew that falls between "
+             "them - for detection, not\nonly for localisation. Redrawing them each window costs the same "
+             "and, accumulated over windows, also says which layers are affected.",
+             color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.07, 1, 0.89)))
+    fig.savefig(os.path.join(out, "detection_cost.png"), dpi=200, facecolor=SURFACE)
+    store["detection_cost"] = rows
+
+
+BATCH_SWEEP = "*decode-ridge2-*"
+#: Mixtral routes top-2 of 8 experts, so a decode step's tokens per expert is
+#: batch x 2 / 8. The 910B3's GEMM ridge point is around 200 tokens per expert.
+TOP_K, N_EXPERTS, RIDGE = 2, 8, 200
+
+
+def achieved_batch(run_dir):
+    """The largest decode batch the engine actually ran, from its own log.
+
+    max_num_seqs is a cap, not a promise: sequences enter only as fast as prefill
+    admits them and leave after their generation, so the batch settles wherever
+    those balance. A point read at its configured batch rather than its achieved
+    one is not the measurement it claims to be.
+    """
+    path = os.path.join(run_dir, "logs", "run.log")
+    if not os.path.exists(path):
+        return None
+    seen = [int(n) for n in re.findall(r"Running: (\d+) reqs", open(path, errors="replace").read())]
+    return max(seen) if seen else None
+
+
+def fig_batch(out, store):
+    """Does the same skew cost more when a decode step carries more tokens per expert?"""
+    points = []
+    for d, m in manifests(BATCH_SWEEP):
+        by: dict[float, list[float]] = {}
+        for p in m["points"]:
+            if p.get("request_summary"):
+                by.setdefault(float(p["value"]), []).append(p["request_summary"]["tpot_ms_mean"])
+        batch = achieved_batch(d) or m["config"]["server"]["batch_size"]
+        if 0.0 not in by or len(by) < 2:
+            continue
+        hot = max(by)
+        base, skew = np.array(by[0.0]), np.array(by[hot])
+        rel = np.hypot(base.std(ddof=1) / base.mean(), skew.std(ddof=1) / skew.mean())
+        points.append({"configured": m["config"]["server"]["batch_size"], "achieved": batch,
+                       "tokens_per_expert": batch * TOP_K // N_EXPERTS,
+                       "balanced_ms": round(float(base.mean()), 1), "skewed_ms": round(float(skew.mean()), 1),
+                       "cost_pct": round(100 * (skew.mean() / base.mean() - 1), 2),
+                       "cost_sd_pct": round(100 * rel * skew.mean() / base.mean(), 2)})
+    if len(points) < 2:
+        return
+    points.sort(key=lambda r: r["tokens_per_expert"])
+
+    fig, ax = plt.subplots(figsize=(8.6, 5.0), facecolor=SURFACE)
+    style(ax, "Tokens per expert in a decode step", "Cost of the same injected skew (% of TPOT)",
+          "A bigger decode batch makes the same imbalance cost more",
+          "Mixtral 8x7B, 4 NPUs, skew held at 2.6x busiest rank. 3 repeats per point; the batch is the one "
+          "the engine reached, not the one it was asked for.")
+    x = [r["tokens_per_expert"] for r in points]
+    y = [r["cost_pct"] for r in points]
+    e = [r["cost_sd_pct"] for r in points]
+    if max(x) > RIDGE > min(x):
+        ax.axvspan(RIDGE, max(x) * 1.25, color="#f0efec", zorder=0)
+        explain(ax, "arithmetic-bound\n(above the GEMM ridge)", xy=(RIDGE * 1.05, 0.04),
+                xycoords=("data", "axes fraction"), ha="left", va="bottom", color=INK3, fontsize=8.5,
+                linespacing=1.3)
+    ax.errorbar(x, y, yerr=e, ls="-", marker="o", ms=7, lw=2, capsize=4, elinewidth=1,
+                color=MODEL_COLOUR["mixtral"], mec=SURFACE, mew=1.5, zorder=3)
+    for r in points:
+        ax.annotate(f"{r['achieved']} seqs", xy=(r["tokens_per_expert"], r["cost_pct"]), xytext=(0, 13),
+                    textcoords="offset points", ha="center", color=INK2, fontsize=8.5)
+    ax.set_xlim(0, max(x) * 1.25)
+    ax.set_ylim(0, max(np.array(y) + np.array(e)) * 1.3)
+    caption(fig, 0.012, 0.015,
+            f"The clean step is {x[0]} to {x[1]} tokens per expert, where the cost roughly doubles and the "
+            f"intervals do not overlap ({y[0]:+.1f}% against {y[1]:+.1f}%).\nMost of the growth happens "
+            "below the ridge rather than across it, so a bigger batch costing more is not simply the GEMM "
+            "becoming arithmetic-bound.\nThe largest point is the least certain: its balanced arm scatters "
+            f"{[r['cost_sd_pct'] for r in points][-1]:.0f} percentage points.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "batch_size.png"), dpi=200, facecolor=SURFACE)
+    store["batch_size"] = points
+
+
+NATURAL_BATCH = "*natural-batch-*"
+#: Realised busiest-rank load of the three levels the natural-range sweep uses.
+NATURAL_LEVELS = {0.0: 1.178, 0.25: 1.241, 0.5: 1.380}
+LANGUAGE_RUNS = "*language-latency-*"
+#: Per-layer busiest-rank load measured for each locale's own routing.
+LOCALE_LOAD = {"mmlu": 1.149, "mmmlu:DE_DE": 1.136, "mmmlu:ZH_CN": 1.210, "mmmlu:JA_JP": 1.225,
+               "mmmlu:AR_XY": 1.261, "mmmlu:HI_IN": 1.309, "mmmlu:SW_KE": 1.346, "mmmlu:YO_NG": 1.469}
+LOCALE_NAME = {"mmlu": "English", "mmmlu:DE_DE": "German", "mmmlu:ZH_CN": "Chinese",
+               "mmmlu:JA_JP": "Japanese", "mmmlu:AR_XY": "Arabic", "mmmlu:HI_IN": "Hindi",
+               "mmmlu:SW_KE": "Swahili", "mmmlu:YO_NG": "Yoruba"}
+
+
+def fig_natural_batch(out, store):
+    """Does imbalance at natural strength cost anything, and does batch size decide?"""
+    rows = []
+    for d, m in manifests(NATURAL_BATCH):
+        by: dict[float, list[float]] = {}
+        for p in m["points"]:
+            if p.get("request_summary"):
+                by.setdefault(float(p["value"]), []).append(p["request_summary"]["tpot_ms_mean"])
+        if len(by) < len(NATURAL_LEVELS) or any(len(v) < 2 for v in by.values()):
+            continue                       # a partial point cannot carry a slope
+        reached = achieved_batch(d) or m["config"]["server"]["batch_size"]
+        if reached < m["config"]["server"]["batch_size"] * 0.9:
+            continue                       # never got to the operating point it claims
+        levels = sorted(by)
+        x = np.array([NATURAL_LEVELS[lv] for lv in levels])
+        y = np.array([float(np.mean(by[lv])) for lv in levels])
+        design = np.c_[np.ones_like(x), x]
+        coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+        resid = y - design @ coef
+        se = np.sqrt(np.diag((resid @ resid / max(len(y) - 2, 1)) * np.linalg.inv(design.T @ design)))[1]
+        rows.append({"batch": reached, "slope_ms_per_load": round(float(coef[1]), 1),
+                     "se": round(float(se), 1), "tpot_ms": [round(float(v), 1) for v in y]})
+    if len(rows) < 2:
+        return
+    rows.sort(key=lambda r: r["batch"])
+
+    fig, ax = plt.subplots(figsize=(10.2, 5.0), facecolor=SURFACE)
+    style(ax, "Decode batch (sequences in flight)",
+          "Change in TPOT per +1x of busiest-rank load (ms)",
+          "At natural strength, imbalance costs nothing until the batch is large",
+          "Mixtral 8x7B, 4 NPUs. Slope fitted across 1.18x, 1.24x and 1.38x busiest rank, the range "
+          "ordinary traffic reaches; 3 repeats each.")
+    x = [r["batch"] for r in rows]
+    y = [r["slope_ms_per_load"] for r in rows]
+    e = [r["se"] for r in rows]
+    ax.axhline(0, color=INK3, lw=1.2, zorder=2)
+    ax.errorbar(x, y, yerr=e, ls="-", marker="o", ms=7, lw=2, capsize=4, elinewidth=1,
+                color=MODEL_COLOUR["mixtral"], mec=SURFACE, mew=1.5, zorder=3)
+    ax.set_xscale("log", base=2)
+    ax.set_xticks(x, [str(v) for v in x])
+    ax.minorticks_off()
+    explain(ax, "imbalance costs time", xy=(0.02, 0.96), xycoords="axes fraction", ha="left", va="top",
+            color=INK2, fontsize=9)
+    explain(ax, "concentrating tokens still pays for itself", xy=(0.30, 0.04), xycoords="axes fraction",
+            ha="left", va="bottom", color=INK2, fontsize=9)
+    caption(fig, 0.012, 0.015,
+            "The sign changes between 256 and 512 sequences, so the null this project reported is a "
+            "property of the operating point as well as of the stack.\nLarger batches are missing because "
+            "the benchmark client fails above ~1000 concurrent requests - 418 of 8192 timed out at 1024 - "
+            "not because the engine does.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "natural_batch.png"), dpi=200, facecolor=SURFACE)
+    store["natural_batch"] = rows
+
+
+def fig_language(out, store):
+    """How much of a locale's latency is its prompts, and how much is its routing?"""
+    rows = []
+    for d, m in manifests(LANGUAGE_RUNS):
+        w = m["config"]["benchmark"]["workload"]
+        t = [p["request_summary"]["tpot_ms_mean"] for p in m["points"] if p.get("request_summary")]
+        inp = [p["request_summary"]["input_tokens_mean"] for p in m["points"] if p.get("request_summary")]
+        if t and w in LOCALE_LOAD:
+            rows.append({"locale": w, "tpot_ms": float(np.mean(t)), "sd": float(np.std(t, ddof=1)),
+                         "input_tokens": float(np.mean(inp)), "load": LOCALE_LOAD[w]})
+    if len(rows) < 4:
+        return
+    y = np.array([r["tpot_ms"] for r in rows])
+    tok = np.array([r["input_tokens"] for r in rows])
+    load = np.array([r["load"] for r in rows])
+    design = np.c_[np.ones_like(y), tok, load]
+    coef, *_ = np.linalg.lstsq(design, y, rcond=None)
+    resid = y - design @ coef
+    se = np.sqrt(np.diag((resid @ resid / (len(y) - 3)) * np.linalg.inv(design.T @ design)))
+    base = min(rows, key=lambda r: r["tpot_ms"])
+    for r in rows:
+        r["from_length"] = (r["input_tokens"] - base["input_tokens"]) * coef[1]
+        r["from_routing"] = (r["load"] - base["load"]) * coef[2]
+    rows.sort(key=lambda r: r["tpot_ms"])
+
+    fig, ax = plt.subplots(figsize=(9.4, 5.0), facecolor=SURFACE)
+    style(ax, "", f"Time per output token above {LOCALE_NAME[base['locale']]} (ms)",
+          "Non-English traffic is slower, and routing is a real but minor part of why",
+          "Mixtral 8x7B, 4 NPUs, no injected skew: the same translated questions in eight locales, "
+          "3 repeats each.")
+    idx = np.arange(len(rows))
+    length = [r["from_length"] for r in rows]
+    routing = [r["from_routing"] for r in rows]
+    ax.bar(idx, length, 0.62, color=GRID, zorder=3, label="longer prompts")
+    ax.bar(idx, routing, 0.62, bottom=length, color=MODEL_COLOUR["mixtral"], zorder=3,
+           label="more concentrated routing")
+    ax.plot(idx, [r["tpot_ms"] - base["tpot_ms"] for r in rows], "o", ms=7, color=INK, mec=SURFACE,
+            mew=1.5, zorder=5, label="measured")
+    ax.set_xticks(idx, [f"{LOCALE_NAME[r['locale']]}\n{r['load']:.2f}x" for r in rows], fontsize=8.5)
+    ax.tick_params(axis="x", labelcolor=INK2)
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
+    caption(fig, 0.012, 0.015,
+            f"Split by a fit of TPOT on both: {coef[1]:+.2f} ms per input token (t={coef[1]/se[1]:.0f}) and "
+            f"{coef[2]:+.1f} ms per +1x busiest-rank load (t={coef[2]/se[2]:.1f}), residual {np.std(resid, ddof=3):.1f} ms.\n"
+            "Routing is significant but the minority: of Yoruba's "
+            f"{[r for r in rows if 'YO' in r['locale']][0]['tpot_ms'] - base['tpot_ms']:.0f} ms over English, "
+            f"about {[r for r in rows if 'YO' in r['locale']][0]['from_routing']:.0f} ms is routing. "
+            "Observational across 8 locales, not a controlled experiment.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 1)))
+    fig.savefig(os.path.join(out, "language.png"), dpi=200, facecolor=SURFACE)
+    store["language"] = {"rows": rows, "ms_per_token": round(float(coef[1]), 3),
+                         "ms_per_load": round(float(coef[2]), 2)}
+
+
+def fig_timeline(out, store):
+    """One run through the screen: what it reads, when it alarms, when it decides.
+
+    The stream is reconstructed from captured routing - balanced requests, then
+    skewed ones - because no run has yet served a skew that changes partway
+    through. It is the statistics of detection, not a live onset.
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    model, n_experts = "mixtral", 8
+    pools = {}
+    for d, m in manifests("*detection-capture"):
+        if os.path.basename(d).split("_")[2] != model or m.get("status") != "completed":
+            continue
+        for p in m["points"]:
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"]))) if p.get("validation_file") else {}
+            path = os.path.join(d, f.get("records_file") or "")
+            if f.get("records_file") and os.path.exists(path):
+                pools[float(p["value"])] = D.request_counts(
+                    [json.loads(line) for line in gzip.open(path, "rt")], n_experts)
+    threshold = (json.load(open(os.path.join("docs", "detection.json")))["impact"]
+                 .get(model, {}).get("impact_threshold"))
+    onset_level = min((lv for lv in pools if lv > 0
+                       and D.busiest_rank(pools[lv].sum(axis=0), N_RANKS) >= (threshold or 0)), default=None)
+    if 0.0 not in pools or onset_level is None:
+        return
+
+    sampler = D.WindowSampler(window=8, layers=4, token_fraction=0.1, draws=600)
+    alarm = D.threshold_at_fpr(D.estimate_loads(pools[0.0], N_RANKS, sampler, seed=0), 0.01)
+    pre, post = 30, 30
+    rng = np.random.default_rng(4)
+    loads = D.stream_loads([(pools[0.0], pre * sampler.window), (pools[onset_level], post * sampler.window)],
+                           N_RANKS, sampler, rng)
+    flags = loads >= alarm
+    fired = {k: D._first_run(flags, k) for k in (1, 3)}
+    x = (np.arange(len(loads)) + 1) * sampler.window      # requests served when the window closes
+    onset_at = pre * sampler.window
+
+    fig, ax = plt.subplots(figsize=(10.4, 4.8), facecolor=SURFACE)
+    style(ax, "Requests served", "Busiest rank, as the screen reads it",
+          "One run past the screen: a skew begins, and the detector decides",
+          f"{MODEL_LABEL[model]}, 8-request windows, 4 of 32 layers, a tenth of their tokens "
+          f"- {sampler.cost(32).assignment_fraction:.1%} of routing counted.")
+    ax.axvspan(onset_at, x[-1], color="#f0efec", zorder=0)
+    explain(ax, "skew present", xy=(onset_at + 12, 0.985), xycoords=("data", "axes fraction"),
+            ha="left", va="top", color=INK3, fontsize=9)
+    ax.axhline(alarm, color=INK3, ls="--", lw=1.4, zorder=2)
+    explain(ax, f"alarm level {alarm:.2f}x (1% of benign windows)", xy=(x[0], alarm), xytext=(2, 5),
+            textcoords="offset points", ha="left", va="bottom", color=INK2, fontsize=8.5)
+    ax.plot(x[~flags], loads[~flags], "o", ms=5, color=INK3, mec=SURFACE, mew=1, zorder=3,
+            label="window below the alarm")
+    ax.plot(x[flags], loads[flags], "o", ms=7, color=MODEL_COLOUR[model], mec=SURFACE, mew=1.2, zorder=4,
+            label="window over the alarm")
+    for k, colour, dy in ((1, INK3, 26), (3, INK, 48)):
+        i = fired[k]
+        if i is None:
+            continue
+        ax.axvline(x[i], color=colour, lw=1.4, ls=":" if k == 1 else "-", zorder=2)
+        late = x[i] - onset_at
+        verdict = (f"k={k} decides here, {late} requests after onset" if late > 0
+                   else f"k={k} decides here \u2014 before the skew, a false start")
+        explain(ax, verdict, xy=(x[i], 1.0), xycoords=("data", "axes fraction"),
+                xytext=(-6 if late <= 0 else 6, -dy), textcoords="offset points",
+                ha="right" if late <= 0 else "left", va="top", color=colour, fontsize=8.5,
+                fontweight="bold")
+    ax.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="lower right", ncol=2)
+    ax.set_xlim(0, x[-1])
+    timing = (json.load(open(os.path.join("docs", "detection.json")))["timing"].get(model) or {})
+    agg = {r["consecutive"]: r for r in timing.get("settings", []) if r["window"] == sampler.window}
+    if agg:
+        caption(fig, 0.012, 0.015,
+                "One draw, with its seed fixed before the outcome was seen. Over 200 draws at this setting: "
+                f"k=1 fires before the skew in {agg[1]['false_start_fraction']:.0%} of runs and catches "
+                f"{agg[1]['detected_fraction']:.0%};\nk=3 fires early in "
+                f"{agg[3]['false_start_fraction']:.0%} and catches {agg[3]['detected_fraction']:.0%}, "
+                f"a median {agg[3]['delay_requests_p50']:.0f} requests after onset. Reconstructed from "
+                "captured routing: no run has yet served a skew that begins partway through.",
+                color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.085, 1, 1)))
+    fig.savefig(os.path.join(out, "timeline.png"), dpi=200, facecolor=SURFACE)
+    store["timeline"] = {"alarm": round(float(alarm), 3), "onset_requests": int(onset_at),
+                         "onset_level": onset_level,
+                         "fired": {str(k): (None if v is None else int(x[v])) for k, v in fired.items()},
+                         "window_loads": [round(float(v), 3) for v in loads]}
+
+
+EPLB_FP = "*_eplb-fp2"
+#: Routing captures at the same levels. Routing does not depend on placement, so
+#: an EPLB-off run's captures score the gate for both arms.
+EPLB_FP_TRAFFIC = "*_eplb-fp-000"
+#: Mixtral's captures at the same offsets, from its calibration sweep.
+EPLB_MIXTRAL = "*_eplb-mixtral"
+EPLB_MIXTRAL_TRAFFIC = "*_mixtral*_calibration-sweep"
+SCREEN_COUNTING = "*_screen-counting-*"
+#: What rearranging for nothing costs, from eplb-fp2 at 1.73x: the bar to come under.
+EPLB_FALSE_POSITIVE = 4.73
+CALIBRATION_JSON = os.path.join("docs", "calibrations",
+                                "20261006-155755_imbalance_deepseek-v2_npu4_bs512_rbias-controlled-000.json")
+MIXTRAL_CALIBRATION_JSON = os.path.join("docs", "calibrations",
+                                        "20261008-223820_imbalance_mixtral_npu4_bs512_calibration-sweep.json")
+#: The screen, the traffic and the expert count that go with each model. The
+#: alarm is calibrated per model and the expert count decides which experts a
+#: rank holds, so scoring one model's gate with another's is not a near miss.
+GATE_SOURCES = {
+    "deepseek-v2": {"traffic": EPLB_FP_TRAFFIC, "calibration": CALIBRATION_JSON, "n_experts": 64},
+    "mixtral": {"traffic": EPLB_MIXTRAL_TRAFFIC, "calibration": MIXTRAL_CALIBRATION_JSON, "n_experts": 8},
+}
+
+
+def load_label(x):
+    """Busiest-rank load as the findings tables write it: 2 places, half up."""
+    from decimal import Decimal, ROUND_HALF_UP
+    return f"{Decimal(repr(float(x))).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)}x"
+
+
+def eplb_arms(pattern=EPLB_FP):
+    """Per level: paired TPOT by repeat, EPLB's own reading, and cycles applied."""
+    (d, m), = list(manifests(pattern))
+    tpot, hot, applied = {}, {}, {}
+    for p in m["points"]:
+        if p.get("status") != "completed":
+            continue
+        level = float(p["value"])
+        tpot[(level, p["arm"], p["repeat"])] = p["request_summary"]["tpot_ms_mean"]
+        if p["arm"] == "eplb-on":
+            a = p.get("eplb_activity") or {}
+            applied.setdefault(level, []).append(a.get("applied_cycles", 0))
+            if a.get("hotness"):
+                hot.setdefault(level, []).append((a["hotness"][0][0], a["hotness"][-1][0]))
+    rows = []
+    for level in sorted({k[0] for k in tpot}):
+        off, on = [], []
+        for r in sorted({k[2] for k in tpot if k[0] == level}):
+            a, b = tpot.get((level, "eplb-off", r)), tpot.get((level, "eplb-on", r))
+            if a is not None and b is not None:
+                off.append(a)
+                on.append(b)
+        if not off:
+            continue
+        off, on = np.array(off), np.array(on)
+        rows.append({"level": level, "off_ms": off, "on_ms": on,
+                     "diff_pct": 100 * (on / off - 1),
+                     "hot": hot.get(level, []), "applied": applied.get(level, [])})
+    return rows
+
+
+_GATE_CACHE: dict = {}
+
+
+def eplb_gate(levels, pattern=None, windows=2000, model="deepseek-v2"):
+    """{level: (busiest-rank load, share of windows the screen's rule would open on)}.
+
+    The screen is the named model's calibrated one: alarm at a 1% benign
+    false-alarm rate, raised only after `consecutive` alarming windows of
+    `window` requests, counting four randomly redrawn layers and a tenth of their
+    tokens. The traffic, the calibration and the expert count all come from
+    `GATE_SOURCES[model]`, because a gate scored with another model's alarm and
+    expert count is a number with no referent.
+
+    Cached: scoring 2000 windows per level off the raw captures takes minutes,
+    and both EPLB figures want the same answer (as does the bare pass).
+    """
+    source = GATE_SOURCES[model]
+    pattern = pattern or source["traffic"]
+    key = (pattern, frozenset(levels), windows, model)
+    if key in _GATE_CACHE:
+        return _GATE_CACHE[key]
+    import sys as _sys
+    _sys.path.insert(0, os.path.join("packages", "moe-reliability-results", "src"))
+    from moe_reliability_results import detection as D
+
+    screen = D.Screen.from_calibration(json.load(open(source["calibration"])))
+    out = {}
+    for d, m in manifests(pattern):
+        if m["config"]["model"]["model_name"] != model:
+            continue
+        for p in m["points"]:
+            level = float(p["value"])
+            if level not in levels or not p.get("validation_file"):
+                continue
+            f = json.load(gzip.open(os.path.join(d, p["validation_file"])))
+            path = os.path.join(d, f.get("records_file") or "")
+            if not f.get("records_file") or not os.path.exists(path):
+                continue
+            counts = D.request_counts((json.loads(line) for line in gzip.open(path, "rt")),
+                                      source["n_experts"])
+            loads = D.stream_loads([(counts, windows * screen.sampler.window)], N_RANKS,
+                                   screen.sampler, np.random.default_rng(0))
+            k = screen.consecutive
+            raised = np.convolve(loads >= screen.alarm, np.ones(k, int), "valid") == k
+            out[level] = (D.busiest_rank(counts.sum(axis=0), N_RANKS), float(raised.mean()))
+    _GATE_CACHE[key] = out
+    return out
+
+
+def fig_eplb_cost(out, store):
+    """Q1: EPLB rearranges where there is nothing to win, and never wins where there is."""
+    rows = eplb_arms()
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows})
+    loads = [gate.get(r["level"], (r["level"], None))[0] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load, injected", "Mean TPOT (ms)",
+          "EPLB removes the imbalance and not the latency",
+          "DeepSeek-V2-Lite, 4 NPUs, 4 repeats per point")
+    for key, colour, label in (("off_ms", INK2, "EPLB off"), ("on_ms", MODEL_COLOUR["deepseek-v2"], "EPLB on")):
+        means = [r[key].mean() for r in rows]
+        sds = [r[key].std(ddof=1) for r in rows]
+        left.errorbar(xs, means, yerr=sds, fmt="-o", ms=6.5, lw=1.8, color=colour,
+                      ecolor=colour, elinewidth=1.2, capsize=3, mec=SURFACE, mew=1.4,
+                      zorder=3, label=label)
+    lo = min(r["off_ms"].mean() for r in rows)
+    hi = max(r["on_ms"].mean() for r in rows)
+    left.set_ylim(lo - 0.30 * (hi - lo), hi + 0.10 * (hi - lo))
+    for i, r in enumerate(rows):
+        left.annotate(f"{r['off_ms'].mean():.0f}", xy=(i, r["off_ms"].mean()), xytext=(0, -12),
+                      textcoords="offset points", ha="center", va="top", color=INK2, fontsize=8.5)
+        left.annotate(f"{r['on_ms'].mean():.0f}", xy=(i, r["on_ms"].mean()), xytext=(0, 13),
+                      textcoords="offset points", ha="center", va="bottom",
+                      color=MODEL_COLOUR["deepseek-v2"], fontsize=8.5, fontweight="bold")
+    # What EPLB itself thinks it achieved, which is the point: it worked.
+    for i, r in enumerate(rows):
+        if r["hot"]:
+            first = float(np.mean([h[0] for h in r["hot"]]))
+            last = float(np.mean([h[1] for h in r["hot"]]))
+            # The leftmost label is pushed clear of the y axis rather than centred.
+            left.annotate(f"EPLB: {first:.2f}→{last:.2f}x",
+                          xy=(-0.42 if i == 0 else i, 0.015), xycoords=("data", "axes fraction"),
+                          ha="left" if i == 0 else "center", va="bottom", color=INK3, fontsize=7.8)
+    left.set_xlim(-0.5, len(rows) - 0.5)
+    left.set_xticks(xs, labels)
+    left.legend(frameon=False, fontsize=9, labelcolor=INK2, loc="upper left")
+
+    style(right, "Busiest-rank load, injected", "TPOT with EPLB on, against off (%)",
+          "What rearranging costs", "each ring is one round; the bar is their mean")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, r in enumerate(rows):
+        d = r["diff_pct"]
+        right.bar(i, d.mean(), 0.52, color=MODEL_COLOUR["deepseek-v2"], alpha=0.33, zorder=2)
+        right.plot(np.full(len(d), i), d, "o", ms=6, mfc="none", mew=1.4,
+                   color=MODEL_COLOUR["deepseek-v2"], zorder=4)
+        right.annotate(f"{d.mean():+.1f}%", xy=(i, max(d.max(), d.mean())), xytext=(0, 8),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold", zorder=5)
+    right.set_xticks(xs, labels)
+    right.set_xlim(-0.6, len(rows) - 0.4)
+    span = max(r["diff_pct"].max() for r in rows) - min(r["diff_pct"].min() for r in rows)
+    right.set_ylim(min(r["diff_pct"].min() for r in rows) - 0.08 * span,
+                   max(r["diff_pct"].max() for r in rows) + 0.20 * span)
+
+    heading(fig, "EPLB: what rearranging costs, and what it buys",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: the skew costs the unbalanced server 31% TPOT at 3.63x. EPLB drives its own busiest-rank "
+            "reading to about 1.0x at every level and the latency does not follow.\nRight: rearranging where "
+            "there is nothing to win costs at most +4.7% (at 1.73x, which is free), about two sigma against "
+            "the rounds' own spread. At 3.63x convergence took ~85 s of a\n127 s batch, so the steady state "
+            "is not what was measured.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.10, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_cost.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_cost"] = [{"level": r["level"], "load": loads[i],
+                           "off_ms": r["off_ms"].tolist(), "on_ms": r["on_ms"].tolist(),
+                           "diff_pct": r["diff_pct"].tolist(),
+                           "applied_cycles": r["applied"],
+                           "eplb_hotness": [list(h) for h in r["hot"]]}
+                          for i, r in enumerate(rows)]
+
+
+def fig_eplb_gate(out, store):
+    """Q2: the screen is shut exactly where rearranging is pure loss."""
+    rows = eplb_arms()
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows})
+    if not gate:
+        return
+    loads = [gate.get(r["level"], (r["level"], 0.0))[0] for r in rows]
+    opens = [gate.get(r["level"], (0.0, float("nan")))[1] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+    base = rows[0]["off_ms"].mean()
+    skew_cost = [100 * (r["off_ms"].mean() / base - 1) for r in rows]
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load", "Windows where the gate opens",
+          "The screen as an EPLB gate", "3 consecutive alarming windows of 8 requests")
+    colours = [GRID if o < 0.5 else MODEL_COLOUR["deepseek-v2"] for o in opens]
+    left.bar(xs, opens, 0.56, color=colours, zorder=3)
+    for i, o in enumerate(opens):
+        left.annotate(f"{o:.0%}", xy=(i, o), xytext=(0, 5), textcoords="offset points",
+                      ha="center", color=INK, fontsize=9.5, fontweight="bold")
+    left.set_xticks(xs, labels)
+    left.set_ylim(0, 1.18)
+    left.set_yticks([0, 0.5, 1.0], ["0", "50%", "100%"])
+
+    style(right, "Busiest-rank load", "TPOT against the 1.09x point (%)",
+          "Whether the skew costs anything", "EPLB off, so this is the skew alone")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, c in enumerate(skew_cost):
+        right.bar(i, c, 0.56, color=INK2 if c > 10 else GRID, zorder=3)
+        right.annotate(f"{c:+.0f}%", xy=(i, max(c, 0.0)), xytext=(0, 5),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold")
+    right.set_xticks(xs, labels)
+
+    heading(fig, "The screen gates EPLB: shut where the skew is free, open where it costs",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: the gate opens on 0% of windows at 1.09x and 1% at 1.73x - the two levels where EPLB has "
+            "nothing to win and costs up to +4.7% - and on 100% at 2.49x and 3.63x.\nRight: only 3.63x "
+            "actually costs latency. 2.49x sits on DeepSeek's unresolved onset, so the gate opening there is "
+            "neither right nor wrong. Scored offline on routing captured at\nthe same levels; routing does "
+            "not depend on placement.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.10, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_gate.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_gate"] = [{"load": loads[i], "gate_open": opens[i], "skew_cost_pct": skew_cost[i]}
+                          for i in range(len(rows))]
+
+
+def fig_screen_overhead(out, store):
+    """Q3: the screen costs nothing to run; capture, which is not the same thing, costs 6%."""
+    ARMS = (("count-on", "the screen\n4 random layers,\na tenth of their tokens"),
+            ("capture-on", "full capture\nevery expert id,\nin the response body"))
+    series = {}
+    for d, m in manifests(SCREEN_COUNTING):
+        model = m["config"]["model"]["model_name"]
+        pts = [p for p in m["points"] if p.get("status") == "completed"]
+        if not pts:
+            continue
+        e2e = {(p["arm"], p["repeat"]): p["request_summary"]["e2e_s_mean"] for p in pts}
+        baseline = [v for (a, _), v in e2e.items() if a == "count-off"]
+        spread = 100 * float(np.std(baseline, ddof=1) / np.mean(baseline)) if len(baseline) > 1 else float("nan")
+        row = {"spread_pct": spread, "arms": {}}
+        for arm, _ in ARMS:
+            d_pct = [100 * (e2e[(arm, r)] / e2e[("count-off", r)] - 1)
+                     for r in sorted({k[1] for k in e2e}) if (arm, r) in e2e and ("count-off", r) in e2e]
+            if d_pct:
+                row["arms"][arm] = np.array(d_pct)
+        series[model] = row
+    if not series:
+        return
+
+    # Mixtral first: it is the one that resolves. DeepSeek's interval is ten times
+    # wider, so a shared y-axis would flatten the measurement into the non-result.
+    models = [m for m in ("mixtral", "deepseek-v2") if m in series]
+    fig, axes = plt.subplots(1, len(models), figsize=(11.0, 5.0), facecolor=SURFACE)
+    axes = np.atleast_1d(axes)
+    rows = []
+    for ax, model in zip(axes, models):
+        row = series[model]
+        # The model name goes on the axis, not in the title: two panels mean two
+        # models, and bare mode drops titles, which would leave them unidentified.
+        style(ax, MODEL_LABEL[model],
+              "End-to-end latency against collecting nothing (%)" if model == models[0] else "",
+              MODEL_LABEL[model],
+              f"5 repeats; the baseline itself varies {row['spread_pct']:.2f}%")
+        ax.xaxis.labelpad = 10
+        xs = np.arange(len(ARMS))
+        # The baseline's own spread: a cost smaller than this is not a measured cost.
+        ax.axhspan(-row["spread_pct"], row["spread_pct"], color=GRID, alpha=0.8, lw=0, zorder=1)
+        ax.axhline(0, color=GRID, lw=1.2, zorder=2)
+        for ai, (arm, _) in enumerate(ARMS):
+            d = row["arms"].get(arm)
+            if d is None:
+                continue
+            # n = 5, so the 95% interval is t(4) = 2.776 standard errors.
+            ci = 2.776 * float(d.std(ddof=1) / np.sqrt(len(d)))
+            ax.bar(ai, d.mean(), 0.5, color=COND[ai], zorder=3)
+            ax.errorbar(ai, d.mean(), yerr=ci, fmt="none", ecolor=INK, elinewidth=1.3,
+                        capsize=4, zorder=4)
+            ax.annotate(f"{d.mean():+.2f}%", xy=(ai, d.mean() + ci), xytext=(0, 6),
+                        textcoords="offset points", ha="center", va="bottom", color=INK,
+                        fontsize=10, fontweight="bold", zorder=5)
+            rows.append({"model": model, "arm": arm, "mean_pct": float(d.mean()),
+                         "ci95_pct": ci, "per_round_pct": d.tolist(),
+                         "baseline_spread_pct": row["spread_pct"]})
+        # What a false positive costs: the bar the screen has to come in under.
+        ax.axhline(EPLB_FALSE_POSITIVE, color=MODEL_COLOUR["mixtral"], lw=1.4, ls="--", zorder=2)
+        if model == models[0]:
+            # Labelled once: the same line is drawn on both panels.
+            ax.annotate(f"EPLB's false positive, +{EPLB_FALSE_POSITIVE:.2f}%",
+                        xy=(-0.55, EPLB_FALSE_POSITIVE), xytext=(0, 4),
+                        textcoords="offset points", ha="left", va="bottom",
+                        color=MODEL_COLOUR["mixtral"], fontsize=8.5, fontweight="bold")
+        ax.set_xticks(xs, [label for _, label in ARMS], fontsize=8.5)
+        ax.tick_params(axis="x", labelcolor=INK2)
+        ax.set_xlim(-0.6, len(ARMS) - 0.4)
+        ax.annotate(f"baseline varies {row['spread_pct']:.2f}%", xy=(-0.55, -row["spread_pct"]),
+                    xytext=(0, -4), textcoords="offset points", ha="left", va="top",
+                    color=INK3, fontsize=8)
+
+    heading(fig, "The screen is far cheaper than the false positive it averts",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Counting on the device costs +0.28% +-0.71 on Mixtral, inside the baseline's own 0.44% spread; "
+            "returning every token's expert ids instead costs +6.38%. The sampled\nscreen is a cheaper "
+            "mechanism, not a fraction of that one. DeepSeek resolves neither arm - note its axis - because "
+            "its baseline spreads 3.75% in this prefill-bound regime,\nwhere the engine queue sits empty "
+            "83-90% of the time and host-side work hides in the idle time.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.11, 1, 0.93)))
+    fig.savefig(os.path.join(out, "screen_overhead.png"), dpi=200, facecolor=SURFACE)
+    store["screen_overhead"] = rows
+
+
+def fig_eplb_regime(out, store):
+    """Mixtral: the null holds where there was something to win, and the threshold went stale."""
+    rows = eplb_arms(EPLB_MIXTRAL)
+    if not rows:
+        return
+    gate = eplb_gate({r["level"] for r in rows}, model="mixtral")
+    loads = [gate.get(r["level"], (r["level"], 0.0))[0] for r in rows]
+    opens = [gate.get(r["level"], (0.0, float("nan")))[1] for r in rows]
+    labels = [load_label(x) for x in loads]
+    xs = np.arange(len(rows))
+    colour = MODEL_COLOUR["mixtral"]
+
+    # The cost of the same skew in the 300-token traffic, paired within each round
+    # against that run's own balanced point.
+    off0 = rows[0]["off_ms"]
+    long_cost = [100 * (r["off_ms"] / off0 - 1) for r in rows]
+    # And in the 100-token traffic the threshold was calibrated on.
+    calibration = json.load(open(MIXTRAL_CALIBRATION_JSON))
+    short = [(c["load"], c["cost_pct"]) for c in calibration["curve"]]
+    threshold = calibration.get("impact_threshold")
+
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.0, 4.6), facecolor=SURFACE)
+
+    style(left, "Busiest-rank load, injected", "Cost of the skew, TPOT (%)",
+          "The same skew, two traffic mixes",
+          "Mixtral 8x7B, 4 NPUs, EPLB off: this is the skew alone")
+    left.axhline(0, color=GRID, lw=1.2, zorder=1)
+    left.plot([x for x, _ in short], [y for _, y in short], "-o", ms=5.5, lw=1.8,
+              color=INK2, mec=SURFACE, mew=1.2, zorder=3,
+              label="100 tokens/request (calibrated here)")
+    left.errorbar(loads, [d.mean() for d in long_cost],
+                  yerr=[d.std(ddof=1) if len(d) > 1 else 0.0 for d in long_cost],
+                  fmt="-o", ms=6.5, lw=1.8, color=colour, ecolor=colour, elinewidth=1.2,
+                  capsize=3, mec=SURFACE, mew=1.4, zorder=4,
+                  label="300 tokens/request (measured here)")
+    if threshold:
+        left.axvline(threshold, color=INK3, lw=1.1, ls=(0, (4, 3)), zorder=2)
+        # Below the legend, which sits upper left and would otherwise overlap it.
+        left.annotate(f"impact threshold {threshold:.2f}x", xy=(threshold, 0.60),
+                      xycoords=("data", "axes fraction"), xytext=(4, 0),
+                      textcoords="offset points", ha="left", va="center", color=INK3, fontsize=7.8)
+    for x, d in zip(loads, long_cost):
+        left.annotate(f"{d.mean():+.1f}%", xy=(x, d.mean()), xytext=(0, -13),
+                      textcoords="offset points", ha="center", va="top",
+                      color=colour, fontsize=8.5, fontweight="bold")
+    left.legend(frameon=False, fontsize=8.5, labelcolor=INK2, loc="upper left")
+
+    style(right, "Busiest-rank load, injected", "TPOT with EPLB on, against off (%)",
+          "What EPLB buys, and where the gate opens",
+          "each ring is one round; the bar is their mean")
+    right.axhline(0, color=GRID, lw=1.2, zorder=1)
+    for i, r in enumerate(rows):
+        d = r["diff_pct"]
+        right.bar(i, d.mean(), 0.52, color=colour, alpha=0.33, zorder=2)
+        right.plot(np.full(len(d), i), d, "o", ms=6, mfc="none", mew=1.4, color=colour, zorder=4)
+        right.annotate(f"{d.mean():+.1f}%", xy=(i, max(d.max(), d.mean())), xytext=(0, 8),
+                       textcoords="offset points", ha="center", va="bottom", color=INK,
+                       fontsize=9.5, fontweight="bold", zorder=5)
+        if r["hot"]:
+            first = float(np.mean([h[0] for h in r["hot"]]))
+            last = float(np.mean([h[1] for h in r["hot"]]))
+            right.annotate(f"EPLB: {first:.2f}\u2192{last:.2f}x", xy=(i, 0.015),
+                           xycoords=("data", "axes fraction"), ha="center", va="bottom",
+                           color=INK3, fontsize=7.8)
+    for i, o in enumerate(opens):
+        right.annotate(f"gate {o:.0%}", xy=(i, 0.085), xycoords=("data", "axes fraction"),
+                       ha="center", va="bottom",
+                       color=colour if o >= 0.5 else INK3, fontsize=7.8,
+                       fontweight="bold" if o >= 0.5 else "normal")
+    right.set_xticks(xs, labels)
+    right.set_xlim(-0.6, len(rows) - 0.4)
+    span = max(r["diff_pct"].max() for r in rows) - min(r["diff_pct"].min() for r in rows)
+    right.set_ylim(min(r["diff_pct"].min() for r in rows) - 0.30 * span,
+                   max(r["diff_pct"].max() for r in rows) + 0.20 * span)
+
+    heading(fig, "Mixtral: the balancer still buys nothing, and the gate opens where it loses",
+            color=INK, fontsize=12.5, fontweight="bold", x=0.008, ha="left", y=0.985)
+    caption(fig, 0.008, 0.015,
+            "Left: same model, hardware, batch size and bias, and the same realised load - generating 300 "
+            "tokens per request instead of 100 cuts the cost of a 2.62x skew from +14.5% to\n+3.0%, and 1.76x "
+            "to nothing. The cost lives in prefill-heavy steps, so the impact threshold belongs to the "
+            "traffic mix and not only to the model.\nRight: EPLB takes 2.62x only to 1.58x - eight experts "
+            "over four ranks leaves two per rank - and recovers nothing at any level. The gate, calibrated "
+            "on the 100-token\ntraffic, is open on 100% of windows at 1.76x, which is where rearranging "
+            "costs the most.",
+            color=INK3, fontsize=8, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=frame((0, 0.13, 1, 0.93)))
+    fig.savefig(os.path.join(out, "eplb_regime.png"), dpi=200, facecolor=SURFACE)
+    store["eplb_regime"] = [{"load": loads[i], "gate_open": opens[i],
+                             "skew_cost_pct": long_cost[i].tolist(),
+                             "eplb_diff_pct": rows[i]["diff_pct"].tolist(),
+                             "eplb_hotness": [list(h) for h in rows[i]["hot"]],
+                             "applied_cycles": rows[i]["applied"]} for i in range(len(rows))]
+    store["eplb_regime_short_tokens"] = [{"load": x, "cost_pct": y} for x, y in short]
+
+
+def main(out="docs/figures", also_bare=True):
+    global BARE
     os.makedirs(out, exist_ok=True)
     store: dict = {}
     natural(store)
@@ -729,10 +1766,30 @@ def main(out="docs/figures"):
     fig_statistic(out, store)
     if list(manifests(ROTATING["mixtral"])):
         fig_rotating(out, store)
+    fig_regimes(out, store)
+    fig_batch(out, store)
+    fig_natural_batch(out, store)
+    fig_language(out, store)
     if os.path.exists(os.path.join("docs", "detection.json")):
         fig_detection(out, store)
+        fig_detection_cost(out, store)
+        fig_timeline(out, store)
+    if list(manifests(EPLB_FP)):
+        fig_eplb_cost(out, store)
+        fig_eplb_gate(out, store)
+    if list(manifests(EPLB_MIXTRAL)):
+        fig_eplb_regime(out, store)
+    if list(manifests(SCREEN_COUNTING)):
+        fig_screen_overhead(out, store)
     json.dump(store, open(os.path.join(out, "figures.json"), "w"), indent=1)
-    print(f"wrote {out}/impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, figures.json")
+    if also_bare:
+        # The same figures with nothing that argues, for slides that are narrated.
+        BARE = True
+        try:
+            main(os.path.join(out, "bare"), also_bare=False)
+        finally:
+            BARE = False
+    print(f"wrote {out}/regimes.png, natural_batch.png, language.png, batch_size.png, timeline.png, detection_cost.png, impact_map.png, detection.png, rotating_skew.png, statistic.png, dose_response.png, instrument_cost.png, step_level.png, calibration.png, eplb_cost.png, eplb_gate.png, eplb_regime.png, screen_overhead.png, figures.json")
 
 
 if __name__ == "__main__":
