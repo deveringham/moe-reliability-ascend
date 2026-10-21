@@ -42,6 +42,12 @@ Notes on the wrapper:
   failures surface deep inside vLLM and look like driver or CANN faults.
   `nrun` sets the environment up inside the shell that runs the command, which
   is why `-t` is safe and hand-rolled tmux is not.
+- When queueing a job behind another tmux session on the node, wait on an
+  exact target (`tmux has-session -t =name`). A bare `-t name` falls back to
+  prefix matching once that session is gone, so a waiter in a session whose
+  name extends it matches itself and waits forever.
+- Local `results/` only holds what was last pulled. List the node's
+  `results/` (or `./npull`) before saying a run hasn't happened.
 - Interrupted runs resume rather than restart:
   `./nrun 'uv run moe-reliability resume <run-id> --retry-failed'`.
   A stage recorded as `completed` is never re-run, so check the manifest before
@@ -49,7 +55,11 @@ Notes on the wrapper:
 
 ### What can run locally
 
-Anything not in the above category.
+Anything not in the above category. The local venv is analysis-only: the
+results package, numpy, pandas, matplotlib (see `docs/handoff-2026-10-21.md`).
+Run scripts with `.venv/bin/python` or `uv run --no-sync`. A plain `uv run` or
+`uv sync` here resolves the whole project and starts installing vllm-ascend and
+torch-npu.
 
 ## Ascend conventions
 
