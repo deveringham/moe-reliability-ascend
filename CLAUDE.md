@@ -337,7 +337,16 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   `update_expert_map_and_weight` when a record path is set - the only thing that
   waits the P2P requests and returns the state to `WAITING`. So the loader wedges
   for the life of the server, the first cycle's `isend`/`irecv` are never waited,
-  and the recorded file is a plan that was never applied.
+  and the recorded file is a plan that was never applied. **The worker compounds
+  it**: `do_update` sets `old_expert_maps = new_expert_maps` after every plan
+  whether or not it was applied (`eplb_worker.py:108-109`), so from the second
+  cycle on it plans against a layout the server does not have. Both halves are
+  fixed on the `fix-eplb-record-mode` branch, and the fix is **measured**
+  (2026-10-19, `eplb-record-fix`): with a record path it plans 12/12, applies 0,
+  never stalls, and its own busiest-rank reading stays at 1.68-1.83x across all
+  twelve plans, while a no-record-path control in the same run still applies
+  12/12 and converges 1.68x -> 1.02x. `expert_map_record_path` exists only on
+  MRv1 - the V2 "recording" test is about expert *load*, not the map.
 - **EPLB rearranges correctly and still buys nothing** (2026-10-12, `eplb-fp2`,
   4 repeats, arms in shared rounds, 7-12 applied cycles per point). It takes
   DeepSeek's 3.63x skew to 1.09x by its own reading and changes TPOT by +1.07%.
@@ -422,15 +431,54 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   computes busiest-rank-over-mean *per layer*, the form this project argues for.
   So there is nothing to contribute on the measurement side; the gap is that
   rearrangement fires on an iteration counter with no imbalance condition, in
-  vllm-ascend and in vLLM core alike. `server.eplb_min_imbalance` is that gate,
+  vllm-ascend and in vLLM core alike - core does skip below 5% relative
+  improvement, but only on ROCm (PR #47206) and on an imbalance pooled across
+  layers. `server.eplb_min_imbalance` is that gate,
   as a patch on the installed package (`scripts/apply_node_patch.py`, reverted by
   `uv sync`, inert without its env var so arms can differ inside one run).
+  **There is a clock on the two vllm-ascend bugfixes**: RFC #18202 deprecates the
+  MRv1 EPLB path before v0.31 and removes it before v0.32, and both bugs are
+  MRv1-only. Both fixes are written, tested and committed on branches of a `main`
+  clone, unpushed (`docs/upstream-eplb.md`, "The two bugfix branches").
+- **To ask "does upstream already do this", enumerate the feature surface, do
+  not diff the files you already know** (2026-10-19). We designed, patched and
+  measured an imbalance gate for EPLB while vllm-ascend's MRv2 default policy
+  already had one. `StairEplbPolicy` gates per layer on
+  `relative_balance_threshold = 0.95` (hysteresis against the balance at the
+  last commit) and `absolute_balance_threshold = 0.90`, and
+  `patch_eplb.py` makes `stair` the MRv2 default. Half the reason we missed it
+  is real: it is in **no release we run** - v0.23.0 (2026-08-17) and
+  v0.23.0.post1 (2026-09-22) have no `vllm_ascend/distributed/eplb/` at all -
+  and landed on `main` in #17511/#17512/#17514 on 2026-09-26/27. The other half
+  is ours: it was on `main` for 2.5 weeks before the 2026-10-14 review, and that
+  review only diffed the MRv1 files it already cared about, found them identical
+  and wrote "confirmed on main". `find vllm_ascend -ipath "*eplb*"` would have
+  shown the whole MRv2 tree in one command. The blind spot was self-reinforcing:
+  RFC #18202 says MRv2 uses vLLM core's EPLB, so the MRv2 claim was checked
+  against *core*, which really does have only the ROCm skip. **Nothing measured
+  is affected** - only the contribution framing. The gate's novelty is gone; the
+  finding behind it (balance is not impact, and an impact threshold needs
+  per-deployment calibration) is still implemented nowhere, stair included,
+  whose 0.90 absolute threshold fires at ~1.11x.
 - **A balance-improvement threshold cannot see a false positive.** Policies 1 and
   2 return a `changed` flag - set when the plan improves the summed per-layer max
   heat by 5% - and `EplbWorker.do_update` discards it (`_, _, new_placement`),
-  along with `per_layer_priority`. Worth an upstream PR, but not a gate: across
-  eplb-fp2's four levels the plans improved EPLB's own metric by 9/39/57/69%, so
-  the flag reads `changed` even at 1.09x where rearranging is pure loss. Gate on
+  along with `per_layer_priority`. Worth an upstream PR, but not a gate: the flag
+  asks whether the *plan* is good, not whether the imbalance cost anything, so at
+  1.09x a plan that clears the 5% bar still reads `changed` where rearranging is
+  pure loss. **How often it would skip, replayed from `eplb_activity.hotness`
+  (2026-10-19): 44-73% of plans on DeepSeek, 80-92% on Mixtral** - the earlier
+  note that it "reads 1 at every level" came from the first 2-3 plans of each
+  run, before EPLB converges. At the measured 1.73x about half the plans would be
+  skipped, worth at most ~1.2 of the ~2.3 points the gate averts. **Measured on
+  hardware twice** (2026-10-19): through our patch's `server.eplb_honor_changed`
+  (`eplb-honour-changed`, declines 5 and 9 of 12 plans, `gate_consistent` true)
+  and with the upstream branch installed outright (`eplb-honour-pr`, declines 7
+  and 5 of 12; every rank logs its own verdict and the counts are 28 and 20,
+  exactly 4x, so all four ranks declined the same plans). It still balances:
+  1.676 -> 1.016/1.040x against the control's 1.024x, same trajectory, because
+  the plans that matter are the early ones and they all clear the 5% bar. Count
+  `gate_shut`/`gate_open`, never `applied_cycles`. Gate on
   the *measured imbalance* against a calibrated impact threshold (1.42x Mixtral;
   DeepSeek's 2.43x is unsupported since 2026-10-14) - skew, not the planner's
   opinion of its own plan.
@@ -478,15 +526,61 @@ Established 2026-10-02; see `docs/imbalance-findings.md` for the numbers.
   (twice per point, then shuts at ~1.73x average - a threshold gate stops at the
   threshold, not at balance), identical on all four ranks. But at 1.73x TPOT,
   EPLB-on costs +5.52% +-3.80 and the gated arm, moving nothing, still +3.23%
-  +-0.42 (all 4 pairs +2.7 to +3.7). Pooled with eplb-fp2 the false positive is
-  +5.12% [+1.7, +8.5], the first reading to exclude zero. So the gate averts ~2
-  of ~5 points; the rest is heat collection / all-gather / planner / empty loader
-  cycles, unattributed, one level only (1.09x is too noisy to tell). The patch
+  +-0.42 (all 4 pairs +2.7 to +3.7). That +-0.42 is the tightest any run has
+  been and did not reproduce: see the four-run pooled ladder below, where the
+  gate averts about a third rather than a tenth. One level only (1.09x is too
+  noisy to tell). The patch
   gates on EPLB's *worst-layer* reading against a *layer-averaged* calibration -
   worst runs ~0.4x above average - fix the units before sending upstream. Its
   open-at-3.63x arm is no longer a true positive: with length held that level
   is free too (`fixed-length`), so on DeepSeek every gate decision measured has
   been one where the right answer was "shut".
+- **The screen's standing cost is near zero on DeepSeek too, and a loaded host
+  can hide everything else** (2026-10-19, `screen-vs-eplb`, 5 arms x 2 free
+  levels x 5 repeats, 50/50 after a resume; the two first-pass failures were
+  another user's job taking NPU 0's memory, and the resume ran them hours later,
+  so level 0's round 4 is not like-for-like and the figures below are the n=9
+  rounds whose arms shared a node - the tenth moves every arm by <0.7pp).
+  All four watchers, in TPOT against `eplb-off` in the same round, pooled over
+  both levels: screen -0.47% +-4.89, `eplb-idle` +1.31% +-3.56, gate shut
+  +2.76% +-3.74, EPLB on +0.40% +-3.25. **Repeating one arm varies by 2.0-3.8%,
+  so the run separates none of them** - the neighbour sat on NPUs 4-7 with
+  loadavg 24-40 and never touched ours, but DeepSeek's decode is host-bound, so
+  its CPU use lands on our step time anyway. What it does give: the screen
+  priced on DeepSeek and in TPOT at last (before, +0.28% rested on Mixtral and
+  e2e), and the screen priced in TPOT. **E3 was still open after it**:
+  `eplb-idle` (EPLB on, heat interval longer than the point, so it never planned
+  or gathered) sat between EPLB-off and the shut gate with both inside its
+  interval. Answered as far as it can be by the next bullet - and *not* by a
+  quieter node, which was the wrong diagnosis.
+- **EPLB's standing cost is a ladder of ~1-point rungs, and our noise is ~4
+  points a pair: pool runs, do not wait for a quiet node** (2026-10-20,
+  `eplb-standing`, 4 arms x 1 free level (1.73x) x 6 repeats, 24/24, nothing
+  resident on NPUs 0-3 in any point, output lengths matched to 0.2%). Within the
+  run nothing separates: `eplb-idle` +0.25% +-4.10, gate shut +0.46% +-3.75,
+  EPLB on +2.00% +-6.27, every interval spanning zero, 3-4 of 6 pairs positive.
+  **Pooled over all four DeepSeek runs at 1.73x, which is the number to quote:
+  EPLB on +3.06% [+0.75, +5.38] 14/19 pairs; the shut gate +2.10% [+0.01, +4.20]
+  11/15; `eplb-idle` +1.28% [-1.25, +3.81] 7/11.** That is a monotone ladder
+  roughly a point per rung - enabling EPLB ~1.3 (not resolved from zero), the
+  all-gather + planner + empty loader cycles ~0.8 more, the transfers ~1.0 more -
+  so a threshold averts about a third of the cost, not the tenth the single
+  `eplb-gated` run implied, and a dormant mode would avert about two thirds.
+  **The rungs cannot be separated individually at any sane cost**: per-pair sd is
+  3.8-4.8%, so resolving 1 point needs ~70 paired rounds, about 28 NPU-hours per
+  arm. State the total and the ladder's shape, never a single rung's value.
+- **A neighbour on the other NPUs was not what hid the EPLB arms** (2026-10-20).
+  `screen-vs-eplb`'s failure to separate was put down to the neighbour holding
+  loadavg at 24-40 while DeepSeek's eager decode is host-bound. `eplb-standing`
+  ran at the same loadavg (31-38, 6-8 foreign processes, none ever on our 0-3)
+  and saw the same per-arm repeat spread (1.7-4.5%, min-max up to 12.9%), so
+  that attribution has no support. **The node has 192 cores**, and the
+  neighbour's six-to-eight processes were using about 9 of them - loadavg 22-38
+  there is ~11-20% utilisation, not a starved host. Absolute levels do move with
+  it (eplb-off's own TPOT rose ~6% in the two rounds where the neighbour grew to
+  8 processes), which is why paired rounds are mandatory; but the within-arm
+  noise is intrinsic to this measurement, not borrowed from the neighbour. Do
+  not spend a window waiting for a loadavg threshold on a 192-core box.
 - **The contention check in `screen_overhead.py` was dead until 2026-10-14.** It
   read `p["warnings"]`, which points never carry, so every run it printed was
   "clean". Read `host_before`/`host_after.foreign_npu_processes` (as

@@ -1,0 +1,112 @@
+# What would a screen-gated EPLB cost while its gate is shut?
+#
+# eplb-gated (2026-10-14) found that EPLB's own gate, shut at a free 1.73x skew
+# and moving nothing, still cost +3.23% +-0.42 TPOT against EPLB off - about 60%
+# of plain EPLB's +5.52%. So most of EPLB's false positive is EPLB being
+# enabled, and no condition inside do_update can reach it. The alternative is to
+# keep EPLB entirely off and let the detection screen decide when to start it.
+# Its cost while the gate is shut is the screen's own, which has only been
+# measured on Mixtral (+0.28% +-0.71 e2e, screen-counting); DeepSeek's reading
+# from gate-closure is withdrawn (the bias was never applied in its count-on
+# arm). This run puts both on one model, one measure (TPOT) and one set of
+# shuffled rounds:
+#
+#   eplb-off    baseline
+#   screen      server.count_experts at the calibrated sampling, EPLB off: what
+#               a screen-gated deployment pays while nothing is wrong, if a
+#               dormant EPLB costs nothing
+#   eplb-idle   EPLB enabled, heat collection interval longer than the run: the
+#               per-step heat add_ and the dynamic-EPLB serving path, with no
+#               load all-gather, no planning and no loader cycles (one warm-up
+#               gather at start). Whether "enabled but idle" already carries the
+#               +3.23% says whether a dormant mode can remove it - the first cut
+#               of action item E3
+#   eplb-gated  the patch at 2.43x, shut at both levels: reproduces the +3.23%
+#   eplb-on     plain EPLB: ties the run to eplb-fp2 and eplb-gated's +5%
+#
+# eplb-idle trips _warn_if_eplb_cannot_fire. That is the point of the arm.
+# Policy 2 keeps a fixed int64 counter per layer, so a long interval allocates
+# nothing (only policy 3 sizes a buffer by the interval, fused_moe_0_23_0.py:255).
+#
+# Both levels are free, with length natural or held: 1.09x and 1.73x
+# (eplb-gated's own validation). Settings are eplb-gated's unchanged apart from
+# the arms and levels, so the deltas go in one table with it. The screen's
+# sampling is gate-closure's (4 random layers, a tenth of their tokens, 10-step
+# windows), which is what screen-counting priced on Mixtral.
+#
+# Predictions: screen within +-1% of eplb-off; eplb-gated about +3%; eplb-on
+# about +5%. eplb-idle is the open one - near eplb-off means the standing cost
+# is the gather/planner/loader cycle and a dormant mode removes it; near
+# eplb-gated means merely enabling dynamic EPLB costs it, and a screen-gated
+# design would have to start and stop EPLB, not just gate it.
+#
+# Cost: 2 levels x 5 arms x 5 repeats = 50 points at ~6 min = ~5 NPU-hours on
+# NPUs 0-3, plus validation.
+#
+#   ./nrun 'uv run python scripts/apply_node_patch.py --check'
+#   ./nrun 'uv run moe-reliability validate configs/examples/screen_vs_eplb.toml'
+#   ./nrun -t screen 'uv run moe-reliability run configs/examples/screen_vs_eplb.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "screen-vs-eplb"
+description = "Standing cost of the detection screen against EPLB enabled, idle, gated and on, at free skew."
+seed = 53
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+# Off as written; three arms turn it on.
+enable_eplb = false
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+eplb_record_map = false
+eplb_min_imbalance = 0.0
+# Off as written; the screen arm turns it on.
+count_experts = false
+count_layers = 4
+count_token_fraction = 0.1
+count_window_steps = 10
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0, 0.5]
+bias_plugin_at_zero = true
+validate_imbalance = true
+validation_samples = 400
+
+[benchmark]
+n_samples = 1200
+repeats = 5
+arms = [
+    "eplb-off",
+    "screen: server.count_experts=true",
+    "eplb-idle: server.enable_eplb=true; server.eplb_heat_collection_interval=10000000",
+    "eplb-gated: server.enable_eplb=true; server.eplb_min_imbalance=2.43",
+    "eplb-on: server.enable_eplb=true",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false

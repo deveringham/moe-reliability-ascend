@@ -1,0 +1,89 @@
+# Does honouring the policy's `changed` flag work on hardware, and do the ranks agree?
+#
+# PR 2 (docs/upstream-eplb.md patch 2) makes EplbWorker.do_update read the flag
+# the policies already return and keep the current placement when it is 0. The
+# unit tests cover the decision; what they cannot cover is the claim the PR
+# makes about multi-rank behaviour - that the decision is identical on every
+# rank, because load_info is the all-gathered load and the policy is
+# deterministic. A divergent placement would deadlock the collectives that
+# follow, so that claim needs evidence before it goes upstream.
+#
+# `server.eplb_honor_changed` is the same decision in our node patch
+# (MOE_EPLB_HONOR_CHANGED, scripts/apply_node_patch.py): same isinstance guard,
+# same old_placement.clone() when the flag is 0. It is not the PR's diff - it
+# has no missing-load path, and it lives inside the gate helper - but the
+# decision and the keep-placement mechanism are the ones the PR ships.
+#
+# Two arms at one level, 2 repeats:
+#
+#   honour    eplb_honor_changed = true. Read from eplb_activity:
+#             gate_consistent (every rank reached the same verdict on every
+#             plan), gate_shut / gate_open (how many of ~12 plans the policy
+#             itself declines - the replay of eplb_activity.hotness predicts
+#             44-73% on DeepSeek), and whether the busiest rank still falls to
+#             ~1.0x, i.e. the plans that matter are still applied.
+#   eplb-on   unchanged EPLB: the comparison for the balance trajectory.
+#
+# Level 0.5 (1.72x) so there is something to plan against; both levels of this
+# skew are free, so this is a behavioural check, not a latency measurement.
+#
+# Cost: 4 points at ~4 min = ~20 NPU-minutes on NPUs 0-3.
+#
+#   ./nrun 'uv run python scripts/apply_node_patch.py --check'
+#   ./nrun 'uv run moe-reliability validate configs/examples/eplb_honour_changed.toml'
+#   ./nrun -t hon 'uv run moe-reliability run configs/examples/eplb_honour_changed.toml'
+
+[experiment]
+type = "forced_imbalance"
+name = "eplb-honour-changed"
+description = "Hardware check for the fix-eplb-honour-changed branch: skip rate, rank consistency, and that useful plans still apply."
+seed = 53
+
+[model]
+model_id = "deepseek-ai/DeepSeek-V2-Lite-Chat"
+model_name = "deepseek-v2"
+probe = "deepseek"
+
+[hardware]
+n_npus = 4
+visible_devices = "0,1,2,3"
+
+[server]
+batch_size = 512
+enable_expert_parallel = true
+max_num_batched_tokens = 4096
+enforce_eager = true
+gpu_memory_utilization = 0.85
+enable_eplb = true
+eplb_policy_type = 2
+eplb_num_redundant_experts = 0
+eplb_heat_collection_interval = 50
+eplb_algorithm_execution_interval = 50
+eplb_record_map = false
+# Off as written; the honour arm turns it on.
+eplb_honor_changed = false
+
+[client]
+concurrency_limit = 700
+max_new_tokens = 300
+n_warmup_samples = 600
+
+[imbalance]
+method = "router_bias"
+bias_target = "experts:0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+imbalance_levels = [0.5]
+bias_plugin_at_zero = true
+validate_imbalance = false
+
+[benchmark]
+n_samples = 1200
+repeats = 2
+arms = [
+    "honour: server.eplb_honor_changed=true",
+    "eplb-on",
+]
+enable_profiling = false
+save_request_metrics = true
+
+[output]
+save_figures = false
